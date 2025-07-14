@@ -16,9 +16,29 @@ public class HeapSnapshot : IDisposable
     
     /// <summary>
     /// Gets the type index for external access (used by testing framework).
+    /// This will build a lightweight type names index if needed for predicate filtering.
     /// </summary>
-    public IReadOnlyDictionary<string, IReadOnlyList<ulong>> TypeIndex => 
-        _typeIndex.ToDictionary(kvp => kvp.Key, kvp => (IReadOnlyList<ulong>)kvp.Value.AsReadOnly());
+    public IReadOnlyDictionary<string, IReadOnlyList<ulong>> TypeIndex 
+    {
+        get
+        {
+            EnsureTypeNamesIndexBuilt();
+            return _typeIndex.ToDictionary(kvp => kvp.Key, kvp => (IReadOnlyList<ulong>)kvp.Value.AsReadOnly());
+        }
+    }
+    
+    /// <summary>
+    /// Gets all available type names without scanning for their addresses.
+    /// Useful for predicate-based filtering.
+    /// </summary>
+    public IReadOnlySet<string> AvailableTypeNames
+    {
+        get
+        {
+            EnsureTypeNamesIndexBuilt();
+            return _availableTypeNames;
+        }
+    }
     
     /// <summary>
     /// Gets read-only access to all objects in the snapshot.
@@ -42,6 +62,105 @@ public class HeapSnapshot : IDisposable
     public bool IsAnalyzed => _objects.Any();
     
     /// <summary>
+    /// Tracks which types have been fully scanned to avoid duplicate work.
+    /// </summary>
+    private readonly HashSet<string> _scannedTypes = new();
+    
+    /// <summary>
+    /// Lightweight index of just type names (without addresses) for predicate filtering.
+    /// </summary>
+    private readonly HashSet<string> _availableTypeNames = new();
+    private bool _typeNamesIndexBuilt = false;
+    
+    /// <summary>
+    /// Gets the count of objects of a specific type without full analysis.
+    /// Only scans for the requested type if not already done.
+    /// </summary>
+    public int GetTypeCount(string typeName)
+    {
+        EnsureTypeScanned(typeName);
+        return _typeIndex.TryGetValue(typeName, out var addresses) ? addresses.Count : 0;
+    }
+    
+    /// <summary>
+    /// Ensures the specified type has been scanned and indexed.
+    /// 
+    /// Performance Strategy:
+    /// - Exact type queries (e.g., typeof(MyClass)) only scan for that specific type
+    /// - Predicate queries (e.g., t => t.Contains("String")) first build a lightweight type names index
+    /// - No artificial limits - processes all objects but only for requested types
+    /// - Progressive caching - once a type is scanned, subsequent queries are instant
+    /// </summary>
+    private void EnsureTypeScanned(string typeName)
+    {
+        if (_scannedTypes.Contains(typeName) || Runtime?.Heap == null) return;
+        
+        ScanForType(typeName);
+        _scannedTypes.Add(typeName);
+    }
+    
+    /// <summary>
+    /// Builds a lightweight index of available type names without addresses.
+    /// Much faster than full type indexing and enables efficient predicate filtering.
+    /// </summary>
+    private void EnsureTypeNamesIndexBuilt()
+    {
+        if (_typeNamesIndexBuilt || Runtime?.Heap == null) return;
+        
+        try
+        {
+            foreach (var obj in Runtime.Heap.EnumerateObjects())
+            {
+                if (obj.Type?.Name != null)
+                {
+                    _availableTypeNames.Add(obj.Type.Name);
+                }
+            }
+            _typeNamesIndexBuilt = true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error building type names index: {ex.Message}");
+        }
+    }
+    
+    /// <summary>
+    /// Scans the heap for objects of a specific type only.
+    /// Much more efficient than scanning all types.
+    /// </summary>
+    private void ScanForType(string targetTypeName)
+    {
+        try
+        {
+            var addresses = new List<ulong>();
+            
+            foreach (var obj in Runtime.Heap.EnumerateObjects())
+            {
+                if (obj.Type?.Name == targetTypeName)
+                {
+                    addresses.Add(obj.Address);
+                }
+            }
+            
+            if (addresses.Count > 0)
+            {
+                var internedTypeName = StringInterner.Intern(targetTypeName);
+                _typeIndex[internedTypeName] = addresses;
+            }
+            else
+            {
+                // Even if no objects found, mark as scanned to avoid re-scanning
+                var internedTypeName = StringInterner.Intern(targetTypeName);
+                _typeIndex[internedTypeName] = new List<ulong>();
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error scanning for type {targetTypeName}: {ex.Message}");
+        }
+    }
+    
+    /// <summary>
     /// Gets optimized data structures for advanced analysis.
     /// </summary>
     public OptimizedHeapStructures Optimized => _optimizedStructures.Value;
@@ -61,14 +180,191 @@ public class HeapSnapshot : IDisposable
 
     /// <summary>
     /// Gets all objects of a specific type.
+    /// Only scans for the requested type if not already done.
     /// </summary>
     public IEnumerable<ObjectInfo> GetObjectsByType(string typeName)
     {
+        EnsureTypeScanned(typeName);
         if (_typeIndex.TryGetValue(typeName, out var addresses))
         {
-            return addresses.Select(addr => _objects[addr]);
+            // If objects are analyzed, return them directly
+            if (IsAnalyzed)
+            {
+                return addresses.Select(addr => _objects[addr]);
+            }
+            
+            // Otherwise, analyze objects on demand
+            return addresses.Select(addr => GetOrAnalyzeObject(addr)).Where(obj => obj != null)!;
         }
         return Enumerable.Empty<ObjectInfo>();
+    }
+    
+    /// <summary>
+    /// Gets or analyzes a single object on demand.
+    /// </summary>
+    private ObjectInfo? GetOrAnalyzeObject(ulong address)
+    {
+        if (_objects.TryGetValue(address, out var existing))
+            return existing;
+            
+        // Analyze single object on demand
+        if (Runtime?.Heap != null)
+        {
+            try
+            {
+                var clrObj = Runtime.Heap.GetObject(address);
+                if (clrObj.Type?.Name != null)
+                {
+                    var objInfo = new ObjectInfo
+                    {
+                        Address = address,
+                        TypeName = StringInterner.Intern(clrObj.Type.Name),
+                        Size = clrObj.Size,
+                        Generation = 0,
+                        References = GetReferencesForObject(clrObj),
+                        Fields = GetFieldsForObject(clrObj)
+                    };
+                    
+                    _objects[address] = objInfo;
+                    return objInfo;
+                }
+            }
+            catch { /* Ignore errors for individual objects */ }
+        }
+        
+        return null;
+    }
+    
+    /// <summary>
+    /// Extracts field values from a CLR object.
+    /// </summary>
+    private Dictionary<string, object?> GetFieldsForObject(Microsoft.Diagnostics.Runtime.ClrObject clrObj)
+    {
+        var fields = new Dictionary<string, object?>();
+        
+        try
+        {
+            if (clrObj.Type == null) return fields;
+            
+            foreach (var field in clrObj.Type.Fields)
+            {
+                try
+                {
+                    var fieldName = StringInterner.Intern(field.Name ?? "<unknown>");
+                    var fieldValue = GetFieldValue(clrObj, field);
+                    fields[fieldName] = fieldValue;
+                }
+                catch
+                {
+                    // Skip fields that can't be read
+                }
+            }
+        }
+        catch
+        {
+            // Return empty if we can't read fields
+        }
+        
+        return fields;
+    }
+    
+    /// <summary>
+    /// Extracts references from a CLR object with proper field mapping.
+    /// </summary>
+    private List<ObjectReference> GetReferencesForObject(Microsoft.Diagnostics.Runtime.ClrObject clrObj)
+    {
+        var references = new List<ObjectReference>();
+        
+        try
+        {
+            if (clrObj.Type == null) return references;
+            
+            // Get references through fields to get proper field names
+            foreach (var field in clrObj.Type.Fields)
+            {
+                try
+                {
+                    if (field.Type != null && !field.Type.IsPrimitive && field.Type.Name != "System.String")
+                    {
+                        var refObj = clrObj.ReadObjectField(field.Name);
+                        if (refObj.IsValid && refObj.Type?.Name != null)
+                        {
+                            references.Add(new ObjectReference
+                            {
+                                SourceAddress = clrObj.Address,
+                                TargetAddress = refObj.Address,
+                                FieldName = StringInterner.Intern(field.Name),
+                                TypeName = StringInterner.Intern(refObj.Type.Name)
+                            });
+                        }
+                    }
+                }
+                catch
+                {
+                    // Skip fields that can't be read
+                }
+                
+                if (references.Count > 20) break; // Limit to prevent memory issues
+            }
+        }
+        catch
+        {
+            // Return what we have so far
+        }
+        
+        return references;
+    }
+    
+    /// <summary>
+    /// Gets the value of a specific field from a CLR object.
+    /// </summary>
+    private object? GetFieldValue(Microsoft.Diagnostics.Runtime.ClrObject clrObj, Microsoft.Diagnostics.Runtime.ClrInstanceField field)
+    {
+        try
+        {
+            if (field.Type == null) return null;
+            
+            // Handle primitive types
+            if (field.Type.IsPrimitive)
+            {
+                return field.Type.Name switch
+                {
+                    "System.Boolean" => clrObj.ReadField<bool>(field.Name),
+                    "System.Byte" => clrObj.ReadField<byte>(field.Name),
+                    "System.SByte" => clrObj.ReadField<sbyte>(field.Name),
+                    "System.Int16" => clrObj.ReadField<short>(field.Name),
+                    "System.UInt16" => clrObj.ReadField<ushort>(field.Name),
+                    "System.Int32" => clrObj.ReadField<int>(field.Name),
+                    "System.UInt32" => clrObj.ReadField<uint>(field.Name),
+                    "System.Int64" => clrObj.ReadField<long>(field.Name),
+                    "System.UInt64" => clrObj.ReadField<ulong>(field.Name),
+                    "System.Single" => clrObj.ReadField<float>(field.Name),
+                    "System.Double" => clrObj.ReadField<double>(field.Name),
+                    "System.Char" => clrObj.ReadField<char>(field.Name),
+                    _ => $"<primitive: {field.Type.Name}>"
+                };
+            }
+            
+            // Handle strings specially
+            if (field.Type.Name == "System.String")
+            {
+                var stringObj = clrObj.ReadObjectField(field.Name);
+                return stringObj.IsValid ? stringObj.AsString() : null;
+            }
+            
+            // Handle reference types
+            var refObj = clrObj.ReadObjectField(field.Name);
+            if (refObj.IsValid && refObj.Type != null)
+            {
+                return $"<object: {refObj.Type.Name} @ 0x{refObj.Address:X}>";
+            }
+            
+            return null;
+        }
+        catch
+        {
+            return $"<error reading {field.Name}>";
+        }
     }
 
     /// <summary>

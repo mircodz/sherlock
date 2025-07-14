@@ -28,12 +28,12 @@ public static class TestUtilities
     }
 
     /// <summary>
-    /// Takes a heap snapshot and analyzes it for testing.
+    /// Takes a heap snapshot for testing without automatic analysis.
+    /// Analysis is now lazy and happens on-demand when assertions are made.
     /// </summary>
-    public static async Task<HeapSnapshot> TakeAnalyzedSnapshotAsync()
+    public static async Task<HeapSnapshot> TakeSnapshotAsync()
     {
         var snapshot = await Testing.Sherlock.SnapshotAsync();
-        await snapshot.AnalyzeAsync();
         
         // Register for cleanup if there's a temp dump file
         if (!string.IsNullOrEmpty(snapshot.TempDumpPath))
@@ -41,6 +41,16 @@ public static class TestUtilities
             RegisterDumpFileForCleanup(snapshot.TempDumpPath);
         }
         
+        return snapshot;
+    }
+    
+    /// <summary>
+    /// Takes a heap snapshot and analyzes it fully (for tests that need complete analysis).
+    /// </summary>
+    public static async Task<HeapSnapshot> TakeAnalyzedSnapshotAsync()
+    {
+        var snapshot = await TakeSnapshotAsync();
+        await snapshot.AnalyzeAsync();
         return snapshot;
     }
 
