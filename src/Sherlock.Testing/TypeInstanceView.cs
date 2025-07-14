@@ -24,6 +24,7 @@ public class TypeInstanceView
 
     /// <summary>
     /// Gets the count of instances for this type or all matching types.
+    /// Uses lazy evaluation - only builds type index when needed.
     /// </summary>
     public int Instances
     {
@@ -32,13 +33,39 @@ public class TypeInstanceView
             int totalCount = 0;
             foreach (var typeName in _typeNames)
             {
-                if (_snapshot.TypeIndex.TryGetValue(typeName, out var addresses))
-                {
-                    totalCount += addresses.Count;
-                }
+                totalCount += _snapshot.GetTypeCount(typeName);
             }
             return totalCount;
         }
+    }
+    
+    /// <summary>
+    /// Gets the first object of this type for inspection.
+    /// </summary>
+    public ObjectInfo? FirstObject
+    {
+        get
+        {
+            foreach (var typeName in _typeNames)
+            {
+                var obj = _snapshot.GetObjectsByType(typeName).FirstOrDefault();
+                if (obj != null) return obj;
+            }
+            return null;
+        }
+    }
+    
+    /// <summary>
+    /// Gets the object at the specified index for this type.
+    /// </summary>
+    public ObjectInfo? GetObject(int index)
+    {
+        foreach (var typeName in _typeNames)
+        {
+            var obj = _snapshot.GetObjectsByType(typeName).Skip(index).FirstOrDefault();
+            if (obj != null) return obj;
+        }
+        return null;
     }
 
     /// <summary>
@@ -48,5 +75,24 @@ public class TypeInstanceView
     {
         var description = _typeNames.Count == 1 ? _typeNames[0] : $"{_typeNames.Count} matching types";
         return new TypeInstanceAssertion(Instances, description);
+    }
+    
+    /// <summary>
+    /// Gets the underlying snapshot for inspection operations.
+    /// </summary>
+    internal HeapSnapshot GetSnapshot() => _snapshot;
+    
+    /// <summary>
+    /// Gets all objects of the matching types.
+    /// </summary>
+    internal IEnumerable<ObjectInfo> GetAllObjects()
+    {
+        foreach (var typeName in _typeNames)
+        {
+            foreach (var obj in _snapshot.GetObjectsByType(typeName))
+            {
+                yield return obj;
+            }
+        }
     }
 }

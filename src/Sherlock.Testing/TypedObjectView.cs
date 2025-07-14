@@ -16,15 +16,17 @@ public class TypedObjectView
 
     /// <summary>
     /// Filters objects by type name using a predicate.
+    /// First builds a lightweight type names index, then filters efficiently.
     /// </summary>
     public TypeInstanceView Where(Func<string, bool> typeFilter)
     {
-        var matchingTypes = _snapshot.TypeIndex.Keys.Where(typeFilter).ToList();
+        var matchingTypes = _snapshot.AvailableTypeNames.Where(typeFilter).ToList();
         return new TypeInstanceView(_snapshot, matchingTypes);
     }
 
     /// <summary>
     /// Filters objects where the type equals the specified type.
+    /// This is highly optimized - only scans for the specific requested type.
     /// </summary>
     public TypeInstanceView Where(Type type)
     {

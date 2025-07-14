@@ -27,8 +27,8 @@ public class BasicLeakTests
             arrays.Add(new byte[1024]);
         }
 
-        // Act: Take snapshot
-        var snapshot = await TestUtilities.TakeAnalyzedSnapshotAsync();
+        // Act: Take snapshot (lazy evaluation - no full analysis)
+        var snapshot = await TestUtilities.TakeSnapshotAsync();
 
         // Assert: Should find our byte arrays
         snapshot.Types().Where(typeof(byte[])).Instances.Should().BeGreaterThan(40);
@@ -47,8 +47,8 @@ public class BasicLeakTests
             objects.Add(new TestObject($"Test-{i}"));
         }
 
-        // Act: Take snapshot
-        var snapshot = await TestUtilities.TakeAnalyzedSnapshotAsync();
+        // Act: Take snapshot (lazy evaluation - no full analysis)
+        var snapshot = await TestUtilities.TakeSnapshotAsync();
 
         // Assert: Should find our test objects
         snapshot.Types().Where(typeof(TestObject)).Instances.Should().BeGreaterThan(20);
@@ -66,8 +66,8 @@ public class BasicLeakTests
         // Force garbage collection
         TestUtilities.ForceGarbageCollection();
 
-        // Act: Take snapshot after GC
-        var snapshot = await TestUtilities.TakeAnalyzedSnapshotAsync();
+        // Act: Take snapshot after GC (lazy evaluation - no full analysis)
+        var snapshot = await TestUtilities.TakeSnapshotAsync();
 
         // Assert: Temporary objects should be collected
         // Note: We can't guarantee zero instances due to other code, but should be minimal
@@ -85,14 +85,21 @@ public class BasicLeakTests
             strings.Add($"Test string {i} with some content to make it unique");
         }
 
-        // Act: Take snapshot
-        var snapshot = await TestUtilities.TakeAnalyzedSnapshotAsync();
+        // Act: Take snapshot (lazy evaluation - no full analysis)
+        var snapshot = await TestUtilities.TakeSnapshotAsync();
 
-        // Assert: Demonstrate fluent API
+        // Assert: Demonstrate fluent API with lazy evaluation
         snapshot.Types().Where(typeof(string)).Instances.Should().BeGreaterThan(25);
         
         // Alternative syntax
         snapshot.Types().Where(t => t.Contains("String")).Instances.Should().BeGreaterThan(0);
+        
+        // Demonstrate inspection of string objects
+        var stringInspection = snapshot.Types()
+            .Where(typeof(string))
+            .Inspect(0, new InspectOptions { Format = InspectFormat.Compact });
+        
+        Console.WriteLine($"String inspection: {stringInspection}");
         
         // Cleanup
         strings.Clear();
@@ -104,12 +111,13 @@ public class BasicLeakTests
         // Arrange: Start with clean state
         TestUtilities.ForceGarbageCollection();
 
-        // Act: Take snapshot
-        var snapshot = await TestUtilities.TakeAnalyzedSnapshotAsync();
+        // Act: Take snapshot (lazy evaluation - no full analysis)
+        var snapshot = await TestUtilities.TakeSnapshotAsync();
 
         // Assert: Should have minimal instances of our test types
         snapshot.Types().Where(typeof(NonExistentTestType)).Should().BeEmpty();
     }
+    
 
     // Helper method to create temporary objects
     private static void CreateTemporaryObjects()
