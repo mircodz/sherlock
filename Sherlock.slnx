@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/samples/">
+    <Project Path="samples/Sherlock.Demo/Sherlock.Demo.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Sherlock.CLI/Sherlock.CLI.csproj" />
+    <Project Path="src/Sherlock.Core/Sherlock.Core.csproj" />
+  </Folder>
+</Solution>

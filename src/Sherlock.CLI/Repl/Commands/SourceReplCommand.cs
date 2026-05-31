@@ -1,0 +1,39 @@
+using Spectre.Console;
+
+namespace Sherlock.CLI.Repl.Commands;
+
+/// <summary>Runs a file of commands, one per line (lines starting with <c>#</c> are comments).</summary>
+public sealed class SourceReplCommand : IReplCommand
+{
+    public string Name => "source";
+    public IReadOnlyList<string> Aliases => new[] { "script", "@" };
+    public string Summary => "Run commands from a script file, one per line.";
+    public string Usage => "source <file>";
+
+    public void Execute(ReplContext context, string[] args)
+    {
+        if (args.Length == 0)
+        {
+            context.Console.MarkupLine($"[red]error:[/] usage: {Usage}");
+            return;
+        }
+
+        string path = args[0];
+        if (!File.Exists(path))
+        {
+            context.Console.MarkupLineInterpolated($"[red]error:[/] script not found: {path}");
+            return;
+        }
+
+        foreach (string raw in File.ReadLines(path))
+        {
+            string line = raw.Trim();
+            if (line.Length == 0 || line.StartsWith('#'))
+                continue;
+
+            context.Console.MarkupLineInterpolated($"[grey]source>[/] {line}");
+            if (!context.RunLine(line))
+                return; // an `exit` inside the script stops execution
+        }
+    }
+}
