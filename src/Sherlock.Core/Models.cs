@@ -47,13 +47,18 @@ public sealed record FieldValue(
     string Value,
     int Offset);
 
-/// <summary>Full detail of a single object: its identity and every field value.</summary>
+/// <summary>
+/// Full detail of a single object. Exactly one shape is populated depending on
+/// the object: a string value, an enumerable's elements, or instance fields.
+/// </summary>
 public sealed record ObjectDetail(
     ulong Address,
     string TypeName,
     ulong Size,
     bool IsArray,
     string? StringValue,
+    int? ElementCount,
+    IReadOnlyList<string> Elements,
     IReadOnlyList<FieldValue> Fields);
 
 /// <summary>

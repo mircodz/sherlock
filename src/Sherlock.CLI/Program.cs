@@ -9,6 +9,10 @@ app.Configure(config =>
         .WithDescription("Open a .NET memory dump and analyze it interactively.")
         .WithExample("analyze", "app.dmp")
         .WithExample("analyze", "app.dmp", "--exec", "info");
+    config.AddCommand<CollectCommand>("collect")
+        .WithDescription("Collect a memory dump from a live .NET process.")
+        .WithExample("collect", "--list")
+        .WithExample("collect", "--pid", "1234", "--analyze");
 });
 
 return app.Run(args);

@@ -27,7 +27,7 @@ public sealed class ModulesReplCommand : IReplCommand
             return;
         }
 
-        var table = new Table().Border(TableBorder.Rounded).Expand();
+        var table = new Table().Border(TableBorder.None);
         table.AddColumn("[bold]Module[/]");
         table.AddColumn(new TableColumn("[bold]ImageBase[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]Size[/]").RightAligned());

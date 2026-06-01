@@ -29,7 +29,7 @@ public sealed class DumpHeapReplCommand : IReplCommand
             return;
         }
 
-        var table = new Table().Border(TableBorder.Rounded).Expand();
+        var table = new Table().Border(TableBorder.None);
         table.AddColumn(new TableColumn("[bold]Type[/]"));
         table.AddColumn(new TableColumn("[bold]Count[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]Total[/]").RightAligned());

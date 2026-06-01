@@ -41,7 +41,7 @@ public sealed class StringsReplCommand : IReplCommand
             return;
         }
 
-        var table = new Table().Border(TableBorder.Rounded).Expand();
+        var table = new Table().Border(TableBorder.None);
         table.AddColumn(new TableColumn("[bold]Count[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]Wasted[/]").RightAligned());
         table.AddColumn("[bold]Value[/]");

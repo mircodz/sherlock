@@ -29,6 +29,7 @@ public sealed class InfoReplCommand : IReplCommand
         grid.AddRow("[grey]Threads[/]", info.ThreadCount.ToString());
         grid.AddRow("[grey]Modules[/]", info.ModuleCount.ToString());
 
-        context.Console.Write(new Panel(grid).Header("[bold]dump info[/]").Expand());
+        context.Console.MarkupLine("[bold]dump info[/]");
+        context.Console.Write(grid);
     }
 }

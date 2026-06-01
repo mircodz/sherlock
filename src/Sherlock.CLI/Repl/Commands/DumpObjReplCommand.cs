@@ -38,13 +38,19 @@ public sealed class DumpObjReplCommand : IReplCommand
             return;
         }
 
+        if (detail.ElementCount is int count)
+        {
+            PrintElements(context.Console, detail, count);
+            return;
+        }
+
         if (detail.Fields.Count == 0)
         {
             context.Console.MarkupLine("  [grey]<no instance fields>[/]");
             return;
         }
 
-        var table = new Table().Border(TableBorder.Rounded);
+        var table = new Table().Border(TableBorder.None);
         table.AddColumn(new TableColumn("[bold]Offset[/]").RightAligned());
         table.AddColumn("[bold]Field[/]");
         table.AddColumn("[bold]Type[/]");
@@ -60,6 +66,16 @@ public sealed class DumpObjReplCommand : IReplCommand
         }
 
         context.Console.Write(table);
+    }
+
+    private static void PrintElements(IAnsiConsole console, ObjectDetail detail, int count)
+    {
+        console.MarkupLineInterpolated($"  [grey]count[/] {count}");
+        foreach (string element in detail.Elements)
+            console.MarkupLineInterpolated($"  {element}");
+
+        if (detail.Elements.Count < count)
+            console.MarkupLineInterpolated($"  [grey]… {count - detail.Elements.Count} more[/]");
     }
 
     /// <summary>Trims a namespace-qualified type to its last segment for compactness.</summary>

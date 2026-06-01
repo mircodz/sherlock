@@ -22,7 +22,7 @@ public sealed class SegmentsReplCommand : IReplCommand
             return;
         }
 
-        var table = new Table().Border(TableBorder.Rounded).Expand();
+        var table = new Table().Border(TableBorder.None);
         table.AddColumn("[bold]Kind[/]");
         table.AddColumn(new TableColumn("[bold]Start[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]End[/]").RightAligned());

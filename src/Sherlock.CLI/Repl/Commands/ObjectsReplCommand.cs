@@ -44,7 +44,7 @@ public sealed class ObjectsReplCommand : IReplCommand
             return;
         }
 
-        var table = new Table().Border(TableBorder.Rounded).Expand();
+        var table = new Table().Border(TableBorder.None);
         table.AddColumn(new TableColumn("[bold]Address[/]"));
         table.AddColumn(new TableColumn("[bold]Size[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]Type[/]"));
