@@ -14,6 +14,7 @@ public sealed class HistoryReplCommand : IReplCommand
     public IReadOnlyList<string> Aliases => new[] { "hist" };
     public string Summary => "Show recent command history.";
     public string Usage => "history [count]";
+    public string Category => "Session";
 
     public void Execute(ReplContext context, string[] args)
     {

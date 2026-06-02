@@ -16,10 +16,14 @@ public sealed class HelpReplCommand : IReplCommand
     /// </param>
     public HelpReplCommand(Func<IEnumerable<IReplCommand>> commands) => _commands = commands;
 
+    // Categories are printed in this order; any others follow alphabetically.
+    private static readonly string[] CategoryOrder = { "Analysis", "Live", "Library", "Session" };
+
     public string Name => "help";
     public IReadOnlyList<string> Aliases => new[] { "?", "h" };
     public string Summary => "List commands, or `help <command>` for usage detail.";
     public string Usage => "help [command]";
+    public string Category => "Session";
 
     public void Execute(ReplContext context, string[] args)
     {
@@ -31,14 +35,27 @@ public sealed class HelpReplCommand : IReplCommand
             return;
         }
 
-        var table = new Table().Border(TableBorder.None).HideHeaders();
-        table.AddColumn("cmd");
-        table.AddColumn("desc");
-        foreach (IReplCommand command in commands)
-            table.AddRow($"[bold]{Markup.Escape(command.Usage)}[/]", Markup.Escape(command.Summary));
-        table.AddRow("[bold]exit[/]", "Quit Sherlock (also: quit, q, Ctrl-D).");
+        IEnumerable<IGrouping<string, IReplCommand>> groups = commands
+            .GroupBy(c => c.Category)
+            .OrderBy(g => Array.IndexOf(CategoryOrder, g.Key) is var i && i >= 0 ? i : int.MaxValue)
+            .ThenBy(g => g.Key);
 
-        context.Console.Write(table);
+        foreach (IGrouping<string, IReplCommand> group in groups)
+        {
+            context.Console.MarkupLineInterpolated($"[bold underline]{group.Key}[/]");
+
+            var table = new Table().Border(TableBorder.None).HideHeaders();
+            table.AddColumn("cmd");
+            table.AddColumn("desc");
+            foreach (IReplCommand command in group)
+                table.AddRow($"[bold]{Markup.Escape(command.Usage)}[/]", Markup.Escape(command.Summary));
+
+            if (group.Key == "Session")
+                table.AddRow("[bold]exit[/]", "Quit Sherlock (also: quit, q, Ctrl-D).");
+
+            context.Console.Write(table);
+            context.Console.WriteLine();
+        }
     }
 
     private static void PrintCommandDetail(IAnsiConsole console, IReadOnlyList<IReplCommand> commands, string name)

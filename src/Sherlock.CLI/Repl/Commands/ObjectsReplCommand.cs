@@ -22,7 +22,7 @@ public sealed class ObjectsReplCommand : IReplCommand
     {
         if (args.Length == 0)
         {
-            context.Console.MarkupLine($"[red]error:[/] usage: {Usage}");
+            context.Console.MarkupLineInterpolated($"[red]error:[/] usage: {Usage}");
             return;
         }
 
@@ -44,7 +44,7 @@ public sealed class ObjectsReplCommand : IReplCommand
             return;
         }
 
-        var table = new Table().Border(TableBorder.None);
+        var table = new Table().Border(TableBorder.Rounded).Expand();
         table.AddColumn(new TableColumn("[bold]Address[/]"));
         table.AddColumn(new TableColumn("[bold]Size[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]Type[/]"));

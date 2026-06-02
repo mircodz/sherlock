@@ -3,18 +3,25 @@ using Spectre.Console;
 
 namespace Sherlock.CLI.Repl;
 
-/// <summary>The session and console a command operates against.</summary>
+/// <summary>The workspace and console a command operates against.</summary>
 public sealed class ReplContext
 {
-    public ReplContext(DumpSession session, IAnsiConsole console, Func<string, bool> runLine)
+    public ReplContext(Workspace workspace, IAnsiConsole console, Func<string, bool> runLine)
     {
-        Session = session;
+        Workspace = workspace;
         Console = console;
         RunLine = runLine;
     }
 
-    public DumpSession Session { get; }
+    public Workspace Workspace { get; }
     public IAnsiConsole Console { get; }
+
+    /// <summary>
+    /// The currently-loaded session. Analysis commands use this; if nothing is
+    /// loaded it raises a friendly error the REPL renders.
+    /// </summary>
+    public DumpSession Session => Workspace.Current
+        ?? throw new DumpAnalysisException("No snapshot loaded. Use `load <id>`, `collect`, or `import <file>` first.");
 
     /// <summary>
     /// Dispatches a raw input line through the REPL (used by <c>source</c> to run
@@ -38,6 +45,9 @@ public interface IReplCommand
 
     /// <summary>One-line description shown by <c>help</c>.</summary>
     string Summary { get; }
+
+    /// <summary>Group heading under which <c>help</c> lists this command.</summary>
+    string Category => "Analysis";
 
     /// <summary>Usage string, e.g. <c>gcroot &lt;address&gt;</c>.</summary>
     string Usage { get; }

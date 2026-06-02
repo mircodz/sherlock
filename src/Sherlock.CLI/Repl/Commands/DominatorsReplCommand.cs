@@ -27,7 +27,7 @@ public sealed class DominatorsReplCommand : IReplCommand
         IReadOnlyList<DominatorNode> top = tree.TopDominators(limit);
         ulong total = tree.TotalReachableBytes;
 
-        var table = new Table().Border(TableBorder.None);
+        var table = new Table().Border(TableBorder.Rounded).Expand();
         table.AddColumn("[bold]Address[/]");
         table.AddColumn(new TableColumn("[bold]Retained[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]%[/]").RightAligned());

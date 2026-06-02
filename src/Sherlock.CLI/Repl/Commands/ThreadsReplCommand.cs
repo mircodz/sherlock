@@ -42,7 +42,7 @@ public sealed class ThreadsReplCommand : IReplCommand
 
         IReadOnlyList<ThreadInfo> threads = analyzer.GetThreads(includeStacks: false);
 
-        var table = new Table().Border(TableBorder.None);
+        var table = new Table().Border(TableBorder.Rounded);
         table.AddColumn(new TableColumn("[bold]Managed[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]OS[/]").RightAligned());
         table.AddColumn("[bold]Flags[/]");

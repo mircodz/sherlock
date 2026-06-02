@@ -9,12 +9,13 @@ public sealed class SourceReplCommand : IReplCommand
     public IReadOnlyList<string> Aliases => new[] { "script", "@" };
     public string Summary => "Run commands from a script file, one per line.";
     public string Usage => "source <file>";
+    public string Category => "Session";
 
     public void Execute(ReplContext context, string[] args)
     {
         if (args.Length == 0)
         {
-            context.Console.MarkupLine($"[red]error:[/] usage: {Usage}");
+            context.Console.MarkupLineInterpolated($"[red]error:[/] usage: {Usage}");
             return;
         }
 

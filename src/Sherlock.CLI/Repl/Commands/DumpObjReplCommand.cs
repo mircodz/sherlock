@@ -17,7 +17,7 @@ public sealed class DumpObjReplCommand : IReplCommand
     {
         if (args.Length == 0)
         {
-            context.Console.MarkupLine($"[red]error:[/] usage: {Usage}");
+            context.Console.MarkupLineInterpolated($"[red]error:[/] usage: {Usage}");
             return;
         }
 
@@ -50,7 +50,7 @@ public sealed class DumpObjReplCommand : IReplCommand
             return;
         }
 
-        var table = new Table().Border(TableBorder.None);
+        var table = new Table().Border(TableBorder.Rounded);
         table.AddColumn(new TableColumn("[bold]Offset[/]").RightAligned());
         table.AddColumn("[bold]Field[/]");
         table.AddColumn("[bold]Type[/]");

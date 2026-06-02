@@ -14,9 +14,9 @@ public sealed class AnalyzeCommand : Command<AnalyzeCommand.Settings>
 {
     public sealed class Settings : CommandSettings
     {
-        [CommandArgument(0, "<dump>")]
-        [Description("Path to the .NET memory dump file to analyze.")]
-        public string DumpPath { get; init; } = string.Empty;
+        [CommandArgument(0, "[dump]")]
+        [Description("Optional dump file to open. Omit to start in the snapshot library.")]
+        public string? DumpPath { get; init; }
 
         [CommandOption("-x|--exec <COMMAND>")]
         [Description("Run a command non-interactively, then exit. Repeatable.")]
@@ -31,45 +31,47 @@ public sealed class AnalyzeCommand : Command<AnalyzeCommand.Settings>
     {
         IAnsiConsole console = AnsiConsole.Console;
 
-        DumpSession session;
-        try
+        using Workspace workspace = ReplHost.CreateWorkspace();
+
+        // A dump path is optional; when given, open it as the current target.
+        if (!string.IsNullOrEmpty(settings.DumpPath))
         {
-            session = DumpSession.Open(settings.DumpPath);
-        }
-        catch (FileNotFoundException ex)
-        {
-            console.MarkupLineInterpolated($"[red]error:[/] dump file not found: {ex.FileName}");
-            return 1;
-        }
-        catch (DumpAnalysisException ex)
-        {
-            console.MarkupLineInterpolated($"[red]error:[/] {ex.Message}");
-            return 1;
+            try
+            {
+                workspace.LoadTransient(settings.DumpPath);
+            }
+            catch (FileNotFoundException ex)
+            {
+                console.MarkupLineInterpolated($"[red]error:[/] dump file not found: {ex.FileName}");
+                return 1;
+            }
+            catch (DumpAnalysisException ex)
+            {
+                console.MarkupLineInterpolated($"[red]error:[/] {ex.Message}");
+                return 1;
+            }
         }
 
-        using (session)
-        {
-            bool interactive = settings.Exec.Length == 0 && settings.Script is null;
-            var history = new ReplHistory(interactive ? ReplHistory.DefaultPath : null);
-            var repl = new Repl.Repl(ReplCommandRegistry.CreateDefault(history), history, console);
+        bool interactive = settings.Exec.Length == 0 && settings.Script is null;
+        var history = new ReplHistory(interactive ? ReplHistory.DefaultPath : null);
+        var repl = new Repl.Repl(ReplCommandRegistry.CreateDefault(history), history, console);
 
-            if (settings.Script is not null)
+        if (settings.Script is not null)
+        {
+            if (!File.Exists(settings.Script))
             {
-                if (!File.Exists(settings.Script))
-                {
-                    console.MarkupLineInterpolated($"[red]error:[/] script not found: {settings.Script}");
-                    return 1;
-                }
-                repl.RunBatch(session, File.ReadLines(settings.Script).Where(IsCommandLine));
+                console.MarkupLineInterpolated($"[red]error:[/] script not found: {settings.Script}");
+                return 1;
             }
-            else if (settings.Exec.Length > 0)
-            {
-                repl.RunBatch(session, settings.Exec);
-            }
-            else
-            {
-                repl.RunInteractive(session);
-            }
+            repl.RunBatch(workspace, File.ReadLines(settings.Script).Where(IsCommandLine));
+        }
+        else if (settings.Exec.Length > 0)
+        {
+            repl.RunBatch(workspace, settings.Exec);
+        }
+        else
+        {
+            repl.RunInteractive(workspace);
         }
 
         return 0;

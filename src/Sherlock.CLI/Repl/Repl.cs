@@ -9,7 +9,6 @@ namespace Sherlock.CLI.Repl;
 /// </summary>
 public sealed class Repl
 {
-    private const string Prompt = "sherlock> ";
     private static readonly string[] ExitWords = { "exit", "quit", "q" };
 
     private readonly ReplCommandRegistry _registry;
@@ -17,6 +16,7 @@ public sealed class Repl
     private readonly IAnsiConsole _console;
 
     private ReplContext? _context;
+    private Workspace? _workspace;
     private string? _lastCommand;
 
     public Repl(ReplCommandRegistry registry, ReplHistory history, IAnsiConsole console)
@@ -26,26 +26,32 @@ public sealed class Repl
         _console = console;
     }
 
+    private string Prompt => _workspace?.CurrentName is { } name ? $"sherlock[{name}]> " : "sherlock> ";
+
     /// <summary>Runs commands non-interactively, then returns. Used by <c>--exec</c> and scripts.</summary>
-    public void RunBatch(DumpSession session, IEnumerable<string> lines)
+    public void RunBatch(Workspace workspace, IEnumerable<string> lines)
     {
-        _context = new ReplContext(session, _console, RunLine);
+        _workspace = workspace;
+        _context = new ReplContext(workspace, _console, RunLine);
         foreach (string line in lines)
         {
-            _console.MarkupLineInterpolated($"[green]sherlock>[/] {line}");
+            _console.MarkupLineInterpolated($"[green]{Prompt}[/]{line}");
             if (!RunLine(line))
                 return;
         }
     }
 
     /// <summary>Runs the interactive loop until the user exits or input ends.</summary>
-    public void RunInteractive(DumpSession session)
+    public void RunInteractive(Workspace workspace)
     {
-        _context = new ReplContext(session, _console, RunLine);
-        PrintBanner(session);
+        _workspace = workspace;
+        _context = new ReplContext(workspace, _console, RunLine);
+        PrintBanner(workspace);
 
         while (true)
         {
+            HarvestCrashDumps();
+
             string? line = LineEditor.ReadLine(Prompt, _history);
             if (line is null) // EOF (Ctrl-D)
             {
@@ -111,9 +117,27 @@ public sealed class Repl
         return true;
     }
 
-    private void PrintBanner(DumpSession session)
+    /// <summary>Auto-imports crash dumps from run-targets that have exited.</summary>
+    private void HarvestCrashDumps()
     {
-        _console.MarkupLineInterpolated($"[bold]Sherlock[/] — loaded [aqua]{Path.GetFileName(session.DumpPath)}[/]");
+        if (_workspace is null)
+            return;
+
+        foreach (Sherlock.Core.Store.SnapshotEntry entry in _workspace.HarvestExitedCrashDumps())
+            _console.MarkupLineInterpolated(
+                $"[yellow]· crash dump imported as[/] [bold]{entry.Id}[/] [grey]({entry.SourceProcess} pid {entry.SourcePid}) — load {entry.Id} to analyze[/]");
+    }
+
+    private void PrintBanner(Workspace workspace)
+    {
+        if (workspace.Current is not null)
+            _console.MarkupLineInterpolated($"[bold]Sherlock[/] — loaded [aqua]{workspace.CurrentName}[/]");
+        else
+        {
+            int count = workspace.Store.List().Count;
+            _console.MarkupLineInterpolated($"[bold]Sherlock[/] — no snapshot loaded ([aqua]{count}[/] in library)");
+            _console.MarkupLine("[grey]Use[/] snapshots[grey],[/] load <id>[grey],[/] collect[grey], or[/] import <file>[grey].[/]");
+        }
         _console.MarkupLine("Type [bold]help[/] for commands, [bold]exit[/] to quit.");
         _console.WriteLine();
     }

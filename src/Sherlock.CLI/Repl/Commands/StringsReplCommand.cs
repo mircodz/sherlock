@@ -23,7 +23,7 @@ public sealed class StringsReplCommand : IReplCommand
         bool dup = args.Contains("--dup") || args.Contains("-d");
         if (!dup)
         {
-            context.Console.MarkupLine($"[yellow]usage:[/] {Usage}");
+            context.Console.MarkupLineInterpolated($"[yellow]usage:[/] {Usage}");
             return;
         }
 
@@ -41,7 +41,7 @@ public sealed class StringsReplCommand : IReplCommand
             return;
         }
 
-        var table = new Table().Border(TableBorder.None);
+        var table = new Table().Border(TableBorder.Rounded).Expand();
         table.AddColumn(new TableColumn("[bold]Count[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]Wasted[/]").RightAligned());
         table.AddColumn("[bold]Value[/]");

@@ -2,6 +2,7 @@ using System.ComponentModel;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using Sherlock.Core.Collection;
+using Sherlock.Core.Store;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -57,6 +58,8 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
             return 1;
         }
 
+        string? sourceName = NameOf(pid);
+
         string path;
         try
         {
@@ -69,17 +72,33 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
             return 1;
         }
 
-        long size = new FileInfo(path).Length;
-        console.MarkupLineInterpolated($"[green]✓[/] wrote {ByteSize.Format(size)} to [aqua]{path}[/]");
+        // Catalog it in the library. Own (move in) temp dumps; reference a user-chosen path.
+        using Workspace workspace = ReplHost.CreateWorkspace();
+        SnapshotEntry entry = workspace.Store.Register(
+            sourcePath: path,
+            moveIntoStore: settings.Output is null,
+            origin: SnapshotOrigin.Collect,
+            sourceProcess: sourceName,
+            sourcePid: pid);
+
+        console.MarkupLineInterpolated($"[green]✓[/] saved [bold]{entry.Id}[/] [grey]({ByteSize.Format(entry.SizeBytes)})[/]");
 
         if (settings.Analyze)
         {
             console.WriteLine();
-            return ReplHost.OpenAndRun(console, path);
+            workspace.Load(entry);
+            ReplHost.RunInteractive(console, workspace);
+            return 0;
         }
 
-        console.MarkupLineInterpolated($"[grey]Analyze it with:[/] sherlock \"{path}\"");
+        console.MarkupLineInterpolated($"[grey]Open the library with[/] sl [grey]then[/] load {entry.Id}[grey].[/]");
         return 0;
+    }
+
+    private static string? NameOf(int pid)
+    {
+        try { return System.Diagnostics.Process.GetProcessById(pid).ProcessName; }
+        catch { return null; }
     }
 
     private static int ListProcesses(IAnsiConsole console)
@@ -91,7 +110,7 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
             return 0;
         }
 
-        var table = new Table().Border(TableBorder.None);
+        var table = new Table().Border(TableBorder.Rounded);
         table.AddColumn(new TableColumn("[bold]PID[/]").RightAligned());
         table.AddColumn("[bold]Process[/]");
         foreach (DotnetProcess process in processes)

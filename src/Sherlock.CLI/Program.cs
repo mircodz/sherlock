@@ -13,6 +13,10 @@ app.Configure(config =>
         .WithDescription("Collect a memory dump from a live .NET process.")
         .WithExample("collect", "--list")
         .WithExample("collect", "--pid", "1234", "--analyze");
+    config.AddCommand<RunCommand>("run")
+        .WithDescription("Launch a process under supervision and snapshot it on demand.")
+        .WithExample("run", "./MyApp.dll")
+        .WithExample("run", "MyApp", "--", "arg1");
 });
 
 return app.Run(args);

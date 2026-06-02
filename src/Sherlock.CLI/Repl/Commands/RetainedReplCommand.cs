@@ -22,7 +22,7 @@ public sealed class RetainedReplCommand : IReplCommand
     {
         if (args.Length == 0)
         {
-            context.Console.MarkupLine($"[red]error:[/] usage: {Usage}");
+            context.Console.MarkupLineInterpolated($"[red]error:[/] usage: {Usage}");
             return;
         }
 
