@@ -1,3 +1,5 @@
+using System;
+using System.IO;
 using Microsoft.Diagnostics.NETCore.Client;
 
 namespace Sherlock.Core.Collection;

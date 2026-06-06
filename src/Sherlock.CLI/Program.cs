@@ -16,7 +16,7 @@ app.Configure(config =>
     config.AddCommand<RunCommand>("run")
         .WithDescription("Launch a process under supervision and snapshot it on demand.")
         .WithExample("run", "./MyApp.dll")
-        .WithExample("run", "MyApp", "--", "arg1");
+        .WithExample("run", "--profile", "--", "./MyApp.dll", "arg1");
 });
 
 return app.Run(args);

@@ -1,4 +1,4 @@
-.PHONY: help build build-release test clean pack install uninstall reinstall setup all
+.PHONY: help build build-release native test clean pack install uninstall reinstall setup all
 
 # Variables
 VERSION   := $(shell cat version)
@@ -20,6 +20,16 @@ build: ## Build the solution in Debug mode
 build-release: ## Build the solution in Release mode
 	dotnet build $(SOLUTION) -c Release
 
+native: ## Build the native profiler and stage it under runtimes/<host-rid>/native
+	bash src/native/build.sh
+	@set -e; \
+	os=$$(uname -s); arch=$$(uname -m); \
+	case "$$os" in Darwin) rid_os=osx; lib=libSherlockProfiler.dylib;; *) rid_os=linux; lib=libSherlockProfiler.so;; esac; \
+	case "$$arch" in arm64|aarch64) rid_arch=arm64;; *) rid_arch=x64;; esac; \
+	dest=src/Sherlock.CLI/runtimes/$$rid_os-$$rid_arch/native; \
+	mkdir -p $$dest; cp src/native/bin/$$lib $$dest/; \
+	echo "staged $$lib -> $$dest"
+
 test: ## Run all tests
 	dotnet test $(SOLUTION)
 
@@ -28,7 +38,7 @@ clean: ## Clean build artifacts
 	rm -rf $(NUPKG_DIR)
 	rm -rf */*/bin */*/obj
 
-pack: clean build-release ## Pack the CLI as a NuGet tool package
+pack: clean native build-release ## Pack the CLI as a NuGet tool package (incl. host-RID profiler)
 	dotnet pack $(CLI_PROJ) -c Release -o $(NUPKG_DIR) /p:Version=$(VERSION)
 	@echo ""
 	@echo "Package created: $(NUPKG_DIR)/$(PKG_ID).$(VERSION).nupkg"

@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using Sherlock.Core.Analysis;
@@ -19,7 +20,9 @@ public sealed class DominatorsReplCommand : IReplCommand
     {
         int limit = DefaultLimit;
         if (args.Length > 0 && !int.TryParse(args[0], out limit))
+        {
             limit = DefaultLimit;
+        }
 
         DominatorTree tree = context.Console.Status()
             .Start("Building dominator tree…", _ => context.Session.GetDominatorTree());

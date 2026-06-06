@@ -1,4 +1,8 @@
+using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
+using System.Linq;
 using Microsoft.Diagnostics.NETCore.Client;
 
 namespace Sherlock.Core.Collection;
@@ -39,7 +43,11 @@ public sealed class ProcessSupervisor : IDisposable
     private readonly object _logLock = new();
 
     /// <summary>Launches the target process, capturing its stdout/stderr to a log file.</summary>
-    public SupervisedProcess Start(string path, IReadOnlyList<string> args, bool dumpOnCrash)
+    /// <param name="profilerPath">
+    /// When set, attaches the CLR allocation profiler at startup by exporting the
+    /// <c>CORECLR_*</c> env vars (inherited by the launched .NET process).
+    /// </param>
+    public SupervisedProcess Start(string path, IReadOnlyList<string> args, bool dumpOnCrash, string? profilerPath = null)
     {
         var psi = new ProcessStartInfo(path)
         {
@@ -47,8 +55,19 @@ public sealed class ProcessSupervisor : IDisposable
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
+        
         foreach (string arg in args)
+        {
             psi.ArgumentList.Add(arg);
+        }
+
+        if (profilerPath is not null)
+        {
+            // CLSID matches DllGetClassObject in src/native/src/dllmain.cpp.
+            psi.Environment["CORECLR_ENABLE_PROFILING"] = "1";
+            psi.Environment["CORECLR_PROFILER"] = "{cf0d821e-299b-5307-a3d8-b283c03916dd}";
+            psi.Environment["CORECLR_PROFILER_PATH"] = profilerPath;
+        }
 
         _dumpOnCrash = dumpOnCrash;
         if (dumpOnCrash)
@@ -56,8 +75,7 @@ public sealed class ProcessSupervisor : IDisposable
             // Inherited by the whole subtree → any .NET process that crashes self-dumps.
             psi.Environment["DOTNET_DbgEnableMiniDump"] = "1";
             psi.Environment["DOTNET_DbgMiniDumpType"] = "2"; // 2 = heap
-            psi.Environment["DOTNET_DbgMiniDumpName"] =
-                Path.Combine(Path.GetTempPath(), "sherlock-crash-%p.dmp");
+            psi.Environment["DOTNET_DbgMiniDumpName"] = Path.Combine(Path.GetTempPath(), "sherlock-crash-%p.dmp");
         }
 
         _root = Process.Start(psi)
@@ -81,7 +99,10 @@ public sealed class ProcessSupervisor : IDisposable
     private void WriteLog(string? line)
     {
         if (line is null)
+        {
             return;
+        }
+
         lock (_logLock)
             _log?.WriteLine(line);
     }
@@ -90,7 +111,10 @@ public sealed class ProcessSupervisor : IDisposable
     public IReadOnlyList<string> ReadLog(int tail)
     {
         if (LogPath is null || !File.Exists(LogPath))
-            return Array.Empty<string>();
+        {
+            return [];
+        }
+
         try
         {
             string[] lines = File.ReadAllLines(LogPath);
@@ -98,7 +122,7 @@ public sealed class ProcessSupervisor : IDisposable
         }
         catch
         {
-            return Array.Empty<string>();
+            return [];
         }
     }
 
@@ -109,7 +133,9 @@ public sealed class ProcessSupervisor : IDisposable
     public string? TryHarvestRootCrashDump()
     {
         if (!_dumpOnCrash || _root is null || !_root.HasExited || _crashHarvested)
+        {
             return null;
+        }
 
         _crashHarvested = true; // check exactly once after exit
         return _crashDumpPath is not null && File.Exists(_crashDumpPath) ? _crashDumpPath : null;
@@ -119,7 +145,9 @@ public sealed class ProcessSupervisor : IDisposable
     public IReadOnlyList<SupervisedProcess> List()
     {
         if (_root is null)
-            return Array.Empty<SupervisedProcess>();
+        {
+            return [];
+        }
 
         HashSet<int> dotnet = DotnetPids();
         var result = new List<SupervisedProcess>();
@@ -127,7 +155,9 @@ public sealed class ProcessSupervisor : IDisposable
         foreach (int pid in Descendants(_root.Id))
         {
             if (IsAlive(pid))
+            {
                 result.Add(Describe(pid, pid == _root.Id, dotnet));
+            }
         }
 
         return result
@@ -151,7 +181,7 @@ public sealed class ProcessSupervisor : IDisposable
     private static HashSet<int> DotnetPids()
     {
         try { return DiagnosticsClient.GetPublishedProcesses().ToHashSet(); }
-        catch { return new HashSet<int>(); }
+        catch { return []; }
     }
 
     /// <summary>The root pid plus every transitive child, from the OS process table.</summary>
@@ -167,10 +197,17 @@ public sealed class ProcessSupervisor : IDisposable
             int pid = queue.Dequeue();
             yield return pid;
             if (!children.TryGetValue(pid, out List<int>? kids))
+            {
                 continue;
+            }
+
             foreach (int child in kids)
+            {
                 if (seen.Add(child))
+                {
                     queue.Enqueue(child);
+                }
+            }
         }
     }
 
@@ -187,7 +224,9 @@ public sealed class ProcessSupervisor : IDisposable
             };
             using Process? ps = Process.Start(psi);
             if (ps is null)
+            {
                 return map;
+            }
 
             string output = ps.StandardOutput.ReadToEnd();
             ps.WaitForExit(2000);
@@ -196,7 +235,9 @@ public sealed class ProcessSupervisor : IDisposable
             {
                 string[] parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                 if (parts.Length >= 2 && int.TryParse(parts[0], out int pid) && int.TryParse(parts[1], out int ppid))
-                    (map.TryGetValue(ppid, out List<int>? kids) ? kids : map[ppid] = new List<int>()).Add(pid);
+                {
+                    (map.TryGetValue(ppid, out List<int>? kids) ? kids : map[ppid] = []).Add(pid);
+                }
             }
         }
         catch

@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core.Store;
 using Spectre.Console;

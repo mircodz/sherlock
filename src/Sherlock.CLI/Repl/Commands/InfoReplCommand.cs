@@ -1,3 +1,4 @@
+using System.IO;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using Sherlock.Core.Analysis;

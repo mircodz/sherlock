@@ -1,3 +1,7 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+
 namespace Sherlock.CLI.Repl;
 
 /// <summary>
@@ -23,9 +27,14 @@ public sealed class ReplHistory
     public void Add(string line)
     {
         if (string.IsNullOrWhiteSpace(line))
+        {
             return;
+        }
+
         if (_entries.Count > 0 && _entries[^1] == line)
+        {
             return;
+        }
 
         _entries.Add(line);
         Append(line);
@@ -37,11 +46,16 @@ public sealed class ReplHistory
     private void Load()
     {
         if (_path is null)
+        {
             return;
+        }
+
         try
         {
             if (File.Exists(_path))
+            {
                 _entries.AddRange(File.ReadAllLines(_path));
+            }
         }
         catch
         {
@@ -52,7 +66,10 @@ public sealed class ReplHistory
     private void Append(string line)
     {
         if (_path is null)
+        {
             return;
+        }
+
         try
         {
             File.AppendAllText(_path, line + Environment.NewLine);

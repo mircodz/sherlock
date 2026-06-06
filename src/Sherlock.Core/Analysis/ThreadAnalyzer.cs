@@ -1,23 +1,21 @@
+using System;
+using System.Collections.Generic;
 using Microsoft.Diagnostics.Runtime;
 
 namespace Sherlock.Core.Analysis;
 
 /// <summary>Enumerates managed threads and their call stacks.</summary>
-public sealed class ThreadAnalyzer
+public sealed class ThreadAnalyzer(DumpSession session)
 {
-    private readonly DumpSession _session;
-
-    public ThreadAnalyzer(DumpSession session) => _session = session;
-
     public IReadOnlyList<ThreadInfo> GetThreads(bool includeStacks = true)
     {
         var result = new List<ThreadInfo>();
 
-        foreach (ClrThread thread in _session.Runtime.Threads)
+        foreach (ClrThread thread in session.Runtime.Threads)
         {
             IReadOnlyList<StackFrameInfo> frames = includeStacks
                 ? ReadStack(thread)
-                : Array.Empty<StackFrameInfo>();
+                : [];
 
             result.Add(new ThreadInfo(
                 ManagedThreadId: thread.ManagedThreadId,

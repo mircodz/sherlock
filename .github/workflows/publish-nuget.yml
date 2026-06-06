@@ -1,0 +1,112 @@
+name: Publish NuGet
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  packages: write
+
+jobs:
+  # Build the native profiler for every shipped RID; the tool bundles them all.
+  native:
+    name: native ${{ matrix.rid }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14,         rid: osx-arm64,   lib: libSherlockProfiler.dylib }
+          # - { os: macos-13,         rid: osx-x64,     lib: libSherlockProfiler.dylib }
+          - { os: ubuntu-latest,    rid: linux-x64,   lib: libSherlockProfiler.so }
+          - { os: ubuntu-24.04-arm, rid: linux-arm64, lib: libSherlockProfiler.so }
+          - { os: windows-latest,   rid: win-x64,     lib: SherlockProfiler.dll }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang
+
+      - name: Configure & build (Release)
+        env:
+          CC: clang
+          CXX: clang++
+        run: |
+          cmake -S src/native -B src/native/out -DCMAKE_BUILD_TYPE=Release
+          cmake --build src/native/out --config Release
+
+      - name: Stage library under its RID
+        shell: bash
+        run: |
+          mkdir -p "dist/runtimes/${{ matrix.rid }}/native"
+          found="$(find src/native/out -name '${{ matrix.lib }}' -type f | head -1)"
+          test -n "$found" || { echo "library not found"; exit 1; }
+          cp "$found" "dist/runtimes/${{ matrix.rid }}/native/${{ matrix.lib }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.rid }}
+          path: dist/
+
+  publish:
+    name: pack & push
+    needs: native
+    if: github.actor == 'mircodz'
+    environment: publish
+    runs-on: ubuntu-latest
+    env:
+      OUT_DIR: artifacts/nupkg
+      OWNER: ${{ github.repository_owner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Collect native libraries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          merge-multiple: true
+          path: dist
+
+      - name: Stage libraries into the tool project
+        run: |
+          mkdir -p src/Sherlock.CLI/runtimes
+          cp -r dist/runtimes/* src/Sherlock.CLI/runtimes/
+          find src/Sherlock.CLI/runtimes -type f
+
+      - name: Read version
+        id: version
+        run: echo "VERSION=$(cat version)" >> "$GITHUB_OUTPUT"
+
+      - name: Pack
+        run: dotnet pack src/Sherlock.CLI -c Release -o $OUT_DIR /p:Version=${{ steps.version.outputs.VERSION }}
+
+      - name: NuGet login
+        id: nuget_login
+        uses: NuGet/login@v1
+        with:
+          server: https://api.nuget.org/v3/index.json
+          user: ${{ secrets.NUGET_USER }}
+
+      - name: Push to NuGet.org
+        run: |
+          dotnet nuget push "$OUT_DIR"/*.nupkg \
+            --source "https://api.nuget.org/v3/index.json" \
+            --api-key "${{ steps.nuget_login.outputs.NUGET_API_KEY }}" \
+            --skip-duplicate
+
+      - name: Push to GitHub Packages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          dotnet nuget push "$OUT_DIR"/*.nupkg \
+            --source "https://nuget.pkg.github.com/${OWNER}/index.json" \
+            --api-key "$GITHUB_TOKEN" \
+            --skip-duplicate

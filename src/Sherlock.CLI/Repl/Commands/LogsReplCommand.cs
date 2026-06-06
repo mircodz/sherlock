@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Linq;
 using Sherlock.Core.Collection;
 using Spectre.Console;
 
@@ -29,8 +31,14 @@ public sealed class LogsReplCommand : IReplCommand
             if (int.TryParse(arg, out int n))
             {
                 // First number is a pid; a second is the line count.
-                if (pid is null && n > 1000) pid = n;
-                else tail = n;
+                if (pid is null && n > 1000)
+                {
+                    pid = n;
+                }
+                else
+                {
+                    tail = n;
+                }
             }
         }
 

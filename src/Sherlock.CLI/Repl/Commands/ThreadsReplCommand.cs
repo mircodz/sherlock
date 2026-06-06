@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Linq;
 using Sherlock.Core;
 using Sherlock.Core.Analysis;
 using Spectre.Console;
@@ -64,9 +66,21 @@ public sealed class ThreadsReplCommand : IReplCommand
     private static string Flags(ThreadInfo thread)
     {
         var flags = new List<string>();
-        if (thread.IsFinalizer) flags.Add("[blue]finalizer[/]");
-        if (thread.IsGcThread) flags.Add("[magenta]gc[/]");
-        if (!thread.IsAlive) flags.Add("[grey]dead[/]");
+        if (thread.IsFinalizer)
+        {
+            flags.Add("[blue]finalizer[/]");
+        }
+
+        if (thread.IsGcThread)
+        {
+            flags.Add("[magenta]gc[/]");
+        }
+
+        if (!thread.IsAlive)
+        {
+            flags.Add("[grey]dead[/]");
+        }
+
         return flags.Count == 0 ? "-" : string.Join(" ", flags);
     }
 

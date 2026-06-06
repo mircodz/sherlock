@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -51,7 +54,9 @@ public sealed class HelpReplCommand : IReplCommand
                 table.AddRow($"[bold]{Markup.Escape(command.Usage)}[/]", Markup.Escape(command.Summary));
 
             if (group.Key == "Session")
+            {
                 table.AddRow("[bold]exit[/]", "Quit Sherlock (also: quit, q, Ctrl-D).");
+            }
 
             context.Console.Write(table);
             context.Console.WriteLine();
@@ -73,6 +78,8 @@ public sealed class HelpReplCommand : IReplCommand
         console.MarkupLineInterpolated($"[bold]{command.Name}[/] — {command.Summary}");
         console.MarkupLineInterpolated($"  usage: {command.Usage}");
         if (command.Aliases.Count > 0)
+        {
             console.MarkupLineInterpolated($"  aliases: {string.Join(", ", command.Aliases)}");
+        }
     }
 }

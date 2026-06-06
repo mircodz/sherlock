@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
 using Sherlock.Core;
 using Sherlock.Core.Collection;
 using Sherlock.Core.Store;
@@ -56,7 +59,9 @@ public sealed class Workspace : IDisposable
         {
             string? path = target.TryHarvestRootCrashDump();
             if (path is null)
+            {
                 continue;
+            }
 
             (imported ??= new List<SnapshotEntry>()).Add(Store.Register(
                 sourcePath: path,
@@ -79,7 +84,10 @@ public sealed class Workspace : IDisposable
             sourceProcess: NameOf(pid),
             sourcePid: pid);
         if (load)
+        {
             Load(entry);
+        }
+
         return entry;
     }
 

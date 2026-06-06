@@ -1,4 +1,8 @@
+using System;
 using System.ComponentModel;
+using System.IO;
+using System.Linq;
+using System.Threading;
 using Sherlock.CLI.Repl;
 using Sherlock.Core;
 using Spectre.Console;

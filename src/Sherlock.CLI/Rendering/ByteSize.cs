@@ -8,7 +8,9 @@ public static class ByteSize
     public static string Format(long bytes)
     {
         if (bytes < 0)
+        {
             return "n/a";
+        }
 
         double value = bytes;
         int unit = 0;

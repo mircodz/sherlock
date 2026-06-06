@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Sherlock.Core;
 using Sherlock.Core.Analysis;
 using Spectre.Console;
@@ -32,7 +33,9 @@ public sealed class ExceptionsReplCommand : IReplCommand
             context.Console.MarkupInterpolated($"  {ex.Message ?? "<no message>"}");
             context.Console.MarkupLine(thread);
             if (ex.StackFrameCount > 0)
+            {
                 context.Console.MarkupLineInterpolated($"  [grey]{ex.StackFrameCount} stack frames[/]");
+            }
         }
 
         context.Console.MarkupLine($"[grey]{exceptions.Count} exception object(s).[/]");

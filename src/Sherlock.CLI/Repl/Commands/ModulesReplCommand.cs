@@ -1,3 +1,7 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using Sherlock.Core.Analysis;
@@ -19,7 +23,9 @@ public sealed class ModulesReplCommand : IReplCommand
 
         IReadOnlyList<ModuleInfo> modules = new RuntimeAnalyzer(context.Session).GetModules();
         if (filter is not null)
+        {
             modules = modules.Where(m => m.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)).ToList();
+        }
 
         if (modules.Count == 0)
         {

@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Linq;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using Sherlock.Core.Analysis;
@@ -30,7 +32,9 @@ public sealed class StringsReplCommand : IReplCommand
         int limit = DefaultLimit;
         string? countArg = args.FirstOrDefault(a => !a.StartsWith('-'));
         if (countArg is not null && !int.TryParse(countArg, out limit))
+        {
             limit = DefaultLimit;
+        }
 
         IReadOnlyList<DuplicateString> duplicates = context.Console.Status()
             .Start("Hashing strings…", _ => new HeapAnalyzer(context.Session).FindDuplicateStrings(limit));

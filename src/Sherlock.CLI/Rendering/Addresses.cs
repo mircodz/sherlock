@@ -1,3 +1,4 @@
+using System;
 using System.Globalization;
 
 namespace Sherlock.CLI.Rendering;
@@ -9,7 +10,9 @@ public static class Addresses
     {
         text = text.Trim();
         if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        {
             text = text[2..];
+        }
 
         return ulong.TryParse(text, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out address);
     }

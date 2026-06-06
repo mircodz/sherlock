@@ -1,3 +1,7 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -63,7 +67,9 @@ public sealed class SnapshotStore
         string? label = null)
     {
         if (!File.Exists(sourcePath))
+        {
             throw new FileNotFoundException("Dump file not found.", sourcePath);
+        }
 
         string id = $"s{_catalog.NextId++}";
 
@@ -101,12 +107,18 @@ public sealed class SnapshotStore
     {
         SnapshotEntry? entry = Get(id);
         if (entry is null)
+        {
             return false;
+        }
 
         _catalog.Snapshots.Remove(entry);
         if (entry.Owned)
         {
-            try { if (File.Exists(entry.Path)) File.Delete(entry.Path); }
+            try { if (File.Exists(entry.Path))
+                {
+                    File.Delete(entry.Path);
+                }
+            }
             catch { /* best effort */ }
         }
         Save();
@@ -118,7 +130,9 @@ public sealed class SnapshotStore
         int index = _catalog.Snapshots.FindIndex(s =>
             string.Equals(s.Id, id, StringComparison.OrdinalIgnoreCase));
         if (index < 0)
+        {
             return null;
+        }
 
         SnapshotEntry updated = _catalog.Snapshots[index] with { Label = label };
         _catalog.Snapshots[index] = updated;
@@ -137,7 +151,9 @@ public sealed class SnapshotStore
         try
         {
             if (File.Exists(path))
+            {
                 return JsonSerializer.Deserialize<Catalog>(File.ReadAllText(path), JsonOptions) ?? new Catalog();
+            }
         }
         catch
         {
@@ -149,6 +165,6 @@ public sealed class SnapshotStore
     private sealed class Catalog
     {
         public int NextId { get; set; } = 1;
-        public List<SnapshotEntry> Snapshots { get; set; } = new();
+        public List<SnapshotEntry> Snapshots { get; set; } = [];
     }
 }

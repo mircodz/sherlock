@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using Sherlock.Core.Analysis;
@@ -75,7 +76,9 @@ public sealed class DumpObjReplCommand : IReplCommand
             console.MarkupLineInterpolated($"  {element}");
 
         if (detail.Elements.Count < count)
+        {
             console.MarkupLineInterpolated($"  [grey]… {count - detail.Elements.Count} more[/]");
+        }
     }
 
     /// <summary>Trims a namespace-qualified type to its last segment for compactness.</summary>

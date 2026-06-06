@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -20,7 +22,9 @@ public sealed class HistoryReplCommand : IReplCommand
     {
         int count = DefaultCount;
         if (args.Length > 0 && int.TryParse(args[0], out int parsed))
+        {
             count = parsed;
+        }
 
         IReadOnlyList<string> entries = _history.Entries;
         if (entries.Count == 0)

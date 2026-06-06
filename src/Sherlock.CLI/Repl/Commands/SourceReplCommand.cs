@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.IO;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -30,11 +32,15 @@ public sealed class SourceReplCommand : IReplCommand
         {
             string line = raw.Trim();
             if (line.Length == 0 || line.StartsWith('#'))
+            {
                 continue;
+            }
 
             context.Console.MarkupLineInterpolated($"[grey]source>[/] {line}");
             if (!context.RunLine(line))
+            {
                 return; // an `exit` inside the script stops execution
+            }
         }
     }
 }

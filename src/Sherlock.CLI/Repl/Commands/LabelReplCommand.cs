@@ -29,8 +29,12 @@ public sealed class LabelReplCommand : IReplCommand
         }
 
         if (label is null)
+        {
             context.Console.MarkupLineInterpolated($"[grey]cleared label on[/] {updated.Id}");
+        }
         else
+        {
             context.Console.MarkupLineInterpolated($"[green]labeled[/] {updated.Id} [grey]→[/] {label}");
+        }
     }
 }

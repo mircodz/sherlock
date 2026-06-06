@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using Sherlock.Core;
 using Spectre.Console;
 
@@ -37,7 +39,9 @@ public sealed class Repl
         {
             _console.MarkupLineInterpolated($"[green]{Prompt}[/]{line}");
             if (!RunLine(line))
+            {
                 return;
+            }
         }
     }
 
@@ -65,7 +69,10 @@ public sealed class Repl
             if (line.Length == 0)
             {
                 if (_lastCommand is null)
+                {
                     continue;
+                }
+
                 line = _lastCommand;
                 _console.MarkupLineInterpolated($"[grey]{Prompt}{line}[/]");
             }
@@ -76,7 +83,9 @@ public sealed class Repl
             }
 
             if (!RunLine(line))
+            {
                 return;
+            }
         }
     }
 
@@ -85,13 +94,17 @@ public sealed class Repl
     {
         string[] tokens = Tokenize(line);
         if (tokens.Length == 0)
+        {
             return true;
+        }
 
         string name = tokens[0];
         string[] args = tokens[1..];
 
         if (ExitWords.Contains(name, StringComparer.OrdinalIgnoreCase))
+        {
             return false;
+        }
 
         IReplCommand? command = _registry.Resolve(name);
         if (command is null)
@@ -121,7 +134,9 @@ public sealed class Repl
     private void HarvestCrashDumps()
     {
         if (_workspace is null)
+        {
             return;
+        }
 
         foreach (Sherlock.Core.Store.SnapshotEntry entry in _workspace.HarvestExitedCrashDumps())
             _console.MarkupLineInterpolated(
@@ -131,7 +146,9 @@ public sealed class Repl
     private void PrintBanner(Workspace workspace)
     {
         if (workspace.Current is not null)
+        {
             _console.MarkupLineInterpolated($"[bold]Sherlock[/] — loaded [aqua]{workspace.CurrentName}[/]");
+        }
         else
         {
             int count = workspace.Store.List().Count;
@@ -170,7 +187,9 @@ public sealed class Repl
         }
 
         if (current.Length > 0)
+        {
             tokens.Add(current.ToString());
+        }
 
         return tokens.ToArray();
     }

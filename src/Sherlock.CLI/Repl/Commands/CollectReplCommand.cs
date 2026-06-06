@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Sherlock.Core.Collection;
 using Sherlock.Core.Store;
 using Spectre.Console;
@@ -21,7 +22,9 @@ public sealed class CollectReplCommand : IReplCommand
         }
 
         if (!TryResolvePid(context.Console, args, out int pid))
+        {
             return;
+        }
 
         SnapshotReplCommand.Collect(context, pid, SnapshotOrigin.Collect);
     }
@@ -34,13 +37,19 @@ public sealed class CollectReplCommand : IReplCommand
         for (int i = 0; i < args.Length; i++)
         {
             if (args[i] == "--pid" && i + 1 < args.Length && int.TryParse(args[i + 1], out pid))
+            {
                 return true;
+            }
 
             if (args[i] == "--name" && i + 1 < args.Length)
+            {
                 return ResolveName(console, args[i + 1], out pid);
+            }
 
             if (!args[i].StartsWith('-') && int.TryParse(args[i], out pid))
+            {
                 return true;
+            }
         }
 
         console.MarkupLine("[red]error:[/] specify a pid, [bold]--pid N[/], or [bold]--name X[/].");

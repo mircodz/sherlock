@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using Sherlock.CLI.Repl.Commands;
 
 namespace Sherlock.CLI.Repl;

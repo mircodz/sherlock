@@ -1,3 +1,4 @@
+using System.IO;
 using Sherlock.CLI.Repl;
 using Sherlock.Core;
 using Sherlock.Core.Store;

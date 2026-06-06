@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using System.ComponentModel;
+using System.Threading;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using Sherlock.Core.Collection;
@@ -47,10 +49,14 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
         IAnsiConsole console = AnsiConsole.Console;
 
         if (settings.List)
+        {
             return ListProcesses(console);
+        }
 
         if (!TryResolvePid(console, settings, out int pid))
+        {
             return 1;
+        }
 
         if (!TryParseKind(settings.Type, out DumpKind kind))
         {

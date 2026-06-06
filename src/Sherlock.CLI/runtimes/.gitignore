@@ -1,0 +1,5 @@
+# Native profiler libraries are build outputs (src/native + CI), not committed.
+# This file keeps the directory present so the csproj glob and packaging work.
+*.dylib
+*.so
+*.dll

@@ -1,0 +1,4 @@
+LIBRARY SherlockProfiler
+EXPORTS
+    DllGetClassObject   private
+    DllCanUnloadNow     private

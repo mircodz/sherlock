@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Sherlock.Core.Collection;
 using Spectre.Console;
 

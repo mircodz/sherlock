@@ -1,13 +1,11 @@
+using System;
+using System.IO;
+using System.Threading;
 using Microsoft.Diagnostics.Runtime;
 using Sherlock.Core.Analysis;
 
 namespace Sherlock.Core;
 
-/// <summary>
-/// Owns an opened memory dump: the underlying <see cref="DataTarget"/> and the
-/// first CLR <see cref="ClrRuntime"/> found inside it. Analyzers operate on the
-/// <see cref="Runtime"/> exposed here.
-/// </summary>
 public sealed class DumpSession : IDisposable
 {
     private DumpSession(string path, DataTarget dataTarget, ClrInfo clrInfo, ClrRuntime runtime)
@@ -40,7 +38,9 @@ public sealed class DumpSession : IDisposable
     public static DumpSession Open(string path)
     {
         if (!File.Exists(path))
+        {
             throw new FileNotFoundException("Dump file not found.", path);
+        }
 
         DataTarget? dataTarget = null;
         try
@@ -48,9 +48,11 @@ public sealed class DumpSession : IDisposable
             dataTarget = DataTarget.LoadDump(path);
 
             if (dataTarget.ClrVersions.Length == 0)
+            {
                 throw new DumpAnalysisException(
                     "No .NET runtime was found in this dump. " +
                     "Sherlock analyzes managed (CLR) dumps; this may be a native-only process.");
+            }
 
             ClrInfo clrInfo = dataTarget.ClrVersions[0];
             ClrRuntime runtime = clrInfo.CreateRuntime();

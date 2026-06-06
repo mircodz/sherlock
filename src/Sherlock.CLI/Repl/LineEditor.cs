@@ -1,3 +1,5 @@
+using System;
+using System.IO;
 using System.Text;
 
 namespace Sherlock.CLI.Repl;
@@ -89,7 +91,10 @@ public static class LineEditor
                     if (historyIndex > 0)
                     {
                         if (historyIndex == history.Entries.Count)
+                        {
                             stash = buffer.ToString();
+                        }
+
                         historyIndex--;
                         pos = Replace(buffer, history.Entries[historyIndex]);
                         Render(prompt, buffer, pos);
@@ -142,6 +147,8 @@ public static class LineEditor
         Console.Write("\r");
         int target = prompt.Length + pos;
         if (target > 0)
+        {
             Console.Write($"{Esc}[{target}C");
+        }
     }
 }

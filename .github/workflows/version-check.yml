@@ -1,0 +1,44 @@
+name: Version check
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'src/**'
+      - 'Directory.Build.props'
+      - 'version'
+
+jobs:
+  version-bumped:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure version was bumped
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          HEAD_VERSION="$(tr -d '[:space:]' < version)"
+          BASE_VERSION="$(git show "origin/${BASE_REF}:version" | tr -d '[:space:]')"
+
+          echo "Base (${BASE_REF}): ${BASE_VERSION}"
+          echo "PR head:           ${HEAD_VERSION}"
+
+          if [ "${HEAD_VERSION}" = "${BASE_VERSION}" ]; then
+            echo "::error file=version::Source changed but 'version' is still ${BASE_VERSION}. Bump it (make bump-patch/minor/major)."
+            exit 1
+          fi
+
+          greater="$(printf '%s\n%s\n' "${BASE_VERSION}" "${HEAD_VERSION}" | sort -V | tail -n1)"
+          if [ "${greater}" != "${HEAD_VERSION}" ]; then
+            echo "::error file=version::'version' (${HEAD_VERSION}) must be greater than ${BASE_VERSION}."
+            exit 1
+          fi
+
+          echo "OK: ${BASE_VERSION} -> ${HEAD_VERSION}"

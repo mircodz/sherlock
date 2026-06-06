@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Linq;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using Sherlock.Core.Analysis;
@@ -55,7 +57,9 @@ public sealed class DumpHeapReplCommand : IReplCommand
         context.Console.Write(table);
 
         if (stats.Count > DefaultLimit)
+        {
             context.Console.MarkupLine($"[grey]… {stats.Count - DefaultLimit:N0} more types not shown. Filter with[/] dumpheap <type>.");
+        }
 
         context.Console.MarkupLine(
             $"[bold]{stats.Count:N0}[/] types, [bold]{totalCount:N0}[/] objects, [bold]{ByteSize.Format((long)totalSize)}[/] total.");

@@ -1,14 +1,14 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
 using Microsoft.Diagnostics.Runtime;
 
 namespace Sherlock.Core.Analysis;
 
 /// <summary>Walks the managed heap and aggregates object statistics by type.</summary>
-public sealed class HeapAnalyzer
+public sealed class HeapAnalyzer(DumpSession session)
 {
-    private readonly DumpSession _session;
-
-    public HeapAnalyzer(DumpSession session) => _session = session;
-
     /// <summary>
     /// Groups every live object on the heap by type name, returning counts and
     /// total sizes ordered by total size descending. Mirrors SOS <c>dumpheap -stat</c>.
@@ -18,14 +18,18 @@ public sealed class HeapAnalyzer
     {
         var stats = new Dictionary<string, (long Count, ulong Size)>(StringComparer.Ordinal);
 
-        foreach (ClrObject obj in _session.Runtime.Heap.EnumerateObjects())
+        foreach (ClrObject obj in session.Runtime.Heap.EnumerateObjects())
         {
             if (obj.Type is null)
+            {
                 continue;
+            }
 
             string name = obj.Type.Name ?? "<unknown>";
             if (typeFilter is not null && !name.Contains(typeFilter, StringComparison.OrdinalIgnoreCase))
+            {
                 continue;
+            }
 
             ref var entry = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(stats, name, out _);
             entry.Count++;
@@ -57,23 +61,29 @@ public sealed class HeapAnalyzer
         long totalMatched = 0;
         ulong totalSize = 0;
 
-        foreach (ClrObject obj in _session.Runtime.Heap.EnumerateObjects())
+        foreach (ClrObject obj in session.Runtime.Heap.EnumerateObjects())
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             ClrType? type = obj.Type;
             if (type is null || obj.IsFree)
+            {
                 continue;
+            }
 
             string name = type.Name ?? "<unknown>";
             if (!name.Contains(typeFilter, StringComparison.OrdinalIgnoreCase))
+            {
                 continue;
+            }
 
             totalMatched++;
             totalSize += obj.Size;
 
             if (limit <= 0)
+            {
                 continue;
+            }
 
             if (top.Count < limit)
             {
@@ -102,15 +112,19 @@ public sealed class HeapAnalyzer
     {
         var groups = new Dictionary<string, (long Count, ulong TotalSize)>(StringComparer.Ordinal);
 
-        foreach (ClrObject obj in _session.Runtime.Heap.EnumerateObjects())
+        foreach (ClrObject obj in session.Runtime.Heap.EnumerateObjects())
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (obj.Type?.IsString != true)
+            {
                 continue;
+            }
 
             string? value = obj.AsString(65536);
             if (value is null)
+            {
                 continue;
+            }
 
             ref var entry = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(groups, value, out _);
             entry.Count++;
@@ -133,9 +147,13 @@ public sealed class HeapAnalyzer
     {
         string? preview = null;
         if (type.IsString)
+        {
             preview = obj.AsString(64);
+        }
         else if (type.IsArray)
+        {
             preview = "[]";
+        }
 
         return new ObjectInstance(obj.Address, name, obj.Size, preview);
     }

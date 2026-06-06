@@ -1,3 +1,7 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
 using Microsoft.Diagnostics.Runtime;
 
 namespace Sherlock.Core.Analysis;
@@ -12,15 +16,11 @@ namespace Sherlock.Core.Analysis;
 /// O(objects + references) in time and space. Fine for typical dumps; very large
 /// heaps (tens of millions of objects) may need a streaming approach later.
 /// </remarks>
-public sealed class DominatorAnalyzer
+public sealed class DominatorAnalyzer(DumpSession session)
 {
-    private readonly DumpSession _session;
-
-    public DominatorAnalyzer(DumpSession session) => _session = session;
-
     public DominatorTree Build(CancellationToken cancellationToken = default)
     {
-        ClrHeap heap = _session.Runtime.Heap;
+        ClrHeap heap = session.Runtime.Heap;
 
         // 1. Index every (non-free) object: address -> dense id, plus shallow sizes.
         var indexOf = new Dictionary<ulong, int>();
@@ -30,7 +30,10 @@ public sealed class DominatorAnalyzer
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (obj.Type is null || obj.IsFree)
+            {
                 continue;
+            }
+
             indexOf[obj.Address] = addresses.Count;
             addresses.Add(obj.Address);
             sizes.Add(obj.Size);
@@ -46,12 +49,16 @@ public sealed class DominatorAnalyzer
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (obj.Type is null || obj.IsFree || !indexOf.TryGetValue(obj.Address, out int u))
+            {
                 continue;
+            }
 
             foreach (ClrObject reference in obj.EnumerateReferences())
             {
                 if (indexOf.TryGetValue(reference.Address, out int v))
-                    (successors[u] ??= new List<int>()).Add(v);
+                {
+                    (successors[u] ??= []).Add(v);
+                }
             }
         }
 
@@ -61,7 +68,9 @@ public sealed class DominatorAnalyzer
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (indexOf.TryGetValue(clrRoot.Object.Address, out int v))
+            {
                 rootTargets.Add(v);
+            }
         }
         successors[root] = rootTargets.ToList();
 
@@ -72,17 +81,22 @@ public sealed class DominatorAnalyzer
         // 4. Predecessor lists in RPO space.
         var preds = new List<int>[m];
         for (int i = 0; i < m; i++)
-            preds[i] = new List<int>();
+            preds[i] = [];
         for (int node = 0; node < nodeCount; node++)
         {
             int uRpo = rpoNumber[node];
             if (uRpo < 0 || successors[node] is not { } succ)
+            {
                 continue;
+            }
+
             foreach (int v in succ)
             {
                 int vRpo = rpoNumber[v];
                 if (vRpo >= 0)
+                {
                     preds[vRpo].Add(uRpo);
+                }
             }
         }
 
@@ -100,7 +114,10 @@ public sealed class DominatorAnalyzer
                 foreach (int p in preds[b])
                 {
                     if (idom[p] == -1)
+                    {
                         continue;
+                    }
+
                     newIdom = newIdom == -1 ? p : Intersect(p, newIdom, idom);
                 }
                 if (newIdom != -1 && idom[b] != newIdom)

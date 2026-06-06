@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace Sherlock.Core;
 
 /// <summary>High-level summary of the dump and its runtime, for the <c>info</c> command.</summary>

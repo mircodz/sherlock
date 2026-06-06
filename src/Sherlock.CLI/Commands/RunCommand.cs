@@ -1,4 +1,9 @@
+using System;
+using System.Collections.Generic;
 using System.ComponentModel;
+using System.IO;
+using System.Linq;
+using System.Threading;
 using Sherlock.CLI.Rendering;
 using Sherlock.CLI.Repl;
 using Sherlock.Core;
@@ -16,8 +21,8 @@ public sealed class RunCommand : Command<RunCommand.Settings>
 {
     public sealed class Settings : CommandSettings
     {
-        [CommandArgument(0, "<path>")]
-        [Description("Executable or dll to launch.")]
+        [CommandArgument(0, "[path]")]
+        [Description("Executable or dll to launch (or pass it after `--`).")]
         public string Path { get; init; } = string.Empty;
 
         [CommandArgument(1, "[args]")]
@@ -27,22 +32,51 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         [CommandOption("--no-crash-dump")]
         [Description("Do not auto-write a dump if a process crashes.")]
         public bool NoCrashDump { get; init; }
+
+        [CommandOption("--profile")]
+        [Description("Attach the Sherlock allocation profiler at startup (logs allocations).")]
+        public bool Profile { get; init; }
     }
 
     protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellation)
     {
         IAnsiConsole console = AnsiConsole.Console;
 
-        // Child args come from positional args plus anything after `--`.
+        // The target path may be the positional arg, or — in `run [opts] -- <bin> <args>`
+        // form — the first token after `--`. Remaining tokens are the target's args.
         var childArgs = new List<string>(settings.Args);
         childArgs.AddRange(context.Remaining.Raw);
+
+        string path = settings.Path;
+        if (string.IsNullOrEmpty(path))
+        {
+            if (childArgs.Count == 0)
+            {
+                console.MarkupLine("[red]error:[/] no executable given. Usage: [bold]run [[--profile]] -- <bin> [[args]][/]");
+                return 1;
+            }
+            path = childArgs[0];
+            childArgs.RemoveAt(0);
+        }
+
+        string? profilerPath = null;
+        if (settings.Profile)
+        {
+            profilerPath = ProfilerLibrary.Locate();
+            if (profilerPath is null)
+            {
+                console.MarkupLineInterpolated(
+                    $"[red]error:[/] profiler library ({ProfilerLibrary.FileName}) not found. Build it with [bold]src/native/build.sh[/], or set [bold]SHERLOCK_PROFILER_PATH[/].");
+                return 1;
+            }
+        }
 
         using var supervisor = new ProcessSupervisor();
 
         SupervisedProcess root;
         try
         {
-            root = supervisor.Start(settings.Path, childArgs, dumpOnCrash: !settings.NoCrashDump);
+            root = supervisor.Start(path, childArgs, dumpOnCrash: !settings.NoCrashDump, profilerPath);
         }
         catch (DumpAnalysisException ex)
         {
@@ -50,7 +84,12 @@ public sealed class RunCommand : Command<RunCommand.Settings>
             return 1;
         }
 
-        console.MarkupLineInterpolated($"[bold]Sherlock[/] supervising [aqua]{System.IO.Path.GetFileName(settings.Path)}[/] (root pid {root.Pid}).");
+        console.MarkupLineInterpolated($"[bold]Sherlock[/] supervising [aqua]{System.IO.Path.GetFileName(path)}[/] (root pid {root.Pid}).");
+        if (profilerPath is not null)
+        {
+            console.MarkupLineInterpolated($"[grey]Allocation profiler attached; allocations logged to[/] {supervisor.LogPath}[grey].[/]");
+        }
+
         console.MarkupLine("Commands: [bold]ps[/], [bold]snapshot [[pid]] [[--analyze]][/], [bold]kill[/], [bold]exit[/].");
         console.WriteLine();
 
@@ -64,7 +103,9 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         {
             string? line = LineEditor.ReadLine("sherlock(run)> ", history);
             if (line is null)
+            {
                 return 0;
+            }
 
             string[] tokens = line.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             if (tokens.Length == 0)
@@ -159,6 +200,8 @@ public sealed class RunCommand : Command<RunCommand.Settings>
     private static void NoteIfRootExited(IAnsiConsole console, ProcessSupervisor supervisor)
     {
         if (supervisor.RootExited)
+        {
             console.MarkupLineInterpolated($"[grey](root has exited{(supervisor.RootExitCode is int c ? $", code {c}" : "")})[/]");
+        }
     }
 }

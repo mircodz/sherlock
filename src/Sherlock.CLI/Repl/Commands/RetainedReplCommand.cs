@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using Sherlock.Core.Analysis;
@@ -47,7 +48,9 @@ public sealed class RetainedReplCommand : IReplCommand
 
         IReadOnlyList<DominatorNode> children = tree.ImmediateChildren(address, ChildLimit);
         if (children.Count == 0)
+        {
             return;
+        }
 
         context.Console.MarkupLine("[grey]Directly dominates:[/]");
         foreach (DominatorNode child in children)

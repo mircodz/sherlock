@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Sherlock.Core.Store;
 using Spectre.Console;
 
@@ -29,7 +30,9 @@ public sealed class RmReplCommand : IReplCommand
 
         // If we're deleting what's currently loaded, unload it first.
         if (context.Workspace.CurrentEntry?.Id == entry.Id)
+        {
             context.Workspace.Unload();
+        }
 
         context.Workspace.Store.Remove(entry.Id);
         context.Console.MarkupLineInterpolated(

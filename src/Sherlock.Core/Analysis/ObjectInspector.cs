@@ -1,38 +1,40 @@
+using System;
+using System.Collections.Generic;
 using Microsoft.Diagnostics.Runtime;
 
 namespace Sherlock.Core.Analysis;
 
 /// <summary>Reads a single object's identity and contents (the <c>dumpobj</c> view).</summary>
-public sealed class ObjectInspector
+public sealed class ObjectInspector(DumpSession session)
 {
     private const int StringPreviewLength = 256;
     private const int MaxElements = 100;
 
-    private readonly DumpSession _session;
-
-    public ObjectInspector(DumpSession session) => _session = session;
-
     /// <exception cref="DumpAnalysisException">The address is not a valid managed object.</exception>
     public ObjectDetail Inspect(ulong address)
     {
-        ClrObject obj = _session.Runtime.Heap.GetObject(address);
+        ClrObject obj = session.Runtime.Heap.GetObject(address);
         if (!obj.IsValid || obj.Type is null)
+        {
             throw new DumpAnalysisException($"0x{address:x} is not a valid managed object address.");
+        }
 
         ClrType type = obj.Type;
 
         string? stringValue = type.IsString ? obj.AsString(StringPreviewLength) : null;
 
         // Arrays and the common collections are best shown as elements, not fields.
-        IReadOnlyList<string> elements = Array.Empty<string>();
+        IReadOnlyList<string> elements = [];
         int? elementCount = null;
         if (stringValue is null)
+        {
             elementCount = TryEnumerate(obj, type, out elements);
+        }
 
         // Only fall back to raw fields when there's nothing more meaningful to show.
         IReadOnlyList<FieldValue> fields = (stringValue is null && elementCount is null)
             ? ReadFields(obj, type)
-            : Array.Empty<FieldValue>();
+            : [];
 
         return new ObjectDetail(
             Address: obj.Address,
@@ -51,7 +53,7 @@ public sealed class ObjectInspector
     /// </summary>
     private static int? TryEnumerate(ClrObject obj, ClrType type, out IReadOnlyList<string> elements)
     {
-        elements = Array.Empty<string>();
+        elements = [];
 
         if (type.IsArray)
         {
@@ -129,9 +131,15 @@ public sealed class ObjectInspector
     private static string FormatReference(ClrObject reference)
     {
         if (reference.IsNull)
+        {
             return "null";
+        }
+
         if (reference.Type?.IsString == true)
+        {
             return $"\"{reference.AsString(StringPreviewLength)}\"";
+        }
+
         return $"0x{reference.Address:x} ({reference.Type?.Name ?? "?"})";
     }
 
@@ -177,7 +185,10 @@ public sealed class ObjectInspector
                 case ClrElementType.String:
                     string? s = field.ReadString(objAddress, false);
                     if (s is null)
+                    {
                         return "null";
+                    }
+
                     return s.Length > StringPreviewLength
                         ? $"\"{s[..StringPreviewLength]}…\""
                         : $"\"{s}\"";

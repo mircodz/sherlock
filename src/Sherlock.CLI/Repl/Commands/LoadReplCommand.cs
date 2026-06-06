@@ -1,3 +1,4 @@
+using System.IO;
 using Sherlock.Core.Store;
 using Spectre.Console;
 
