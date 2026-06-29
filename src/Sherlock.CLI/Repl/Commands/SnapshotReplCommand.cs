@@ -11,7 +11,7 @@ namespace Sherlock.CLI.Repl.Commands;
 public sealed class SnapshotReplCommand : IReplCommand
 {
     public string Name => "snapshot";
-    public IReadOnlyList<string> Aliases => new[] { "snap" };
+    public IReadOnlyList<string> Aliases => ["snap"];
     public string Summary => "Snapshot a live target (default: the latest run) into the library.";
     public string Usage => "snapshot [pid]";
     public string Category => "Live";

@@ -4,6 +4,7 @@
 #include "sherlock/profiler/profiler.hpp"
 
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <vector>
@@ -34,6 +35,22 @@ HRESULT __stdcall captureStack(FunctionID funcId, UINT_PTR, COR_PRF_FRAME_INFO,
             return E_ABORT; // got enough depth; any non-S_OK ends the walk
     }
     return S_OK;
+}
+
+// Single tracer per process; the ELT hooks are global function pointers with no
+// client data, so they reach it through this.
+TraceCollector* g_trace = nullptr;
+
+// ELT2 hooks — the canonical CoreCLR slow-path variant (the runtime saves/restores
+// registers around these, so they can be plain C functions). We only use funcId.
+void STDMETHODCALLTYPE EnterHook(FunctionID funcId, UINT_PTR, COR_PRF_FRAME_INFO, COR_PRF_FUNCTION_ARGUMENT_INFO*) {
+    if (g_trace) g_trace->onEnter(funcId);
+}
+void STDMETHODCALLTYPE LeaveHook(FunctionID funcId, UINT_PTR, COR_PRF_FRAME_INFO, COR_PRF_FUNCTION_ARGUMENT_RANGE*) {
+    if (g_trace) g_trace->onLeave(funcId);
+}
+void STDMETHODCALLTYPE TailcallHook(FunctionID funcId, UINT_PTR, COR_PRF_FRAME_INFO) {
+    if (g_trace) g_trace->onLeave(funcId); // a tailcall leaves the current frame
 }
 
 } // namespace
@@ -82,10 +99,17 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
         return hr;
     }
 
+    const char* traceEnv = std::getenv("SHERLOCK_TRACE");
+    traceCalls = traceEnv != nullptr && traceEnv[0] != '\0' && traceEnv[0] != '0';
+
+    // Allocation tracking is always on; tracing adds ELT on top when requested.
     DWORD eventMask = COR_PRF_MONITOR_OBJECT_ALLOCATED |
                       COR_PRF_ENABLE_OBJECT_ALLOCATED |
                       COR_PRF_ENABLE_STACK_SNAPSHOT |
                       COR_PRF_MONITOR_GC; // GC callbacks for survivor tracking
+    if (traceCalls)
+        eventMask |= COR_PRF_MONITOR_ENTERLEAVE;
+
     hr = corProfilerInfo->SetEventMask(eventMask);
     if (FAILED(hr)) {
         logger->logError("SetEventMask failed");
@@ -101,8 +125,24 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
 
     aggregator = std::make_unique<Aggregator>(corProfilerInfo, logger.get());
 
+    if (traceCalls) {
+        const char* traceOut = std::getenv("SHERLOCK_TRACE_OUT");
+        tracePath = (traceOut != nullptr && traceOut[0] != '\0') ? traceOut : "sherlock-trace.txt";
+        trace = std::make_unique<TraceCollector>(logger.get());
+        g_trace = trace.get();
+        trace->start();
+        hr = corProfilerInfo->SetEnterLeaveFunctionHooks2(EnterHook, LeaveHook, TailcallHook);
+        if (FAILED(hr)) {
+            char buf[16];
+            std::snprintf(buf, sizeof buf, "0x%08x", static_cast<unsigned>(hr));
+            logger->logError(std::string("SetEnterLeaveFunctionHooks2 failed ") + buf);
+        }
+    }
+
     isInitialized = true;
-    logger->logInfo("profiler initialized; aggregating allocations by call stack");
+    logger->logInfo(traceCalls
+        ? "profiler initialized; allocations by call stack + per-method tracing"
+        : "profiler initialized; aggregating allocations by call stack");
     return S_OK;
 }
 
@@ -121,6 +161,10 @@ HRESULT STDMETHODCALLTYPE Profiler::Shutdown() {
     if (aggregator) {
         aggregator->countPendingAsSurvived(); // anything uncollected at exit is still live
         aggregator->dump(outputPath);
+    }
+    if (trace) {
+        trace->stop();
+        trace->dump(tracePath, [this](FunctionID f) { return aggregator->resolveMethodName(f); });
     }
     return S_OK;
 }

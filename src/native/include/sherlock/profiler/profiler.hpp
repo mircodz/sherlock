@@ -9,6 +9,7 @@
 #include "profilercommon.h"
 #include "sherlock/common/logger.hpp"
 #include "sherlock/profiler/aggregator.hpp"
+#include "sherlock/profiler/trace.hpp"
 
 namespace Sherlock {
 
@@ -132,6 +133,10 @@ private:
     std::uint64_t sampleInterval = 0; // bytes between samples; 0 = sample every allocation
     std::unique_ptr<Logger> logger;
     std::unique_ptr<Aggregator> aggregator;
+
+    bool traceCalls = false;          // SHERLOCK_TRACE: per-method call tracing via ELT hooks
+    std::string tracePath;
+    std::unique_ptr<TraceCollector> trace;
 };
 
 } // namespace Sherlock

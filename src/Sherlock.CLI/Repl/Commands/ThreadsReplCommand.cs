@@ -13,7 +13,7 @@ namespace Sherlock.CLI.Repl.Commands;
 public sealed class ThreadsReplCommand : IReplCommand
 {
     public string Name => "threads";
-    public IReadOnlyList<string> Aliases => new[] { "t", "clrstack" };
+    public IReadOnlyList<string> Aliases => ["t", "clrstack"];
     public string Summary => "List managed threads, or show one thread's stack with `threads <id>`.";
     public string Usage => "threads [managed-thread-id]";
 

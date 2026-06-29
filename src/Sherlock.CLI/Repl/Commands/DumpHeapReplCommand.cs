@@ -13,7 +13,7 @@ public sealed class DumpHeapReplCommand : IReplCommand
     private const int DefaultLimit = 40;
 
     public string Name => "dumpheap";
-    public IReadOnlyList<string> Aliases => new[] { "dh", "heap" };
+    public IReadOnlyList<string> Aliases => ["dh", "heap"];
     public string Summary => "Show heap object statistics by type, largest first.";
     public string Usage => "dumpheap [type-filter]";
 

@@ -11,7 +11,7 @@ namespace Sherlock.CLI.Repl;
 public sealed class ReplHistory
 {
     private readonly string? _path;
-    private readonly List<string> _entries = new();
+    private readonly List<string> _entries = [];
 
     public ReplHistory(string? path)
     {

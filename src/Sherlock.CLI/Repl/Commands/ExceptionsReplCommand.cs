@@ -9,7 +9,7 @@ namespace Sherlock.CLI.Repl.Commands;
 public sealed class ExceptionsReplCommand : IReplCommand
 {
     public string Name => "exceptions";
-    public IReadOnlyList<string> Aliases => new[] { "pe", "exc" };
+    public IReadOnlyList<string> Aliases => ["pe", "exc"];
     public string Summary => "List managed exceptions on threads and on the heap.";
     public string Usage => "exceptions";
 

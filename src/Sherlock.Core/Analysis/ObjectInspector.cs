@@ -32,7 +32,7 @@ public sealed class ObjectInspector(DumpSession session)
         }
 
         // Only fall back to raw fields when there's nothing more meaningful to show.
-        IReadOnlyList<FieldValue> fields = (stringValue is null && elementCount is null)
+        IReadOnlyList<FieldValue> fields = stringValue is null && elementCount is null
             ? ReadFields(obj, type)
             : [];
 

@@ -41,11 +41,15 @@ public static class AllocationProfileReader
         foreach (string line in File.ReadLines(path))
         {
             if (line.Length == 0 || line[0] == '#')
+            {
                 continue;
+            }
 
             string[] parts = line.Split('\t');
             if (parts.Length < 3)
+            {
                 continue;
+            }
 
             string stack = parts[^1];
             string[] frames = stack.Split(';', System.StringSplitOptions.RemoveEmptyEntries);
@@ -57,6 +61,7 @@ public static class AllocationProfileReader
 
             sites.Add(new AllocationSite(frames, allocBytes, allocCount, survivedBytes, survivedCount));
         }
+        
         return new AllocationProfile(sites);
     }
 

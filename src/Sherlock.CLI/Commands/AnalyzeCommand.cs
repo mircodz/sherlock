@@ -24,7 +24,7 @@ public sealed class AnalyzeCommand : Command<AnalyzeCommand.Settings>
 
         [CommandOption("-x|--exec <COMMAND>")]
         [Description("Run a command non-interactively, then exit. Repeatable.")]
-        public string[] Exec { get; init; } = Array.Empty<string>();
+        public string[] Exec { get; init; } = [];
 
         [CommandOption("-s|--script <FILE>")]
         [Description("Run commands from a script file, then exit.")]

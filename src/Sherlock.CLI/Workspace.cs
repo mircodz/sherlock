@@ -19,7 +19,7 @@ public sealed class Workspace : IDisposable
 
     public SnapshotStore Store { get; }
 
-    private readonly List<ProcessSupervisor> _targets = new();
+    private readonly List<ProcessSupervisor> _targets = [];
 
     /// <summary>Processes launched with <c>run</c> during this session.</summary>
     public IReadOnlyList<ProcessSupervisor> Targets => _targets;
@@ -68,9 +68,9 @@ public sealed class Workspace : IDisposable
             }
 
             Session session = SessionFor(target, SessionKind.Crash);
-            (imported ??= new List<SnapshotEntry>()).Add(Store.AddSnapshot(session, path, moveIntoStore: true));
+            (imported ??= []).Add(Store.AddSnapshot(session, path, moveIntoStore: true));
         }
-        return (IReadOnlyList<SnapshotEntry>?)imported ?? Array.Empty<SnapshotEntry>();
+        return (IReadOnlyList<SnapshotEntry>?)imported ?? [];
     }
 
     /// <summary>
@@ -95,9 +95,9 @@ public sealed class Workspace : IDisposable
             }
 
             Store.MarkAllocations(session, path);
-            (marked ??= new List<Session>()).Add(session);
+            (marked ??= []).Add(session);
         }
-        return (IReadOnlyList<Session>?)marked ?? Array.Empty<Session>();
+        return (IReadOnlyList<Session>?)marked ?? [];
     }
 
     /// <summary>Collects a dump from a live process, catalogs it under the right session, and loads it.</summary>

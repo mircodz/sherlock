@@ -182,7 +182,11 @@ public sealed class SnapshotStore
         owner.Snapshots.Remove(snap);
         if (snap.Owned)
         {
-            try { if (File.Exists(snap.Path)) File.Delete(snap.Path); }
+            try { if (File.Exists(snap.Path))
+                {
+                    File.Delete(snap.Path);
+                }
+            }
             catch { /* best effort */ }
         }
         WriteMetadata(owner);
@@ -220,7 +224,11 @@ public sealed class SnapshotStore
 
     private static void TryDeleteDir(string dir)
     {
-        try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+        try { if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
         catch { /* best effort */ }
     }
 
@@ -245,6 +253,6 @@ public sealed class SnapshotStore
         public int SchemaVersion { get; set; } = 2;
         public int NextSession { get; set; } = 1;
         public int NextSnapshot { get; set; } = 1;
-        public List<Session> Sessions { get; set; } = new();
+        public List<Session> Sessions { get; set; } = [];
     }
 }

@@ -20,7 +20,8 @@ set(SOURCES
     src/dllmain.cpp
     src/common/logger.cpp
     src/profiler/profiler.cpp
-    src/profiler/aggregator.cpp)
+    src/profiler/aggregator.cpp
+    src/profiler/trace.cpp)
 
 if(WIN32)
     list(APPEND SOURCES src/profiler.def)

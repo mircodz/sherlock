@@ -16,7 +16,7 @@ public sealed class AllocationsReplCommand : IReplCommand
     private const int DefaultLimit = 25;
 
     public string Name => "allocations";
-    public IReadOnlyList<string> Aliases => new[] { "alloc" };
+    public IReadOnlyList<string> Aliases => ["alloc"];
     public string Summary => "Show top allocation sites (allocated vs. survived) from a profile.";
     public string Category => "Allocation profiling";
     public string Usage => "allocations [path] [count]";
@@ -28,9 +28,13 @@ public sealed class AllocationsReplCommand : IReplCommand
         foreach (string arg in args)
         {
             if (int.TryParse(arg, out int n))
+            {
                 limit = n;
+            }
             else
+            {
                 path = arg;
+            }
         }
 
         // Default to the current session's profile, if it has one.

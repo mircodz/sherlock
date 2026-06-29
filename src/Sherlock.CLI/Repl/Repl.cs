@@ -11,7 +11,7 @@ namespace Sherlock.CLI.Repl;
 /// </summary>
 public sealed class Repl
 {
-    private static readonly string[] ExitWords = { "exit", "quit", "q" };
+    private static readonly string[] ExitWords = ["exit", "quit", "q"];
 
     private readonly ReplCommandRegistry _registry;
     private readonly ReplHistory _history;

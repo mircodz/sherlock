@@ -11,7 +11,7 @@ namespace Sherlock.CLI.Repl.Commands;
 public sealed class SegmentsReplCommand : IReplCommand
 {
     public string Name => "segments";
-    public IReadOnlyList<string> Aliases => new[] { "seg", "eeheap" };
+    public IReadOnlyList<string> Aliases => ["seg", "eeheap"];
     public string Summary => "Show GC heap segments by generation (gen0/1/2, LOH, POH).";
     public string Usage => "segments";
 

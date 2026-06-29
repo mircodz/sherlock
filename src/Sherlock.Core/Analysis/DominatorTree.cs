@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.Diagnostics.Runtime;
@@ -99,6 +98,7 @@ public sealed class DominatorTree
             .OrderByDescending(rpo => _retained[rpo])
             .Take(maxNodes)
             .ToList();
+        
         var included = new HashSet<int>(top);
 
         var nodes = new List<DominatorGraphNode>(top.Count);
@@ -108,11 +108,12 @@ public sealed class DominatorTree
             // the synthetic root at 0) until we hit another included node or the root.
             int parent = _idom[rpo];
             while (parent != 0 && !included.Contains(parent))
+            {
                 parent = _idom[parent];
+            }
 
             int? parentId = parent == 0 ? null : parent;
-            nodes.Add(new DominatorGraphNode(
-                rpo, _address[rpo], TypeNameAt(rpo), _ownSize[rpo], _retained[rpo], parentId));
+            nodes.Add(new DominatorGraphNode(rpo, _address[rpo], TypeNameAt(rpo), _ownSize[rpo], _retained[rpo], parentId));
         }
 
         return new DominatorGraph(nodes, TotalReachableBytes);

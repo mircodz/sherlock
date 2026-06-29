@@ -98,7 +98,10 @@ public sealed class HeapAnalyzer(DumpSession session)
         // Drain the heap and present largest-first.
         var instances = new List<ObjectInstance>(top.Count);
         while (top.Count > 0)
+        {
             instances.Add(top.Dequeue());
+        }
+
         instances.Reverse();
 
         return new InstanceListing(instances, totalMatched, totalSize);

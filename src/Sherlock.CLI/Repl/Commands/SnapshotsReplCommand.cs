@@ -9,7 +9,7 @@ namespace Sherlock.CLI.Repl.Commands;
 public sealed class SnapshotsReplCommand : IReplCommand
 {
     public string Name => "snapshots";
-    public IReadOnlyList<string> Aliases => new[] { "snaps", "ls" };
+    public IReadOnlyList<string> Aliases => ["snaps", "ls"];
     public string Summary => "List sessions and their snapshots.";
     public string Usage => "snapshots";
     public string Category => "Library";

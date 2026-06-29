@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Runtime.InteropServices;
 using Microsoft.Diagnostics.NETCore.Client;
 
 namespace Sherlock.Core.Collection;
@@ -125,7 +124,9 @@ public sealed class ProcessSupervisor : IDisposable
         }
 
         lock (_logLock)
+        {
             _log?.WriteLine(line);
+        }
     }
 
     /// <summary>Returns the last <paramref name="tail"/> lines of captured output.</summary>

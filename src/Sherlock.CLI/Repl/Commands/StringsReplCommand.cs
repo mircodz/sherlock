@@ -16,7 +16,7 @@ public sealed class StringsReplCommand : IReplCommand
     private const int DefaultLimit = 20;
 
     public string Name => "strings";
-    public IReadOnlyList<string> Aliases => new[] { "str" };
+    public IReadOnlyList<string> Aliases => ["str"];
     public string Summary => "Analyze strings. `strings --dup` finds duplicate values wasting memory.";
     public string Usage => "strings --dup [count]";
 

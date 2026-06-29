@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using Sherlock.Core.Collection;
-using Sherlock.Core.Store;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;

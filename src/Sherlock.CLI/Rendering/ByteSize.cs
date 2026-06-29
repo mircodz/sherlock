@@ -3,7 +3,7 @@ namespace Sherlock.CLI.Rendering;
 /// <summary>Formats byte counts as human-readable sizes (e.g. 1.5 MB).</summary>
 public static class ByteSize
 {
-    private static readonly string[] Units = { "B", "KB", "MB", "GB", "TB", "PB" };
+    private static readonly string[] Units = ["B", "KB", "MB", "GB", "TB", "PB"];
 
     public static string Format(long bytes)
     {

@@ -13,7 +13,7 @@ namespace Sherlock.CLI.Repl.Commands;
 public sealed class ModulesReplCommand : IReplCommand
 {
     public string Name => "modules";
-    public IReadOnlyList<string> Aliases => new[] { "assemblies", "lm" };
+    public IReadOnlyList<string> Aliases => ["assemblies", "lm"];
     public string Summary => "List loaded managed modules/assemblies.";
     public string Usage => "modules [name-filter]";
 

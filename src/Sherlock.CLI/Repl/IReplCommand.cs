@@ -43,7 +43,7 @@ public interface IReplCommand
     string Name { get; }
 
     /// <summary>Alternate names, e.g. <c>dh</c>.</summary>
-    IReadOnlyList<string> Aliases => Array.Empty<string>();
+    IReadOnlyList<string> Aliases => [];
 
     /// <summary>One-line description shown by <c>help</c>.</summary>
     string Summary { get; }

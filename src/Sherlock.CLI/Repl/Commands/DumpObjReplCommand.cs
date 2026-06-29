@@ -10,7 +10,7 @@ namespace Sherlock.CLI.Repl.Commands;
 public sealed class DumpObjReplCommand : IReplCommand
 {
     public string Name => "dumpobj";
-    public IReadOnlyList<string> Aliases => new[] { "do", "print", "p" };
+    public IReadOnlyList<string> Aliases => ["do", "print", "p"];
     public string Summary => "Inspect one object by address: its type, size and fields.";
     public string Usage => "dumpobj <address>";
 

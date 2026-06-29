@@ -12,7 +12,7 @@ public sealed class DominatorsReplCommand : IReplCommand
     private const int DefaultLimit = 25;
 
     public string Name => "dominators";
-    public IReadOnlyList<string> Aliases => new[] { "dom", "retainers" };
+    public IReadOnlyList<string> Aliases => ["dom", "retainers"];
     public string Summary => "Show objects with the largest retained size (biggest memory holders).";
     public string Usage => "dominators [count]";
 

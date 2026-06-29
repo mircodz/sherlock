@@ -27,7 +27,7 @@ public sealed class RunCommand : Command<RunCommand.Settings>
 
         [CommandArgument(1, "[args]")]
         [Description("Arguments passed to the launched process.")]
-        public string[] Args { get; init; } = Array.Empty<string>();
+        public string[] Args { get; init; } = [];
 
         [CommandOption("--no-crash-dump")]
         [Description("Do not auto-write a dump if a process crashes.")]

@@ -34,7 +34,7 @@ public sealed class Session
     /// <summary>Allocation profile (folded stacks), if the run was profiled.</summary>
     public string? AllocationsPath { get; set; }
 
-    public List<SnapshotEntry> Snapshots { get; set; } = new();
+    public List<SnapshotEntry> Snapshots { get; set; } = [];
 
     [JsonIgnore]
     public bool HasAllocations => AllocationsPath is not null && File.Exists(AllocationsPath);

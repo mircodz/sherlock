@@ -15,7 +15,7 @@ public sealed class RetainedReplCommand : IReplCommand
     private const int ChildLimit = 15;
 
     public string Name => "retained";
-    public IReadOnlyList<string> Aliases => new[] { "objsize" };
+    public IReadOnlyList<string> Aliases => ["objsize"];
     public string Summary => "Show an object's retained size and what it dominates.";
     public string Usage => "retained <address>";
 

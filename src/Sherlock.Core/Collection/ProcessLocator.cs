@@ -10,16 +10,11 @@ public sealed record DotnetProcess(int Pid, string Name);
 
 public static class ProcessLocator
 {
-    public static IReadOnlyList<DotnetProcess> List()
-    {
-        var result = new List<DotnetProcess>();
-        foreach (int pid in DiagnosticsClient.GetPublishedProcesses())
-        {
-            result.Add(new DotnetProcess(pid, NameOf(pid)));
-        }
-
-        return result.OrderBy(p => p.Pid).ToList();
-    }
+    public static IReadOnlyList<DotnetProcess> List() =>
+        DiagnosticsClient.GetPublishedProcesses()
+            .Select(pid => new DotnetProcess(pid, NameOf(pid)))
+            .OrderBy(p => p.Pid)
+            .ToList();
 
     public static IReadOnlyList<DotnetProcess> FindByName(string name) => List()
             .Where(p => p.Name.Contains(name, StringComparison.OrdinalIgnoreCase))

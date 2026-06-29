@@ -211,9 +211,14 @@ public sealed class DominatorAnalyzer(DumpSession session)
         while (a != b)
         {
             while (a > b)
+            {
                 a = idom[a];
+            }
+
             while (b > a)
+            {
                 b = idom[b];
+            }
         }
         return a;
     }

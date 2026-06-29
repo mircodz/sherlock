@@ -69,11 +69,14 @@ public:
     /// folded-stack file sorted by allocated bytes. Must not run concurrently with record().
     void dump(const std::string& path);
 
+    /// Resolves a FunctionID to "Type.Method" (cached). Public so the trace
+    /// collector can reuse it as a symbolizer.
+    const std::string& resolveMethodName(FunctionID method);
+
 private:
     static constexpr int kMaxShards = 1024;
 
     Shard& localShard();
-    const std::string& resolveMethodName(FunctionID method);
     bool survived(ObjectID addr) const;
 
     ICorProfilerInfo10* info_;

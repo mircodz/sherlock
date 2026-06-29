@@ -13,7 +13,7 @@ public sealed class HistoryReplCommand : IReplCommand
     public HistoryReplCommand(ReplHistory history) => _history = history;
 
     public string Name => "history";
-    public IReadOnlyList<string> Aliases => new[] { "hist" };
+    public IReadOnlyList<string> Aliases => ["hist"];
     public string Summary => "Show recent command history.";
     public string Usage => "history [count]";
     public string Category => "Session";

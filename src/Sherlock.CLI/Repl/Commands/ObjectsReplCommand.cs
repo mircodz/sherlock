@@ -15,7 +15,7 @@ public sealed class ObjectsReplCommand : IReplCommand
     private const int DefaultLimit = 20;
 
     public string Name => "objects";
-    public IReadOnlyList<string> Aliases => new[] { "obj", "instances", "ls" };
+    public IReadOnlyList<string> Aliases => ["obj", "instances", "ls"];
     public string Summary => "List instances of a type, largest first. e.g. objects System.String";
     public string Usage => "objects <type-filter> [count]";
 
