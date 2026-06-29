@@ -9,7 +9,7 @@ public sealed class RmReplCommand : IReplCommand
 {
     public string Name => "rm";
     public IReadOnlyList<string> Aliases => new[] { "delete" };
-    public string Summary => "Remove a snapshot from the library.";
+    public string Summary => "Remove a snapshot (sN) or a whole session (rN) from the library.";
     public string Usage => "rm <id>";
     public string Category => "Library";
 
@@ -21,21 +21,20 @@ public sealed class RmReplCommand : IReplCommand
             return;
         }
 
-        SnapshotEntry? entry = context.Workspace.Store.Get(args[0]);
-        if (entry is null)
-        {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] no snapshot '{args[0]}'.");
-            return;
-        }
+        string id = args[0];
 
-        // If we're deleting what's currently loaded, unload it first.
-        if (context.Workspace.CurrentEntry?.Id == entry.Id)
+        // If we're deleting the loaded snapshot (or the session that owns it), unload first.
+        if (context.Workspace.CurrentEntry?.Id == id || context.Workspace.CurrentSession?.Id == id)
         {
             context.Workspace.Unload();
         }
 
-        context.Workspace.Store.Remove(entry.Id);
-        context.Console.MarkupLineInterpolated(
-            $"[grey]removed[/] {entry.Id}{(entry.Owned ? " and deleted its dump" : " (file left in place)")}");
+        if (!context.Workspace.Store.Remove(id))
+        {
+            context.Console.MarkupLineInterpolated($"[red]error:[/] no snapshot or session '{id}'.");
+            return;
+        }
+
+        context.Console.MarkupLineInterpolated($"[grey]removed[/] {id}");
     }
 }

@@ -29,13 +29,13 @@ public sealed class ImportReplCommand : IReplCommand
 
         string? label = args.Length > 1 ? string.Join(' ', args[1..]) : null;
 
-        SnapshotEntry entry = context.Workspace.Store.Register(
+        (Session session, SnapshotEntry entry) = context.Workspace.Store.RegisterStandalone(
+            SessionKind.Import,
             sourcePath: path,
             moveIntoStore: false,
-            origin: SnapshotOrigin.Import,
             label: label);
 
-        context.Workspace.Load(entry);
+        context.Workspace.Load(session, entry);
         context.Console.MarkupLineInterpolated($"[green]imported & loaded[/] {entry.Id} [grey]({Path.GetFileName(entry.Path)})[/]");
     }
 }

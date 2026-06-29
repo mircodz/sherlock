@@ -80,10 +80,10 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
 
         // Catalog it in the library. Own (move in) temp dumps; reference a user-chosen path.
         using Workspace workspace = ReplHost.CreateWorkspace();
-        SnapshotEntry entry = workspace.Store.Register(
+        (Session session, SnapshotEntry entry) = workspace.Store.RegisterStandalone(
+            SessionKind.Collect,
             sourcePath: path,
             moveIntoStore: settings.Output is null,
-            origin: SnapshotOrigin.Collect,
             sourceProcess: sourceName,
             sourcePid: pid);
 
@@ -92,7 +92,7 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
         if (settings.Analyze)
         {
             console.WriteLine();
-            workspace.Load(entry);
+            workspace.Load(session, entry);
             ReplHost.RunInteractive(console, workspace);
             return 0;
         }

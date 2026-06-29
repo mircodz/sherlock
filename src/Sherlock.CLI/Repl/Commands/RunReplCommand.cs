@@ -4,6 +4,7 @@ using System.Linq;
 using Sherlock.CLI.Commands;
 using Sherlock.Core;
 using Sherlock.Core.Collection;
+using Sherlock.Core.Store;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -56,21 +57,32 @@ public sealed class RunReplCommand : IReplCommand
             }
         }
 
-        var supervisor = new ProcessSupervisor();
+        Session session = context.Workspace.Store.BeginSession(
+            SessionKind.Run,
+            sourceProcess: Path.GetFileName(rest[0]),
+            withLog: true,
+            withAllocations: profilerPath is not null);
+
+        var supervisor = new ProcessSupervisor { SessionId = session.Id };
         try
         {
-            SupervisedProcess root = supervisor.Start(rest[0], rest.Skip(1).ToList(), dumpOnCrash: true, profilerPath);
+            SupervisedProcess root = supervisor.Start(
+                rest[0], rest.Skip(1).ToList(), dumpOnCrash: true, profilerPath, captureDir: session.Dir);
+            session.SourcePid = root.Pid;
+            context.Workspace.Store.Persist(session);
             context.Workspace.AddTarget(supervisor);
             context.Console.MarkupLineInterpolated(
-                $"[green]launched[/] {Path.GetFileName(rest[0])} [grey](pid {root.Pid}). Use[/] ps[grey],[/] logs[grey],[/] snapshot[grey].[/]");
+                $"[green]launched[/] {Path.GetFileName(rest[0])} [grey](pid {root.Pid}) → session[/] [bold]{session.Id}[/][grey]. Use[/] ps[grey],[/] logs[grey],[/] snapshot[grey].[/]");
             if (profilerPath is not null)
             {
-                context.Console.MarkupLine("[grey]Allocation profiler attached; allocations stream to[/] logs[grey].[/]");
+                context.Console.MarkupLineInterpolated(
+                    $"[grey]Allocation profiler attached; profile + log under[/] {session.Dir}[grey].[/]");
             }
         }
         catch (DumpAnalysisException ex)
         {
             supervisor.Dispose();
+            context.Workspace.Store.Remove(session.Id); // roll back the empty session
             context.Console.MarkupLineInterpolated($"[red]error:[/] {ex.Message}");
         }
     }

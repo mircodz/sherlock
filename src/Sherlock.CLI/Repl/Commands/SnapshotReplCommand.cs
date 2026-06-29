@@ -37,16 +37,16 @@ public sealed class SnapshotReplCommand : IReplCommand
             }
         }
 
-        Collect(context, pid, SnapshotOrigin.Run);
+        Collect(context, pid);
     }
 
-    internal static void Collect(ReplContext context, int pid, SnapshotOrigin origin)
+    internal static void Collect(ReplContext context, int pid)
     {
         SnapshotEntry entry;
         try
         {
             entry = context.Console.Status().Start($"Snapshotting pid {pid}…",
-                _ => context.Workspace.Collect(pid, DumpKind.Heap, origin));
+                _ => context.Workspace.Collect(pid, DumpKind.Heap));
         }
         catch (DumpAnalysisException ex)
         {

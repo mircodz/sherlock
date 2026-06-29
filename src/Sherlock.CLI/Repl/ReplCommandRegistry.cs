@@ -48,6 +48,7 @@ public sealed class ReplCommandRegistry
             new ModulesReplCommand(),
             new DominatorsReplCommand(),
             new RetainedReplCommand(),
+            new AllocationsReplCommand(),
             new SnapshotsReplCommand(),
             new LoadReplCommand(),
             new ImportReplCommand(),

@@ -5,54 +5,52 @@ using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
 
-/// <summary>Lists the snapshot library.</summary>
+/// <summary>Lists the library, grouped by session (a run, or a one-off collect/import).</summary>
 public sealed class SnapshotsReplCommand : IReplCommand
 {
     public string Name => "snapshots";
-    public IReadOnlyList<string> Aliases => new[] { "snaps" };
-    public string Summary => "List snapshots in the library.";
+    public IReadOnlyList<string> Aliases => new[] { "snaps", "ls" };
+    public string Summary => "List sessions and their snapshots.";
     public string Usage => "snapshots";
     public string Category => "Library";
 
     public void Execute(ReplContext context, string[] args)
     {
-        IReadOnlyList<SnapshotEntry> entries = context.Workspace.Store.List();
-        if (entries.Count == 0)
+        IReadOnlyList<Session> sessions = context.Workspace.Store.Sessions;
+        if (sessions.Count == 0)
         {
-            context.Console.MarkupLine("[grey]No snapshots yet. Use[/] collect[grey] or[/] import <file>[grey].[/]");
+            context.Console.MarkupLine("[grey]Nothing yet. Use[/] run[grey],[/] collect[grey], or[/] import <file>[grey].[/]");
             return;
         }
 
-        string? currentId = context.Workspace.CurrentEntry?.Id;
+        string? currentSnap = context.Workspace.CurrentEntry?.Id;
 
-        var table = new Table().Border(TableBorder.Rounded);
-        table.AddColumn(" ");
-        table.AddColumn("[bold]Id[/]");
-        table.AddColumn("[bold]Label[/]");
-        table.AddColumn(new TableColumn("[bold]Size[/]").RightAligned());
-        table.AddColumn("[bold]Origin[/]");
-        table.AddColumn("[bold]Source[/]");
-        table.AddColumn("[bold]When[/]");
-
-        foreach (SnapshotEntry e in entries)
+        foreach (Session s in sessions)
         {
-            string marker = e.Id == currentId ? "[green]*[/]" : " ";
-            string source = e.SourceProcess is { } proc
-                ? $"{proc}{(e.SourcePid is int pid ? $" ({pid})" : "")}"
+            string source = s.SourceProcess is { } p
+                ? $"{p}{(s.SourcePid is int pid ? $" ({pid})" : "")}"
                 : "-";
-            string missing = e.Exists ? "" : " [red](missing)[/]";
+            string profiled = s.HasAllocations ? "  [aqua]profiled[/]" : "";
+            string when = s.CreatedAt.LocalDateTime.ToString("MM-dd HH:mm");
+            // MarkupLine parses the whole string as markup; escape only dynamic values.
+            context.Console.MarkupLine(
+                $"[bold]{s.Id}[/] [grey]{s.Kind.ToString().ToLowerInvariant()}[/]  {Markup.Escape(source)}{profiled}  [grey]{when}[/]");
 
-            table.AddRow(
-                marker,
-                $"[bold]{e.Id}[/]",
-                Markup.Escape(e.Label ?? "-"),
-                ByteSize.Format(e.SizeBytes),
-                e.Origin.ToString().ToLowerInvariant(),
-                Markup.Escape(source) + missing,
-                e.CreatedAt.LocalDateTime.ToString("MM-dd HH:mm"));
+            foreach (SnapshotEntry e in s.Snapshots)
+            {
+                string marker = e.Id == currentSnap ? "[green]*[/]" : " ";
+                string label = e.Label is { } l ? $"  [aqua]{Markup.Escape(l)}[/]" : "";
+                string missing = e.Exists ? "" : "  [red](missing)[/]";
+                context.Console.MarkupLine(
+                    $"  {marker} [bold]{e.Id}[/]  {Markup.Escape(ByteSize.Format(e.SizeBytes))}{label}{missing}");
+            }
+
+            if (s.Snapshots.Count == 0 && !s.HasAllocations)
+            {
+                context.Console.MarkupLine("    [grey](no snapshots)[/]");
+            }
         }
 
-        context.Console.Write(table);
-        context.Console.MarkupLine("[grey]load <id> to analyze · rm <id> to delete · label <id> <name>[/]");
+        context.Console.MarkupLine("[grey]load <id> · rm <id|session> · label <id> <name> · alloc[/]");
     }
 }

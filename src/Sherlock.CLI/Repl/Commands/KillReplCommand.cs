@@ -57,7 +57,7 @@ public sealed class KillReplCommand : IReplCommand
             try
             {
                 SnapshotEntry entry = context.Console.Status().Start($"Snapshotting pid {target.RootPid} before kill…",
-                    _ => context.Workspace.Collect(target.RootPid, DumpKind.Heap, SnapshotOrigin.Run, load: false));
+                    _ => context.Workspace.Collect(target.RootPid, DumpKind.Heap, load: false));
                 context.Console.MarkupLineInterpolated(
                     $"[green]saved[/] [bold]{entry.Id}[/] [grey]({ByteSize.Format(entry.SizeBytes)}) — load {entry.Id} to analyze[/]");
             }

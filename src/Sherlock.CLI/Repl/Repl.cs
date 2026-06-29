@@ -140,7 +140,11 @@ public sealed class Repl
 
         foreach (Sherlock.Core.Store.SnapshotEntry entry in _workspace.HarvestExitedCrashDumps())
             _console.MarkupLineInterpolated(
-                $"[yellow]· crash dump imported as[/] [bold]{entry.Id}[/] [grey]({entry.SourceProcess} pid {entry.SourcePid}) — load {entry.Id} to analyze[/]");
+                $"[yellow]· crash dump captured as[/] [bold]{entry.Id}[/] [grey]— load {entry.Id} to analyze[/]");
+
+        foreach (Sherlock.Core.Store.Session session in _workspace.HarvestExitedAllocationProfiles())
+            _console.MarkupLineInterpolated(
+                $"[yellow]· allocation profile captured for session[/] [bold]{session.Id}[/] [grey]({session.SourceProcess})[/]");
     }
 
     private void PrintBanner(Workspace workspace)
@@ -151,8 +155,8 @@ public sealed class Repl
         }
         else
         {
-            int count = workspace.Store.List().Count;
-            _console.MarkupLineInterpolated($"[bold]Sherlock[/] — no snapshot loaded ([aqua]{count}[/] in library)");
+            int count = workspace.Store.Sessions.Count;
+            _console.MarkupLineInterpolated($"[bold]Sherlock[/] — no snapshot loaded ([aqua]{count}[/] sessions in library)");
             _console.MarkupLine("[grey]Use[/] snapshots[grey],[/] load <id>[grey],[/] collect[grey], or[/] import <file>[grey].[/]");
         }
         _console.MarkupLine("Type [bold]help[/] for commands, [bold]exit[/] to quit.");

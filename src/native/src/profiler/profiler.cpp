@@ -21,6 +21,9 @@ constexpr std::size_t kMaxFrames = 64;
 // retained between allocations to avoid reallocation.
 thread_local std::vector<FunctionID> t_frames;
 
+// Bytes allocated on this thread since the last sample was taken.
+thread_local std::uint64_t t_bytesSinceSample = 0;
+
 // DoStackSnapshot callback: collect managed frames (funcId == 0 marks native /
 // runtime frames, which we skip) up to kMaxFrames.
 HRESULT __stdcall captureStack(FunctionID funcId, UINT_PTR, COR_PRF_FRAME_INFO,
@@ -81,7 +84,8 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
 
     DWORD eventMask = COR_PRF_MONITOR_OBJECT_ALLOCATED |
                       COR_PRF_ENABLE_OBJECT_ALLOCATED |
-                      COR_PRF_ENABLE_STACK_SNAPSHOT;
+                      COR_PRF_ENABLE_STACK_SNAPSHOT |
+                      COR_PRF_MONITOR_GC; // GC callbacks for survivor tracking
     hr = corProfilerInfo->SetEventMask(eventMask);
     if (FAILED(hr)) {
         logger->logError("SetEventMask failed");
@@ -90,6 +94,10 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
 
     const char* out = std::getenv("SHERLOCK_PROFILE_OUT");
     outputPath = (out != nullptr && out[0] != '\0') ? out : "sherlock-allocations.txt";
+
+    const char* sample = std::getenv("SHERLOCK_SAMPLE_BYTES");
+    if (sample != nullptr && sample[0] != '\0')
+        sampleInterval = std::strtoull(sample, nullptr, 10);
 
     aggregator = std::make_unique<Aggregator>(corProfilerInfo, logger.get());
 
@@ -111,6 +119,7 @@ HRESULT STDMETHODCALLTYPE Profiler::Shutdown() {
                     std::to_string(totalAllocations.load()) + " allocations, " +
                     std::to_string(totalBytes.load()) + " bytes");
     if (aggregator) {
+        aggregator->countPendingAsSurvived(); // anything uncollected at exit is still live
         aggregator->dump(outputPath);
     }
     return S_OK;
@@ -124,14 +133,28 @@ HRESULT STDMETHODCALLTYPE Profiler::ObjectAllocated(ObjectID objectId, ClassID c
     ULONG objectSize = 0;
     corProfilerInfo->GetObjectSize(objectId, &objectSize);
 
+    totalAllocations.fetch_add(1, std::memory_order_relaxed);
+    totalBytes.fetch_add(objectSize, std::memory_order_relaxed);
+
+    // Sampling gate: when an interval is set, only every ~N bytes pays for the
+    // (expensive) stack walk; 0 means sample every allocation.
+    bool take = sampleInterval == 0;
+    if (!take) {
+        t_bytesSinceSample += objectSize;
+        if (t_bytesSinceSample >= sampleInterval) {
+            t_bytesSinceSample = 0;
+            take = true;
+        }
+    }
+    if (!take)
+        return S_OK;
+
     // Capture the call stack (leaf -> root) and attribute the allocation to it.
     t_frames.clear();
     corProfilerInfo->DoStackSnapshot(0 /* current thread */, captureStack,
                                      COR_PRF_SNAPSHOT_DEFAULT, this, nullptr, 0);
 
-    totalAllocations.fetch_add(1, std::memory_order_relaxed);
-    totalBytes.fetch_add(objectSize, std::memory_order_relaxed);
-    aggregator->record(t_frames, objectSize);
+    aggregator->record(t_frames, objectSize, objectId);
     return S_OK;
 }
 
@@ -203,9 +226,15 @@ HRESULT STDMETHODCALLTYPE Profiler::COMClassicVTableDestroyed(ClassID, REFGUID, 
 HRESULT STDMETHODCALLTYPE Profiler::ExceptionCLRCatcherFound() { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ExceptionCLRCatcherExecute() { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ThreadNameChanged(ThreadID, ULONG, WCHAR[]) { return S_OK; }
-HRESULT STDMETHODCALLTYPE Profiler::GarbageCollectionStarted(int, BOOL[], COR_PRF_GC_REASON) { return S_OK; }
+HRESULT STDMETHODCALLTYPE Profiler::GarbageCollectionStarted(int, BOOL[], COR_PRF_GC_REASON) {
+    if (aggregator) aggregator->beginGc();
+    return S_OK;
+}
 HRESULT STDMETHODCALLTYPE Profiler::SurvivingReferences(ULONG, ObjectID[], ULONG[]) { return S_OK; }
-HRESULT STDMETHODCALLTYPE Profiler::GarbageCollectionFinished() { return S_OK; }
+HRESULT STDMETHODCALLTYPE Profiler::GarbageCollectionFinished() {
+    if (aggregator) aggregator->endGc();
+    return S_OK;
+}
 HRESULT STDMETHODCALLTYPE Profiler::FinalizeableObjectQueued(DWORD, ObjectID) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::RootReferences2(ULONG, ObjectID[], COR_PRF_GC_ROOT_KIND[], COR_PRF_GC_ROOT_FLAGS[], UINT_PTR[]) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::HandleCreated(GCHandleID, ObjectID) { return S_OK; }
@@ -216,8 +245,21 @@ HRESULT STDMETHODCALLTYPE Profiler::ReJITCompilationStarted(FunctionID, ReJITID,
 HRESULT STDMETHODCALLTYPE Profiler::GetReJITParameters(ModuleID, mdMethodDef, ICorProfilerFunctionControl*) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ReJITCompilationFinished(FunctionID, ReJITID, HRESULT, BOOL) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ReJITError(ModuleID, mdMethodDef, FunctionID, HRESULT) { return S_OK; }
-HRESULT STDMETHODCALLTYPE Profiler::MovedReferences2(ULONG, ObjectID[], ObjectID[], SIZE_T[]) { return S_OK; }
-HRESULT STDMETHODCALLTYPE Profiler::SurvivingReferences2(ULONG, ObjectID[], SIZE_T[]) { return S_OK; }
+HRESULT STDMETHODCALLTYPE Profiler::MovedReferences2(ULONG cRanges, ObjectID oldStarts[], ObjectID[], SIZE_T lengths[]) {
+    // Compacting survivors: record them by their OLD address (pre-move), since
+    // that's what our pending objects are keyed on.
+    if (aggregator)
+        for (ULONG i = 0; i < cRanges; ++i)
+            aggregator->noteSurvivorRange(oldStarts[i], lengths[i]);
+    return S_OK;
+}
+HRESULT STDMETHODCALLTYPE Profiler::SurvivingReferences2(ULONG cRanges, ObjectID starts[], SIZE_T lengths[]) {
+    // Non-compacting survivors: alive in place.
+    if (aggregator)
+        for (ULONG i = 0; i < cRanges; ++i)
+            aggregator->noteSurvivorRange(starts[i], lengths[i]);
+    return S_OK;
+}
 HRESULT STDMETHODCALLTYPE Profiler::ConditionalWeakTableElementReferences(ULONG, ObjectID[], ObjectID[], GCHandleID[]) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::GetAssemblyReferences(const WCHAR*, ICorProfilerAssemblyReferenceProvider*) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ModuleInMemorySymbolsUpdated(ModuleID) { return S_OK; }

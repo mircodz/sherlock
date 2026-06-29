@@ -8,9 +8,9 @@ using System.Text.Json.Serialization;
 namespace Sherlock.Core.Store;
 
 /// <summary>
-/// The workspace snapshot library, persisted under <c>~/.sherlock</c> (override
-/// with the <c>SHERLOCK_HOME</c> environment variable). Owns a JSON catalog plus
-/// a <c>snapshots/</c> directory for dumps Sherlock itself produces.
+/// The workspace library, persisted under <c>~/.sherlock</c> (override with the
+/// <c>SHERLOCK_HOME</c> environment variable). Organized by <see cref="Session"/>:
+/// each session is a directory holding its snapshots, log, and allocation profile.
 /// </summary>
 public sealed class SnapshotStore
 {
@@ -26,15 +26,12 @@ public sealed class SnapshotStore
     public SnapshotStore(string root)
     {
         Root = root;
-        SnapshotsDir = Path.Combine(root, "snapshots");
         _catalogPath = Path.Combine(root, "catalog.json");
-
-        Directory.CreateDirectory(SnapshotsDir);
+        Directory.CreateDirectory(root);
         _catalog = Load(_catalogPath);
     }
 
     public string Root { get; }
-    public string SnapshotsDir { get; }
 
     /// <summary>The default store, honoring <c>SHERLOCK_HOME</c>.</summary>
     public static SnapshotStore Default()
@@ -46,38 +43,73 @@ public sealed class SnapshotStore
         return new SnapshotStore(root);
     }
 
-    public IReadOnlyList<SnapshotEntry> List() => _catalog.Snapshots.AsReadOnly();
+    public IReadOnlyList<Session> Sessions => _catalog.Sessions.AsReadOnly();
 
-    /// <summary>Resolves a snapshot by id (e.g. <c>s3</c>) or by exact label.</summary>
-    public SnapshotEntry? Get(string idOrLabel) =>
-        _catalog.Snapshots.FirstOrDefault(s =>
-            string.Equals(s.Id, idOrLabel, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(s.Label, idOrLabel, StringComparison.OrdinalIgnoreCase));
+    public Session? GetSession(string id) =>
+        _catalog.Sessions.FirstOrDefault(s => string.Equals(s.Id, id, StringComparison.OrdinalIgnoreCase));
 
-    /// <summary>
-    /// Adds a dump to the library. When <paramref name="moveIntoStore"/> is true the
-    /// file is moved under <c>snapshots/</c> and owned; otherwise it is referenced in place.
-    /// </summary>
-    public SnapshotEntry Register(
-        string sourcePath,
-        bool moveIntoStore,
-        SnapshotOrigin origin,
+    /// <summary>Finds a snapshot (and its owning session) by snapshot id or label.</summary>
+    public (Session Session, SnapshotEntry Snapshot)? FindSnapshot(string idOrLabel)
+    {
+        foreach (Session session in _catalog.Sessions)
+        {
+            SnapshotEntry? snap = session.Snapshots.FirstOrDefault(s =>
+                string.Equals(s.Id, idOrLabel, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(s.Label, idOrLabel, StringComparison.OrdinalIgnoreCase));
+            if (snap is not null)
+            {
+                return (session, snap);
+            }
+        }
+        return null;
+    }
+
+    /// <summary>Creates an empty session and its directory.</summary>
+    public Session BeginSession(
+        SessionKind kind,
         string? sourceProcess = null,
         int? sourcePid = null,
-        string? label = null)
+        bool withLog = false,
+        bool withAllocations = false)
+    {
+        string id = $"r{_catalog.NextSession++}";
+        string dir = Path.Combine(Root, id);
+        Directory.CreateDirectory(dir);
+
+        var session = new Session
+        {
+            Id = id,
+            Kind = kind,
+            Dir = dir,
+            CreatedAt = DateTimeOffset.Now,
+            SourceProcess = sourceProcess,
+            SourcePid = sourcePid,
+            LogPath = withLog ? Path.Combine(dir, "run.log") : null,
+            AllocationsPath = withAllocations ? Path.Combine(dir, "allocations.tsv") : null,
+        };
+
+        _catalog.Sessions.Add(session);
+        WriteMetadata(session);
+        Save();
+        return session;
+    }
+
+    /// <summary>Adds a dump to a session: moves it under the session's <c>snapshots/</c> when owned.</summary>
+    public SnapshotEntry AddSnapshot(Session session, string sourcePath, bool moveIntoStore, string? label = null)
     {
         if (!File.Exists(sourcePath))
         {
             throw new FileNotFoundException("Dump file not found.", sourcePath);
         }
 
-        string id = $"s{_catalog.NextId++}";
-
+        string id = $"s{_catalog.NextSnapshot++}";
         string finalPath;
         bool owned;
         if (moveIntoStore)
         {
-            finalPath = Path.Combine(SnapshotsDir, $"{id}.dmp");
+            string snapsDir = Path.Combine(session.Dir, "snapshots");
+            Directory.CreateDirectory(snapsDir);
+            finalPath = Path.Combine(snapsDir, $"{id}.dmp");
             File.Move(sourcePath, finalPath, overwrite: true);
             owned = true;
         }
@@ -93,57 +125,103 @@ public sealed class SnapshotStore
             Owned: owned,
             Label: label,
             CreatedAt: DateTimeOffset.Now,
-            SourceProcess: sourceProcess,
-            SourcePid: sourcePid,
-            Origin: origin,
             SizeBytes: new FileInfo(finalPath).Length);
 
-        _catalog.Snapshots.Add(entry);
+        session.Snapshots.Add(entry);
+        WriteMetadata(session);
         Save();
         return entry;
     }
 
+    /// <summary>Creates a single-snapshot session (a one-off collect/import/crash).</summary>
+    public (Session Session, SnapshotEntry Snapshot) RegisterStandalone(
+        SessionKind kind,
+        string sourcePath,
+        bool moveIntoStore,
+        string? sourceProcess = null,
+        int? sourcePid = null,
+        string? label = null)
+    {
+        Session session = BeginSession(kind, sourceProcess, sourcePid);
+        SnapshotEntry snap = AddSnapshot(session, sourcePath, moveIntoStore, label);
+        return (session, snap);
+    }
+
+    /// <summary>Re-persists a session after external mutation (e.g. setting its pid).</summary>
+    public void Persist(Session session)
+    {
+        WriteMetadata(session);
+        Save();
+    }
+
+    /// <summary>Records that a session's allocation profile is present on disk.</summary>
+    public void MarkAllocations(Session session, string allocationsPath)
+    {
+        session.AllocationsPath = allocationsPath;
+        WriteMetadata(session);
+        Save();
+    }
+
+    /// <summary>Removes a whole session (id <c>rN</c>) or a single snapshot (id <c>sN</c>).</summary>
     public bool Remove(string id)
     {
-        SnapshotEntry? entry = Get(id);
-        if (entry is null)
+        Session? session = GetSession(id);
+        if (session is not null)
+        {
+            _catalog.Sessions.Remove(session);
+            TryDeleteDir(session.Dir);
+            Save();
+            return true;
+        }
+
+        if (FindSnapshot(id) is not ({ } owner, { } snap))
         {
             return false;
         }
 
-        _catalog.Snapshots.Remove(entry);
-        if (entry.Owned)
+        owner.Snapshots.Remove(snap);
+        if (snap.Owned)
         {
-            try { if (File.Exists(entry.Path))
-                {
-                    File.Delete(entry.Path);
-                }
-            }
+            try { if (File.Exists(snap.Path)) File.Delete(snap.Path); }
             catch { /* best effort */ }
         }
+        WriteMetadata(owner);
         Save();
         return true;
     }
 
-    public SnapshotEntry? SetLabel(string id, string? label)
+    public SnapshotEntry? SetLabel(string snapshotId, string? label)
     {
-        int index = _catalog.Snapshots.FindIndex(s =>
-            string.Equals(s.Id, id, StringComparison.OrdinalIgnoreCase));
-        if (index < 0)
+        if (FindSnapshot(snapshotId) is not ({ } session, { } snap))
         {
             return null;
         }
 
-        SnapshotEntry updated = _catalog.Snapshots[index] with { Label = label };
-        _catalog.Snapshots[index] = updated;
+        SnapshotEntry updated = snap with { Label = label };
+        int i = session.Snapshots.IndexOf(snap);
+        session.Snapshots[i] = updated;
+        WriteMetadata(session);
         Save();
         return updated;
     }
 
-    private void Save()
+    private void Save() => File.WriteAllText(_catalogPath, JsonSerializer.Serialize(_catalog, JsonOptions));
+
+    /// <summary>Writes the session's self-describing record next to its artifacts.</summary>
+    private void WriteMetadata(Session session)
     {
-        string json = JsonSerializer.Serialize(_catalog, JsonOptions);
-        File.WriteAllText(_catalogPath, json);
+        try
+        {
+            Directory.CreateDirectory(session.Dir);
+            File.WriteAllText(Path.Combine(session.Dir, "metadata.json"), JsonSerializer.Serialize(session, JsonOptions));
+        }
+        catch { /* best effort — the catalog remains the source of truth */ }
+    }
+
+    private static void TryDeleteDir(string dir)
+    {
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+        catch { /* best effort */ }
     }
 
     private static Catalog Load(string path)
@@ -164,7 +242,9 @@ public sealed class SnapshotStore
 
     private sealed class Catalog
     {
-        public int NextId { get; set; } = 1;
-        public List<SnapshotEntry> Snapshots { get; set; } = [];
+        public int SchemaVersion { get; set; } = 2;
+        public int NextSession { get; set; } = 1;
+        public int NextSnapshot { get; set; } = 1;
+        public List<Session> Sessions { get; set; } = new();
     }
 }

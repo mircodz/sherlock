@@ -20,8 +20,7 @@ public sealed class LoadReplCommand : IReplCommand
             return;
         }
 
-        SnapshotEntry? entry = context.Workspace.Store.Get(args[0]);
-        if (entry is null)
+        if (context.Workspace.Store.FindSnapshot(args[0]) is not ({ } session, { } entry))
         {
             context.Console.MarkupLineInterpolated($"[red]error:[/] no snapshot '{args[0]}'. Use [bold]snapshots[/] to list.");
             return;
@@ -33,7 +32,7 @@ public sealed class LoadReplCommand : IReplCommand
             return;
         }
 
-        context.Workspace.Load(entry);
+        context.Workspace.Load(session, entry);
         context.Console.MarkupLineInterpolated($"[green]loaded[/] {entry.Id} [grey]({Path.GetFileName(entry.Path)})[/]");
     }
 }

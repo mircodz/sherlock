@@ -26,7 +26,7 @@ public sealed class CollectReplCommand : IReplCommand
             return;
         }
 
-        SnapshotReplCommand.Collect(context, pid, SnapshotOrigin.Collect);
+        SnapshotReplCommand.Collect(context, pid);
     }
 
     private static bool TryResolvePid(IAnsiConsole console, string[] args, out int pid)

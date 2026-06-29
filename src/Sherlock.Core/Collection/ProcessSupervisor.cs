@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using Microsoft.Diagnostics.NETCore.Client;
 
 namespace Sherlock.Core.Collection;
@@ -26,6 +27,13 @@ public sealed class ProcessSupervisor : IDisposable
     private bool _dumpOnCrash;
     private string? _crashDumpPath;
     private bool _crashHarvested;
+    private bool _profileHarvested;
+
+    /// <summary>Path the allocation profiler writes to, when launched with one.</summary>
+    public string? ProfileOutPath { get; private set; }
+
+    /// <summary>Library session id this run belongs to, if launched into the library.</summary>
+    public string? SessionId { get; set; }
 
     /// <summary>True once the launched root process has exited.</summary>
     public bool RootExited => _root?.HasExited ?? false;
@@ -47,8 +55,13 @@ public sealed class ProcessSupervisor : IDisposable
     /// When set, attaches the CLR allocation profiler at startup by exporting the
     /// <c>CORECLR_*</c> env vars (inherited by the launched .NET process).
     /// </param>
-    public SupervisedProcess Start(string path, IReadOnlyList<string> args, bool dumpOnCrash, string? profilerPath = null)
+    public SupervisedProcess Start(string path, IReadOnlyList<string> args, bool dumpOnCrash, string? profilerPath = null, string? captureDir = null)
     {
+        if (captureDir is not null)
+        {
+            Directory.CreateDirectory(captureDir);
+        }
+
         var psi = new ProcessStartInfo(path)
         {
             UseShellExecute = false,
@@ -67,6 +80,12 @@ public sealed class ProcessSupervisor : IDisposable
             psi.Environment["CORECLR_ENABLE_PROFILING"] = "1";
             psi.Environment["CORECLR_PROFILER"] = "{cf0d821e-299b-5307-a3d8-b283c03916dd}";
             psi.Environment["CORECLR_PROFILER_PATH"] = profilerPath;
+
+            // Steer the profiler's folded output into the session dir (or temp).
+            ProfileOutPath = captureDir is not null
+                ? Path.Combine(captureDir, "allocations.tsv")
+                : Path.Combine(Path.GetTempPath(), $"sherlock-alloc-{Guid.NewGuid():n}.tsv");
+            psi.Environment["SHERLOCK_PROFILE_OUT"] = ProfileOutPath;
         }
 
         _dumpOnCrash = dumpOnCrash;
@@ -86,7 +105,9 @@ public sealed class ProcessSupervisor : IDisposable
         _crashDumpPath = Path.Combine(Path.GetTempPath(), $"sherlock-crash-{_root.Id}.dmp");
 
         // Capture output to a log so it doesn't trample the REPL prompt.
-        LogPath = Path.Combine(Path.GetTempPath(), $"sherlock-run-{_root.Id}.log");
+        LogPath = captureDir is not null
+            ? Path.Combine(captureDir, "run.log")
+            : Path.Combine(Path.GetTempPath(), $"sherlock-run-{_root.Id}.log");
         _log = new StreamWriter(LogPath, append: false) { AutoFlush = true };
         _root.OutputDataReceived += (_, e) => WriteLog(e.Data);
         _root.ErrorDataReceived += (_, e) => WriteLog(e.Data);
@@ -139,6 +160,21 @@ public sealed class ProcessSupervisor : IDisposable
 
         _crashHarvested = true; // check exactly once after exit
         return _crashDumpPath is not null && File.Exists(_crashDumpPath) ? _crashDumpPath : null;
+    }
+
+    /// <summary>
+    /// Once the profiled root has exited (so the profiler has flushed), returns the
+    /// allocation profile path exactly once. Otherwise null.
+    /// </summary>
+    public string? TryHarvestAllocationProfile()
+    {
+        if (ProfileOutPath is null || _root is null || !_root.HasExited || _profileHarvested)
+        {
+            return null;
+        }
+
+        _profileHarvested = true;
+        return File.Exists(ProfileOutPath) ? ProfileOutPath : null;
     }
 
     /// <summary>The live supervised subtree (root + descendants), root first.</summary>

@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <fstream>
-#include <utility>
 
 namespace Sherlock {
 
@@ -43,55 +42,113 @@ Aggregator::Aggregator(ICorProfilerInfo10* info, Logger* logger)
 }
 
 Aggregator::~Aggregator() {
-    for (Shard* shard : shards_)
-        delete shard;
+    int n = shardCount_.load();
+    for (int i = 0; i < n && i < kMaxShards; ++i)
+        delete shards_[i];
 }
 
 Aggregator::Shard& Aggregator::localShard() {
     if (t_shard == nullptr) {
         auto* shard = new Shard();
-        {
-            std::lock_guard<std::mutex> lock(shardsMutex_);
-            shards_.push_back(shard);
-        }
+        int idx = shardCount_.fetch_add(1, std::memory_order_acq_rel);
+        if (idx < kMaxShards)
+            shards_[idx] = shard;       // registered; GC sweep & dump will see it
+        // else: too many threads — shard still works locally, just isn't dumped.
         t_shard = shard;
     }
     return *t_shard;
 }
 
-void Aggregator::record(const std::vector<FunctionID>& frames, std::uint64_t bytes) {
+void Aggregator::record(const std::vector<FunctionID>& frames, std::uint64_t bytes, ObjectID addr) {
     std::uint64_t key = hashFrames(frames);
-    auto& sites = localShard().sites;
+    Shard& shard = localShard();
 
-    auto it = sites.find(key);
-    if (it == sites.end()) {
-        // First time we've seen this stack on this thread: store it once.
-        Site site;
-        site.frames = frames;
-        site.stats.count = 1;
-        site.stats.bytes = bytes;
-        sites.emplace(key, std::move(site));
+    auto it = shard.sites.find(key);
+    Site* site;
+    if (it == shard.sites.end()) {
+        Site fresh;
+        fresh.frames = frames;
+        site = &shard.sites.emplace(key, std::move(fresh)).first->second;
     } else {
-        it->second.stats.count += 1;
-        it->second.stats.bytes += bytes;
+        site = &it->second;
+    }
+
+    site->alloc.count += 1;
+    site->alloc.bytes += bytes;
+    shard.pending.push_back({addr, bytes, site});
+}
+
+void Aggregator::beginGc() {
+    survivorRanges_.clear();
+}
+
+void Aggregator::noteSurvivorRange(ObjectID start, std::uint64_t length) {
+    survivorRanges_.emplace_back(start, start + length);
+}
+
+bool Aggregator::survived(ObjectID addr) const {
+    // survivorRanges_ is sorted by start; find the last range starting at/below addr.
+    auto it = std::upper_bound(
+        survivorRanges_.begin(), survivorRanges_.end(), addr,
+        [](ObjectID a, const std::pair<ObjectID, ObjectID>& r) { return a < r.first; });
+    if (it == survivorRanges_.begin())
+        return false;
+    --it;
+    return addr < it->second;
+}
+
+void Aggregator::endGc() {
+    std::sort(survivorRanges_.begin(), survivorRanges_.end());
+
+    int n = shardCount_.load(std::memory_order_acquire);
+    for (int i = 0; i < n && i < kMaxShards; ++i) {
+        Shard* shard = shards_[i];
+        if (shard == nullptr)
+            continue;
+        for (const Pending& p : shard->pending) {
+            if (survived(p.addr)) {
+                p.site->survived.count += 1;
+                p.site->survived.bytes += p.bytes;
+            }
+        }
+        shard->pending.clear();
+    }
+    survivorRanges_.clear();
+}
+
+void Aggregator::countPendingAsSurvived() {
+    // At shutdown, anything still pending was never collected — i.e. still alive.
+    int n = shardCount_.load(std::memory_order_acquire);
+    for (int i = 0; i < n && i < kMaxShards; ++i) {
+        Shard* shard = shards_[i];
+        if (shard == nullptr)
+            continue;
+        for (const Pending& p : shard->pending) {
+            p.site->survived.count += 1;
+            p.site->survived.bytes += p.bytes;
+        }
+        shard->pending.clear();
     }
 }
 
 void Aggregator::dump(const std::string& path) {
-    // Merge all shards by stack. Safe without locking the shards themselves: the
-    // caller guarantees allocations have stopped (profiler is shutting down).
+    // Merge all shards by stack. Safe without locking: the caller guarantees
+    // allocations have stopped (profiler is shutting down).
     std::unordered_map<std::uint64_t, Site> merged;
-    {
-        std::lock_guard<std::mutex> lock(shardsMutex_);
-        for (Shard* shard : shards_) {
-            for (auto& [key, site] : shard->sites) {
-                auto it = merged.find(key);
-                if (it == merged.end()) {
-                    merged.emplace(key, site);
-                } else {
-                    it->second.stats.count += site.stats.count;
-                    it->second.stats.bytes += site.stats.bytes;
-                }
+    int n = shardCount_.load(std::memory_order_acquire);
+    for (int i = 0; i < n && i < kMaxShards; ++i) {
+        Shard* shard = shards_[i];
+        if (shard == nullptr)
+            continue;
+        for (auto& [key, site] : shard->sites) {
+            auto it = merged.find(key);
+            if (it == merged.end()) {
+                merged.emplace(key, site);
+            } else {
+                it->second.alloc.count += site.alloc.count;
+                it->second.alloc.bytes += site.alloc.bytes;
+                it->second.survived.count += site.survived.count;
+                it->second.survived.bytes += site.survived.bytes;
             }
         }
     }
@@ -101,7 +158,7 @@ void Aggregator::dump(const std::string& path) {
     for (const auto& [key, site] : merged)
         rows.push_back(&site);
     std::sort(rows.begin(), rows.end(),
-              [](const Site* a, const Site* b) { return a->stats.bytes > b->stats.bytes; });
+              [](const Site* a, const Site* b) { return a->alloc.bytes > b->alloc.bytes; });
 
     std::ofstream out(path, std::ios::trunc);
     if (!out) {
@@ -111,9 +168,10 @@ void Aggregator::dump(const std::string& path) {
     }
 
     out << "# sherlock allocation profile (folded stacks, root->leaf)\n";
-    out << "# bytes\tcount\tstack\n";
+    out << "# alloc_bytes\talloc_count\tsurvived_bytes\tsurvived_count\tstack\n";
     for (const Site* site : rows) {
-        out << site->stats.bytes << '\t' << site->stats.count << '\t';
+        out << site->alloc.bytes << '\t' << site->alloc.count << '\t'
+            << site->survived.bytes << '\t' << site->survived.count << '\t';
         if (site->frames.empty()) {
             out << "<no managed frame>";
         } else {
