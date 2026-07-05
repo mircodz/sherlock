@@ -1,4 +1,7 @@
+using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using Sherlock.Core.Collection;
@@ -42,6 +45,17 @@ public sealed class SnapshotReplCommand : IReplCommand
 
     internal static void Collect(ReplContext context, int pid)
     {
+        // If this pid is a correlation-enabled run, settle addresses (force GC) and emit
+        // the live-object → allocation-stack sidecar *before* the dump, so the two line up.
+        ProcessSupervisor? correlated = context.Workspace.Targets
+            .FirstOrDefault(t => t.RootPid == pid && t.HasCorrelation && !t.RootExited);
+        string? sidecar = null;
+        if (correlated is not null)
+        {
+            sidecar = context.Console.Status().Start("Forcing GC + emitting allocation provenance…",
+                _ => correlated.RequestCorrelationSnapshot(TimeSpan.FromSeconds(10)));
+        }
+
         SnapshotEntry entry;
         try
         {
@@ -54,7 +68,24 @@ public sealed class SnapshotReplCommand : IReplCommand
             return;
         }
 
+        // Persist the sidecar next to the dump so the snapshot carries its own allocation
+        // provenance; `whoalloc <address>` reads it back.
+        bool withProvenance = false;
+        if (sidecar is not null)
+        {
+            try { File.Copy(sidecar, entry.Path + ".corr.tsv", overwrite: true); withProvenance = true; }
+            catch { /* keep the dump even if the sidecar copy fails */ }
+        }
+
         context.Console.MarkupLineInterpolated(
             $"[green]saved & loaded[/] [bold]{entry.Id}[/] [grey]({ByteSize.Format(entry.SizeBytes)})[/]");
+        if (withProvenance)
+        {
+            context.Console.MarkupLine("[grey]Allocation provenance captured; use[/] whoalloc <address> [grey]to see where an object was allocated.[/]");
+        }
+        else if (correlated is not null)
+        {
+            context.Console.MarkupLine("[yellow]warning:[/] correlation capture failed; snapshot has no allocation provenance.");
+        }
     }
 }

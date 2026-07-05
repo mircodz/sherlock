@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "profilercommon.h"
+#include "sherlock/profiler/intervals.hpp"
 
 namespace Sherlock {
 
@@ -62,8 +63,14 @@ public:
     // --- GC integration. All called on the GC thread with the world stopped. ---
     void beginGc();                                            // reset survivor ranges
     void noteSurvivorRange(ObjectID start, std::uint64_t length); // an old-address survivor span
+    void noteMove(ObjectID oldStart, ObjectID newStart, std::uint64_t length); // compaction relocation
     void endGc();                                              // judge & clear pending
     void countPendingAsSurvived();                             // shutdown: still-live == survived
+
+    // --- Correlation (opt-in via SHERLOCK_CORRELATE). Tracks live objects across GC
+    // moves so a snapshot can be joined to allocation stacks by current address. ---
+    void enableCorrelation() { correlate_ = true; }
+    void emitCorrelation(const std::string& path);            // live address -> allocation stack
 
     /// Merges every thread's shard, resolves frame names (cached), and writes a
     /// folded-stack file sorted by allocated bytes. Must not run concurrently with record().
@@ -76,8 +83,15 @@ public:
 private:
     static constexpr int kMaxShards = 1024;
 
+    // A tracked live object: a monotonic id plus the allocation site it came from.
+    struct Live {
+        std::uint64_t id;
+        Site* site;
+    };
+
     Shard& localShard();
-    bool survived(ObjectID addr) const;
+    bool survived(ObjectID addr) const;    // is addr in this GC's survivor spans?
+    ObjectID remap(ObjectID addr) const;   // follow addr through this GC's moves
 
     ICorProfilerInfo10* info_;
     Logger* logger_;
@@ -89,7 +103,15 @@ private:
     Shard* shards_[kMaxShards] = {};
 
     // Survivor spans [start, end) by old address, gathered during one GC. GC thread only.
-    std::vector<std::pair<ObjectID, ObjectID>> survivorRanges_;
+    std::vector<intervals::AddrRange> survivorRanges_;
+
+    // Correlation state (opt-in via SHERLOCK_CORRELATE). GC thread + shutdown only.
+    // live_ maps a live object's current address to its identity+site; keyed by address
+    // for the O(1) point ops in the per-GC rebuild (remaps use the sorted moves_ vector).
+    bool correlate_ = false;
+    std::atomic<std::uint64_t> nextObjectId_{1};
+    std::vector<intervals::MoveRange> moves_;      // this GC's relocations, sorted by oldStart
+    std::unordered_map<ObjectID, Live> live_;      // current live tracked objects, keyed by address
 
     std::unordered_map<FunctionID, std::string> nameCache_; // dump-time only
 };

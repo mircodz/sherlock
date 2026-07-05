@@ -8,8 +8,7 @@ using Spectre.Console;
 namespace Sherlock.CLI.Repl.Commands;
 
 /// <summary>
-/// String-focused analysis. Today: <c>strings --dup</c> reports duplicated
-/// string values, ordered by wasted memory (the dotMemory inspection).
+/// String-focused analysis: reports duplicated string values, ordered by wasted memory.
 /// </summary>
 public sealed class StringsReplCommand : IReplCommand
 {
@@ -17,18 +16,13 @@ public sealed class StringsReplCommand : IReplCommand
 
     public string Name => "strings";
     public IReadOnlyList<string> Aliases => ["str"];
-    public string Summary => "Analyze strings. `strings --dup` finds duplicate values wasting memory.";
-    public string Usage => "strings --dup [count]";
+    public string Summary => "Find duplicate string values wasting memory (most wasteful first).";
+    public string Usage => "strings [count]";
 
     public void Execute(ReplContext context, string[] args)
     {
-        bool dup = args.Contains("--dup") || args.Contains("-d");
-        if (!dup)
-        {
-            context.Console.MarkupLineInterpolated($"[yellow]usage:[/] {Usage}");
-            return;
-        }
-
+        // Duplicate analysis is the default (and only) mode; a leading count sets the limit.
+        // `--dup`/`-d` is still accepted (and ignored) so older scripts keep working.
         int limit = DefaultLimit;
         string? countArg = args.FirstOrDefault(a => !a.StartsWith('-'));
         if (countArg is not null && !int.TryParse(countArg, out limit))

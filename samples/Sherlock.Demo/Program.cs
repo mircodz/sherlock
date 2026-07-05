@@ -44,7 +44,8 @@ internal static class Program
                 Thread.Sleep(1000);
             }
             Console.WriteLine("Done growing; holding. Ctrl-C to stop.");
-            Thread.Sleep(Timeout.Infinite);
+            Thread.Sleep(1000);
+            // Thread.Sleep(Timeout.Infinite);
             GC.KeepAlive(Registry);
             return 0;
         }
@@ -73,7 +74,9 @@ internal static class Program
         Console.WriteLine($"PID {Environment.ProcessId}. Writing dump to {dumpPath} …");
 
         if (File.Exists(dumpPath))
+        {
             File.Delete(dumpPath);
+        }
 
         int code = CreateDump.OfSelf(dumpPath);
         if (code != 0)
@@ -112,7 +115,7 @@ internal static class Program
 
 internal sealed class CustomerRegistry
 {
-    public List<Customer> Customers { get; } = new();
+    public List<Customer> Customers { get; } = [];
 
     public void Add(Customer customer) => Customers.Add(customer);
 
@@ -130,7 +133,7 @@ internal sealed class Customer(int id, string name, string email)
     public int Id { get; } = id;
     public string Name { get; } = name;
     public string Email { get; } = email;
-    public List<Order> Orders { get; } = new();
+    public List<Order> Orders { get; } = [];
 }
 
 internal sealed record Order(int Id, string Description, decimal Amount);
@@ -162,7 +165,9 @@ internal static class CreateDump
 
         using Process? process = Process.Start(psi);
         if (process is null)
+        {
             return 1;
+        }
 
         process.WaitForExit();
         return process.ExitCode;

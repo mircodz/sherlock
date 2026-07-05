@@ -29,6 +29,10 @@ public sealed class AnalyzeCommand : Command<AnalyzeCommand.Settings>
         [CommandOption("-s|--script <FILE>")]
         [Description("Run commands from a script file, then exit.")]
         public string? Script { get; init; }
+
+        [CommandOption("-i|--interactive")]
+        [Description("After running --exec/--script, drop into the REPL instead of exiting (gdb-style).")]
+        public bool Interactive { get; init; }
     }
 
     protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellation)
@@ -56,7 +60,10 @@ public sealed class AnalyzeCommand : Command<AnalyzeCommand.Settings>
             }
         }
 
-        bool interactive = settings.Exec.Length == 0 && settings.Script is null;
+        // Interactive when nothing was batched, or when --interactive keeps us in the
+        // REPL after the batch (gdb's `-x script` then a live prompt).
+        bool batched = settings.Exec.Length > 0 || settings.Script is not null;
+        bool interactive = !batched || settings.Interactive;
         var history = new ReplHistory(interactive ? ReplHistory.DefaultPath : null);
         var repl = new Repl.Repl(ReplCommandRegistry.CreateDefault(history), history, console);
 
@@ -73,7 +80,8 @@ public sealed class AnalyzeCommand : Command<AnalyzeCommand.Settings>
         {
             repl.RunBatch(workspace, settings.Exec);
         }
-        else
+
+        if (interactive)
         {
             repl.RunInteractive(workspace);
         }

@@ -83,22 +83,42 @@ void Aggregator::beginGc() {
 }
 
 void Aggregator::noteSurvivorRange(ObjectID start, std::uint64_t length) {
-    survivorRanges_.emplace_back(start, start + length);
+    survivorRanges_.emplace_back(static_cast<std::uint64_t>(start),
+                                 static_cast<std::uint64_t>(start) + length);
+}
+
+void Aggregator::noteMove(ObjectID oldStart, ObjectID newStart, std::uint64_t length) {
+    // The old range is also a survivor span (for the liveness test); the old->new
+    // delta additionally lets us follow the object's identity to its new address.
+    survivorRanges_.emplace_back(static_cast<std::uint64_t>(oldStart),
+                                 static_cast<std::uint64_t>(oldStart) + length);
+    if (correlate_)
+        moves_.push_back({static_cast<std::uint64_t>(oldStart),
+                          static_cast<std::uint64_t>(newStart), length});
+}
+
+ObjectID Aggregator::remap(ObjectID addr) const {
+    return static_cast<ObjectID>(intervals::remap(static_cast<std::uint64_t>(addr), moves_));
 }
 
 bool Aggregator::survived(ObjectID addr) const {
-    // survivorRanges_ is sorted by start; find the last range starting at/below addr.
-    auto it = std::upper_bound(
-        survivorRanges_.begin(), survivorRanges_.end(), addr,
-        [](ObjectID a, const std::pair<ObjectID, ObjectID>& r) { return a < r.first; });
-    if (it == survivorRanges_.begin())
-        return false;
-    --it;
-    return addr < it->second;
+    return intervals::inSortedRanges(static_cast<std::uint64_t>(addr), survivorRanges_);
 }
 
 void Aggregator::endGc() {
     std::sort(survivorRanges_.begin(), survivorRanges_.end());
+    if (correlate_)
+        std::sort(moves_.begin(), moves_.end(),
+                  [](const intervals::MoveRange& a, const intervals::MoveRange& b) { return a.oldStart < b.oldStart; });
+
+    // Rebuild the live set: survivors carried over (identity + remapped address) plus
+    // objects allocated since the last GC that survived this one (fresh identity).
+    std::unordered_map<ObjectID, Live> next;
+    if (correlate_) {
+        for (const auto& [addr, lv] : live_)
+            if (survived(addr))
+                next.insert_or_assign(remap(addr), lv);
+    }
 
     int n = shardCount_.load(std::memory_order_acquire);
     for (int i = 0; i < n && i < kMaxShards; ++i) {
@@ -109,11 +129,20 @@ void Aggregator::endGc() {
             if (survived(p.addr)) {
                 p.site->survived.count += 1;
                 p.site->survived.bytes += p.bytes;
+                if (correlate_) {
+                    ObjectID a = remap(p.addr);
+                    if (!next.contains(a))
+                        next.insert_or_assign(a, Live{nextObjectId_.fetch_add(1), p.site});
+                }
             }
         }
         shard->pending.clear();
     }
+
+    if (correlate_)
+        live_ = std::move(next);
     survivorRanges_.clear();
+    moves_.clear();
 }
 
 void Aggregator::countPendingAsSurvived() {
@@ -126,9 +155,42 @@ void Aggregator::countPendingAsSurvived() {
         for (const Pending& p : shard->pending) {
             p.site->survived.count += 1;
             p.site->survived.bytes += p.bytes;
+            if (correlate_ && !live_.contains(p.addr))
+                live_.insert_or_assign(p.addr, Live{nextObjectId_.fetch_add(1), p.site});
         }
         shard->pending.clear();
     }
+}
+
+void Aggregator::emitCorrelation(const std::string& path) {
+    std::ofstream out(path, std::ios::trunc);
+    if (!out) {
+        if (logger_)
+            logger_->logError("could not open correlation output: " + path);
+        return;
+    }
+
+    // Path A join file: every live tracked object at its current address, with the
+    // allocation call stack. sl joins this to a heap dump by address (see docs).
+    out << "# sherlock correlation (live object -> allocation stack)\n";
+    out << "# address\tobject_id\tstack\n";
+    for (const auto& [addr, lv] : live_) {
+        out << "0x" << std::hex << addr << std::dec << '\t' << lv.id << '\t';
+        const std::vector<FunctionID>& frames = lv.site->frames;
+        if (frames.empty()) {
+            out << "<no managed frame>";
+        } else {
+            for (std::size_t i = frames.size(); i-- > 0;) {
+                out << resolveMethodName(frames[i]);
+                if (i != 0)
+                    out << ';';
+            }
+        }
+        out << '\n';
+    }
+
+    if (logger_)
+        logger_->logInfo("wrote " + std::to_string(live_.size()) + " live objects to " + path);
 }
 
 void Aggregator::dump(const std::string& path) {

@@ -14,20 +14,31 @@ public sealed class RunReplCommand : IReplCommand
 {
     public string Name => "run";
     public string Summary => "Launch a process and track it as a live target.";
-    public string Usage => "run [--profile] [--] <path> [args...]";
+    public string Usage => "run [--profile] [--correlate] [--break <Type.Method[:snapshot]>] [--] <path> [args...]";
     public string Category => "Live";
 
     public void Execute(ReplContext context, string[] args)
     {
-        // Parse a leading `--profile` flag; `--` just separates options from the
-        // target command, so the first non-flag token is the path and the rest its args.
+        // Parse leading flags; `--` separates options from the target command, so the
+        // first non-flag token is the path and the rest its args.
         bool profile = false;
+        bool correlate = false;
+        string? breakSpec = null;
         var rest = new List<string>();
-        foreach (string arg in args)
+        for (int i = 0; i < args.Length; i++)
         {
+            string arg = args[i];
             if (rest.Count == 0 && arg == "--profile")
             {
                 profile = true;
+            }
+            else if (rest.Count == 0 && arg == "--correlate")
+            {
+                correlate = true;
+            }
+            else if (rest.Count == 0 && arg == "--break" && i + 1 < args.Length)
+            {
+                breakSpec = args[++i];
             }
             else if (rest.Count == 0 && arg == "--")
             {
@@ -37,6 +48,12 @@ public sealed class RunReplCommand : IReplCommand
             {
                 rest.Add(arg);
             }
+        }
+
+        // Breakpoints and correlation both ride the profiler, so they imply attaching it.
+        if (breakSpec is not null || correlate)
+        {
+            profile = true;
         }
 
         if (rest.Count == 0)
@@ -67,13 +84,23 @@ public sealed class RunReplCommand : IReplCommand
         try
         {
             SupervisedProcess root = supervisor.Start(
-                rest[0], rest.Skip(1).ToList(), dumpOnCrash: true, profilerPath, captureDir: session.Dir);
+                rest[0], rest.Skip(1).ToList(), dumpOnCrash: true, profilerPath, captureDir: session.Dir, breakSpec: breakSpec, correlate: correlate);
             session.SourcePid = root.Pid;
             context.Workspace.Store.Persist(session);
             context.Workspace.AddTarget(supervisor);
             context.Console.MarkupLineInterpolated(
                 $"[green]launched[/] {Path.GetFileName(rest[0])} [grey](pid {root.Pid}) → session[/] [bold]{session.Id}[/][grey]. Use[/] ps[grey],[/] logs[grey],[/] snapshot[grey].[/]");
-            if (profilerPath is not null)
+            if (breakSpec is not null)
+            {
+                context.Console.MarkupLineInterpolated(
+                    $"[grey]Probing[/] {breakSpec}[grey]; snapshot-action hits will be captured into[/] [bold]{session.Id}[/][grey].[/]");
+            }
+            else if (correlate)
+            {
+                context.Console.MarkupLine(
+                    "[grey]Correlation tracking on;[/] snapshot [grey]it, then[/] whoalloc <address> [grey]to see where an object was allocated.[/]");
+            }
+            else if (profilerPath is not null)
             {
                 context.Console.MarkupLineInterpolated(
                     $"[grey]Allocation profiler attached; profile + log under[/] {session.Dir}[grey].[/]");

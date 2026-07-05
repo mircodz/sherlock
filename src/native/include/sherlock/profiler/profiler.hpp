@@ -8,7 +8,9 @@
 // CLR Profiling headers - profilercommon.h handles OS detection automatically
 #include "profilercommon.h"
 #include "sherlock/common/logger.hpp"
+#include "sherlock/control/channel.hpp"
 #include "sherlock/profiler/aggregator.hpp"
+#include "sherlock/profiler/probe.hpp"
 #include "sherlock/profiler/trace.hpp"
 
 namespace Sherlock {
@@ -137,6 +139,17 @@ private:
     bool traceCalls = false;          // SHERLOCK_TRACE: per-method call tracing via ELT hooks
     std::string tracePath;
     std::unique_ptr<TraceCollector> trace;
+
+    std::string probePath;            // SHERLOCK_BREAK: method "breakpoints" via ReJIT
+    std::unique_ptr<ProbeManager> probes;
+
+    bool correlate = false;           // SHERLOCK_CORRELATE: track live objects for snapshot join
+    std::string correlationPath;
+
+    // sl <-> profiler control channel (SHERLOCK_CONTROL_SOCKET). Handles on-demand
+    // requests (emit-correlation, flush-allocations) and pushes events.
+    std::unique_ptr<control::ControlChannel> control;
+    control::Reply handleControl(std::string_view cmd, std::span<const std::string_view> args);
 };
 
 } // namespace Sherlock

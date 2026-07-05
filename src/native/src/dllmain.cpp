@@ -7,7 +7,7 @@
 
 using namespace Sherlock;
 
-BOOL STDMETHODCALLTYPE DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved)
+BOOL STDMETHODCALLTYPE DllMain(HMODULE, DWORD, LPVOID)
 {
     return TRUE;
 }

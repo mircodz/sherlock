@@ -100,6 +100,38 @@ public sealed class Workspace : IDisposable
         return (IReadOnlyList<Session>?)marked ?? [];
     }
 
+    /// <summary>
+    /// For each run-target whose probes have signalled a snapshot request since the last
+    /// check, captures a live heap dump into that run's session, labelled with the probe.
+    /// Returns the new snapshots paired with the probe that triggered them.
+    /// </summary>
+    public IReadOnlyList<(SnapshotEntry Entry, string Probe)> HarvestProbeSnapshots()
+    {
+        List<(SnapshotEntry, string)>? captured = null;
+        foreach (ProcessSupervisor target in _targets)
+        {
+            IReadOnlyList<string> signals = target.TryHarvestProbeSignals();
+            if (signals.Count == 0 || target.SessionId is null)
+            {
+                continue;
+            }
+
+            Session? session = Store.GetSession(target.SessionId);
+            if (session is null)
+            {
+                continue;
+            }
+
+            foreach (string probe in signals)
+            {
+                string temp = DumpCollector.Collect(target.RootPid, DumpKind.Heap, outputPath: null);
+                SnapshotEntry entry = Store.AddSnapshot(session, temp, moveIntoStore: true, label: $"break {probe}");
+                (captured ??= []).Add((entry, probe));
+            }
+        }
+        return (IReadOnlyList<(SnapshotEntry, string)>?)captured ?? [];
+    }
+
     /// <summary>Collects a dump from a live process, catalogs it under the right session, and loads it.</summary>
     public SnapshotEntry Collect(int pid, DumpKind kind, bool load = true)
     {

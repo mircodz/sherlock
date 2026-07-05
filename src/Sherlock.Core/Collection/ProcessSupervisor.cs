@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using Microsoft.Diagnostics.NETCore.Client;
 
 namespace Sherlock.Core.Collection;
@@ -31,6 +33,21 @@ public sealed class ProcessSupervisor : IDisposable
     /// <summary>Path the allocation profiler writes to, when launched with one.</summary>
     public string? ProfileOutPath { get; private set; }
 
+    /// <summary>Path the profiler writes the live-object → allocation-stack sidecar to.</summary>
+    public string? CorrelationOutPath { get; private set; }
+
+    /// <summary>The control channel to the in-process profiler, once launched with one.</summary>
+    private ProfilerControlServer? _control;
+
+    /// <summary>Snapshot-action probe hits pushed by the profiler over the channel.</summary>
+    private readonly ConcurrentQueue<string> _probeHits = new();
+
+    /// <summary>Whether this run was launched with correlation tracking.</summary>
+    public bool HasCorrelation => CorrelationOutPath is not null;
+
+    /// <summary>Capabilities the attached profiler advertised over the control channel.</summary>
+    public IReadOnlyList<string> ProfilerFeatures => _control?.Features ?? [];
+
     /// <summary>Library session id this run belongs to, if launched into the library.</summary>
     public string? SessionId { get; set; }
 
@@ -54,7 +71,7 @@ public sealed class ProcessSupervisor : IDisposable
     /// When set, attaches the CLR allocation profiler at startup by exporting the
     /// <c>CORECLR_*</c> env vars (inherited by the launched .NET process).
     /// </param>
-    public SupervisedProcess Start(string path, IReadOnlyList<string> args, bool dumpOnCrash, string? profilerPath = null, string? captureDir = null)
+    public SupervisedProcess Start(string path, IReadOnlyList<string> args, bool dumpOnCrash, string? profilerPath = null, string? captureDir = null, string? breakSpec = null, bool correlate = false)
     {
         if (captureDir is not null)
         {
@@ -85,6 +102,39 @@ public sealed class ProcessSupervisor : IDisposable
                 ? Path.Combine(captureDir, "allocations.tsv")
                 : Path.Combine(Path.GetTempPath(), $"sherlock-alloc-{Guid.NewGuid():n}.tsv");
             psi.Environment["SHERLOCK_PROFILE_OUT"] = ProfileOutPath;
+
+            // Method breakpoints: arm probes and route the folded hit profile next to the
+            // allocations. Snapshot-action hits arrive as events on the control channel.
+            if (!string.IsNullOrWhiteSpace(breakSpec))
+            {
+                psi.Environment["SHERLOCK_BREAK"] = breakSpec;
+                string dir = captureDir ?? Path.GetTempPath();
+                psi.Environment["SHERLOCK_BREAK_OUT"] = Path.Combine(dir, "probes.tsv");
+            }
+
+            // Correlation: track live objects and emit an address→allocation-stack
+            // sidecar on demand, so a snapshot can be joined to allocation call stacks.
+            if (correlate)
+            {
+                string dir = captureDir ?? Path.GetTempPath();
+                CorrelationOutPath = Path.Combine(dir, "correlation.tsv");
+                psi.Environment["SHERLOCK_CORRELATE"] = "1";
+                psi.Environment["SHERLOCK_CORRELATE_OUT"] = CorrelationOutPath;
+            }
+
+            // Unified control channel: sl listens on a socket, the profiler connects back
+            // and answers on-demand requests (emit-correlation, flush-allocations) and
+            // pushes events (probe hits).
+            string ctlDir = captureDir ?? Path.GetTempPath();
+            _control = new ProfilerControlServer(Path.Combine(ctlDir, "control.sock"));
+            _control.EventReceived += fields =>
+            {
+                if (fields.Length >= 3 && fields[1] == "probe-hit")
+                {
+                    _probeHits.Enqueue(fields[2]);
+                }
+            };
+            psi.Environment["SHERLOCK_CONTROL_SOCKET"] = _control.SocketPath;
         }
 
         _dumpOnCrash = dumpOnCrash;
@@ -176,6 +226,58 @@ public sealed class ProcessSupervisor : IDisposable
 
         _profileHarvested = true;
         return File.Exists(ProfileOutPath) ? ProfileOutPath : null;
+    }
+
+    /// <summary>
+    /// Drains the snapshot-action probe hits pushed by the profiler over the control channel
+    /// since the last call. Only actionable while the process is alive — a dump needs a live pid.
+    /// </summary>
+    public IReadOnlyList<string> TryHarvestProbeSignals()
+    {
+        if (_root is null || _root.HasExited)
+        {
+            return [];
+        }
+
+        List<string>? hits = null;
+        while (_probeHits.TryDequeue(out string? name))
+        {
+            (hits ??= []).Add(name);
+        }
+        return (IReadOnlyList<string>?)hits ?? [];
+    }
+
+    /// <summary>
+    /// Asks the in-process profiler (over the control channel) to force a GC and emit a
+    /// fresh correlation sidecar so live-object addresses are settled. Returns the sidecar
+    /// path once written, or null on timeout / if correlation isn't available. Call the
+    /// dump immediately after so addresses line up.
+    /// </summary>
+    public string? RequestCorrelationSnapshot(TimeSpan timeout)
+    {
+        if (_control is null || _root is null || _root.HasExited)
+        {
+            return null;
+        }
+
+        (bool ok, string detail) = _control.RequestAsync("emit-correlation", timeout).GetAwaiter().GetResult();
+        return ok && File.Exists(detail) ? detail : null;
+    }
+
+    /// <summary>
+    /// Asks the profiler to flush the aggregate allocation profile now (rather than only at
+    /// exit). Returns its path once written, or null on failure. Best-effort for a busy
+    /// target — the merge races concurrent allocations; ideal for an idle/paused process.
+    /// </summary>
+    public string? FlushAllocations(TimeSpan timeout)
+    {
+        if (_control is null || _root is null || _root.HasExited)
+        {
+            return null;
+        }
+
+        (bool ok, string detail) = _control.RequestAsync("flush-allocations", timeout).GetAwaiter().GetResult();
+        return ok && File.Exists(detail) ? detail : null;
     }
 
     /// <summary>The live supervised subtree (root + descendants), root first.</summary>
@@ -304,6 +406,7 @@ public sealed class ProcessSupervisor : IDisposable
             _log?.Dispose();
             _log = null;
         }
+        _control?.Dispose();
         _root?.Dispose();
     }
 }

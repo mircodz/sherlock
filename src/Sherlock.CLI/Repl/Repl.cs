@@ -145,6 +145,10 @@ public sealed class Repl
         foreach (Sherlock.Core.Store.Session session in _workspace.HarvestExitedAllocationProfiles())
             _console.MarkupLineInterpolated(
                 $"[yellow]· allocation profile captured for session[/] [bold]{session.Id}[/] [grey]({session.SourceProcess})[/]");
+
+        foreach ((Sherlock.Core.Store.SnapshotEntry entry, string probe) in _workspace.HarvestProbeSnapshots())
+            _console.MarkupLineInterpolated(
+                $"[yellow]● break[/] [bold]{probe}[/] [yellow]hit — heap snapshot[/] [bold]{entry.Id}[/] [grey]captured; load {entry.Id} to inspect[/]");
     }
 
     private void PrintBanner(Workspace workspace)

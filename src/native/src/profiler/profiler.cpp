@@ -27,8 +27,7 @@ thread_local std::uint64_t t_bytesSinceSample = 0;
 
 // DoStackSnapshot callback: collect managed frames (funcId == 0 marks native /
 // runtime frames, which we skip) up to kMaxFrames.
-HRESULT __stdcall captureStack(FunctionID funcId, UINT_PTR, COR_PRF_FRAME_INFO,
-                               ULONG32, BYTE[], void*) {
+HRESULT __stdcall captureStack(FunctionID funcId, UINT_PTR, COR_PRF_FRAME_INFO, ULONG32, BYTE[], void*) {
     if (funcId != 0) {
         t_frames.push_back(funcId);
         if (t_frames.size() >= kMaxFrames)
@@ -102,6 +101,9 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
     const char* traceEnv = std::getenv("SHERLOCK_TRACE");
     traceCalls = traceEnv != nullptr && traceEnv[0] != '\0' && traceEnv[0] != '0';
 
+    const char* breakEnv = std::getenv("SHERLOCK_BREAK");
+    bool breakOnCalls = breakEnv != nullptr && breakEnv[0] != '\0';
+
     // Allocation tracking is always on; tracing adds ELT on top when requested.
     DWORD eventMask = COR_PRF_MONITOR_OBJECT_ALLOCATED |
                       COR_PRF_ENABLE_OBJECT_ALLOCATED |
@@ -109,6 +111,12 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
                       COR_PRF_MONITOR_GC; // GC callbacks for survivor tracking
     if (traceCalls)
         eventMask |= COR_PRF_MONITOR_ENTERLEAVE;
+    if (breakOnCalls)
+        // ReJIT to splice probes; module loads to resolve specs. Disable inlining so
+        // armed methods always reach their own (re-JITted, probe-bearing) entry — the
+        // per-method JITInlining veto isn't reliably honored on its own.
+        eventMask |= COR_PRF_ENABLE_REJIT | COR_PRF_MONITOR_MODULE_LOADS |
+                     COR_PRF_MONITOR_JIT_COMPILATION | COR_PRF_DISABLE_INLINING;
 
     hr = corProfilerInfo->SetEventMask(eventMask);
     if (FAILED(hr)) {
@@ -125,6 +133,14 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
 
     aggregator = std::make_unique<Aggregator>(corProfilerInfo, logger.get());
 
+    const char* correlateEnv = std::getenv("SHERLOCK_CORRELATE");
+    correlate = correlateEnv != nullptr && correlateEnv[0] != '\0' && correlateEnv[0] != '0';
+    if (correlate) {
+        aggregator->enableCorrelation();
+        const char* corrOut = std::getenv("SHERLOCK_CORRELATE_OUT");
+        correlationPath = (corrOut != nullptr && corrOut[0] != '\0') ? corrOut : "sherlock-correlation.txt";
+    }
+
     if (traceCalls) {
         const char* traceOut = std::getenv("SHERLOCK_TRACE_OUT");
         tracePath = (traceOut != nullptr && traceOut[0] != '\0') ? traceOut : "sherlock-trace.txt";
@@ -139,7 +155,42 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
         }
     }
 
+    if (breakOnCalls) {
+        const char* probeOut = std::getenv("SHERLOCK_BREAK_OUT");
+        probePath = (probeOut != nullptr && probeOut[0] != '\0') ? probeOut : "sherlock-probes.txt";
+        probes = std::make_unique<ProbeManager>(corProfilerInfo, logger.get());
+        probes->configure(breakEnv);
+        logger->logInfo(std::string("probing methods: ") + breakEnv);
+    }
+
+    // Control channel: connect to sl if a socket was provided. This is the unified
+    // sl<->profiler channel for on-demand requests (emit-correlation, flush-allocations).
+    const char* ctlSocket = std::getenv("SHERLOCK_CONTROL_SOCKET");
+    if (ctlSocket != nullptr && ctlSocket[0] != '\0') {
+        control = std::make_unique<control::ControlChannel>(logger.get());
+        if (std::optional<std::string> err = control->connect(ctlSocket)) {
+            logger->logError("control channel connect failed: " + *err);
+            control.reset();
+        } else {
+            std::vector<std::string> features = {"allocations"};
+            if (correlate) features.push_back("correlate");
+            if (breakOnCalls) features.push_back("probes");
+            control->start("0.1", features,
+                           [this](std::string_view cmd, std::span<const std::string_view> args) {
+                               return handleControl(cmd, args);
+                           });
+            // Route snapshot-action probe hits to sl as events over the channel.
+            if (probes) {
+                probes->setHitCallback([this](const std::string& name) {
+                    if (control) control->sendEvent({"probe-hit", name});
+                });
+            }
+            logger->logInfo("control channel connected");
+        }
+    }
+
     isInitialized = true;
+
     logger->logInfo(traceCalls
         ? "profiler initialized; allocations by call stack + per-method tracing"
         : "profiler initialized; aggregating allocations by call stack");
@@ -150,11 +201,38 @@ HRESULT STDMETHODCALLTYPE Profiler::InitializeForAttach(IUnknown* pICorProfilerI
     return Initialize(pICorProfilerInfoUnk);
 }
 
+control::Reply Profiler::handleControl(std::string_view cmd, std::span<const std::string_view>) {
+    if (cmd == "ping") {
+        return control::Reply::success("pong");
+    }
+    if (cmd == "emit-correlation") {
+        if (!correlate || !aggregator) {
+            return control::Reply::error("correlation not enabled for this run");
+        }
+        if (corProfilerInfo != nullptr) {
+            corProfilerInfo->ForceGC(); // settle addresses before emitting
+        }
+        aggregator->emitCorrelation(correlationPath);
+        return control::Reply::success(correlationPath);
+    }
+    if (cmd == "flush-allocations") {
+        if (!aggregator) {
+            return control::Reply::error("no aggregator");
+        }
+        aggregator->dump(outputPath);
+        return control::Reply::success(outputPath);
+    }
+    return control::Reply::error("unknown command");
+}
+
 HRESULT STDMETHODCALLTYPE Profiler::Shutdown() {
     if (isShuttingDown.exchange(true)) {
         return S_OK;
     }
     isInitialized = false;
+    if (control) {
+        control->stop(); // stop serving requests before we tear down the aggregator
+    }
     logger->logInfo("profiler shutting down: " +
                     std::to_string(totalAllocations.load()) + " allocations, " +
                     std::to_string(totalBytes.load()) + " bytes");
@@ -166,10 +244,16 @@ HRESULT STDMETHODCALLTYPE Profiler::Shutdown() {
         trace->stop();
         trace->dump(tracePath, [this](FunctionID f) { return aggregator->resolveMethodName(f); });
     }
+    if (probes) {
+        probes->dump(probePath, [this](FunctionID f) { return aggregator->resolveMethodName(f); });
+    }
+    if (correlate && aggregator) {
+        aggregator->emitCorrelation(correlationPath);
+    }
     return S_OK;
 }
 
-HRESULT STDMETHODCALLTYPE Profiler::ObjectAllocated(ObjectID objectId, ClassID classId) {
+HRESULT STDMETHODCALLTYPE Profiler::ObjectAllocated(ObjectID objectId, ClassID) {
     if (!isInitialized.load() || isShuttingDown.load()) {
         return S_OK;
     }
@@ -212,7 +296,11 @@ HRESULT STDMETHODCALLTYPE Profiler::AssemblyLoadFinished(AssemblyID, HRESULT) { 
 HRESULT STDMETHODCALLTYPE Profiler::AssemblyUnloadStarted(AssemblyID) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::AssemblyUnloadFinished(AssemblyID, HRESULT) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ModuleLoadStarted(ModuleID) { return S_OK; }
-HRESULT STDMETHODCALLTYPE Profiler::ModuleLoadFinished(ModuleID, HRESULT) { return S_OK; }
+HRESULT STDMETHODCALLTYPE Profiler::ModuleLoadFinished(ModuleID moduleId, HRESULT hrStatus) {
+    if (probes && SUCCEEDED(hrStatus))
+        probes->onModuleLoaded(moduleId);
+    return S_OK;
+}
 HRESULT STDMETHODCALLTYPE Profiler::ModuleUnloadStarted(ModuleID) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ModuleUnloadFinished(ModuleID, HRESULT) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ModuleAttachedToAssembly(ModuleID, AssemblyID) { return S_OK; }
@@ -226,7 +314,20 @@ HRESULT STDMETHODCALLTYPE Profiler::JITCompilationFinished(FunctionID, HRESULT, 
 HRESULT STDMETHODCALLTYPE Profiler::JITCachedFunctionSearchStarted(FunctionID, BOOL*) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::JITCachedFunctionSearchFinished(FunctionID, COR_PRF_JIT_CACHE) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::JITFunctionPitched(FunctionID) { return S_OK; }
-HRESULT STDMETHODCALLTYPE Profiler::JITInlining(FunctionID, FunctionID, BOOL*) { return S_OK; }
+HRESULT STDMETHODCALLTYPE Profiler::JITInlining(FunctionID, FunctionID calleeId, BOOL* pfShouldInline) {
+    // Don't let armed methods get inlined away — the probe lives in their prologue,
+    // and an inlined body never goes through its own (re-JITted) entry.
+    if (probes && pfShouldInline != nullptr) {
+        ClassID classId = 0;
+        ModuleID moduleId = 0;
+        mdToken token = 0;
+        if (SUCCEEDED(corProfilerInfo->GetFunctionInfo(calleeId, &classId, &moduleId, &token)) &&
+            probes->isArmed(moduleId, token)) {
+            *pfShouldInline = FALSE;
+        }
+    }
+    return S_OK;
+}
 HRESULT STDMETHODCALLTYPE Profiler::ThreadCreated(ThreadID) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ThreadDestroyed(ThreadID) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ThreadAssignedToOSThread(ThreadID, DWORD) { return S_OK; }
@@ -286,15 +387,24 @@ HRESULT STDMETHODCALLTYPE Profiler::HandleDestroyed(GCHandleID) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ProfilerAttachComplete() { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ProfilerDetachSucceeded() { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ReJITCompilationStarted(FunctionID, ReJITID, BOOL) { return S_OK; }
-HRESULT STDMETHODCALLTYPE Profiler::GetReJITParameters(ModuleID, mdMethodDef, ICorProfilerFunctionControl*) { return S_OK; }
+HRESULT STDMETHODCALLTYPE Profiler::GetReJITParameters(ModuleID moduleId, mdMethodDef methodId, ICorProfilerFunctionControl* pFunctionControl) {
+    if (probes)
+        return probes->getReJITParameters(moduleId, methodId, pFunctionControl);
+    return S_OK;
+}
 HRESULT STDMETHODCALLTYPE Profiler::ReJITCompilationFinished(FunctionID, ReJITID, HRESULT, BOOL) { return S_OK; }
-HRESULT STDMETHODCALLTYPE Profiler::ReJITError(ModuleID, mdMethodDef, FunctionID, HRESULT) { return S_OK; }
-HRESULT STDMETHODCALLTYPE Profiler::MovedReferences2(ULONG cRanges, ObjectID oldStarts[], ObjectID[], SIZE_T lengths[]) {
-    // Compacting survivors: record them by their OLD address (pre-move), since
-    // that's what our pending objects are keyed on.
+HRESULT STDMETHODCALLTYPE Profiler::ReJITError(ModuleID, mdMethodDef methodId, FunctionID, HRESULT hrStatus) {
+    char buf[16];
+    std::snprintf(buf, sizeof buf, "0x%08x", static_cast<unsigned>(hrStatus));
+    logger->logError("ReJIT error for token " + std::to_string(methodId) + ": " + buf);
+    return S_OK;
+}
+HRESULT STDMETHODCALLTYPE Profiler::MovedReferences2(ULONG cRanges, ObjectID oldStarts[], ObjectID newStarts[], SIZE_T lengths[]) {
+    // Compacting survivors: record by OLD address (what pending objects are keyed on),
+    // and carry the old->new delta so correlation can follow the object's identity.
     if (aggregator)
         for (ULONG i = 0; i < cRanges; ++i)
-            aggregator->noteSurvivorRange(oldStarts[i], lengths[i]);
+            aggregator->noteMove(oldStarts[i], newStarts[i], lengths[i]);
     return S_OK;
 }
 HRESULT STDMETHODCALLTYPE Profiler::SurvivingReferences2(ULONG cRanges, ObjectID starts[], SIZE_T lengths[]) {

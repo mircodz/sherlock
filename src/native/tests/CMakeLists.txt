@@ -1,0 +1,6 @@
+find_package(GTest QUIET)
+if(GTest_FOUND)
+    add_executable(SherlockTests intervals.cpp)
+    target_link_libraries(SherlockTests PRIVATE GTest::gtest GTest::gtest_main)
+    add_test(NAME SherlockTests COMMAND SherlockTests)
+endif()

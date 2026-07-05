@@ -1,7 +1,9 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Sherlock.CLI.Rendering;
+using Sherlock.Core.Collection;
 using Sherlock.Core.Profiling;
 using Spectre.Console;
 
@@ -46,8 +48,27 @@ public sealed class AllocationsReplCommand : IReplCommand
         }
         if (!File.Exists(path))
         {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] profile not found: {path}");
-            return;
+            // The aggregate profile is only written at process exit — but if the target is
+            // still running with a control channel, ask the profiler to flush it now.
+            ProcessSupervisor? live = context.Workspace.Targets.FirstOrDefault(
+                t => t.SessionId == context.Workspace.CurrentSession?.Id && !t.RootExited);
+            if (live is not null)
+            {
+                string? flushed = context.Console.Status()
+                    .Start("Flushing live allocation profile…", _ => live.FlushAllocations(TimeSpan.FromSeconds(10)));
+                if (flushed is null)
+                {
+                    context.Console.MarkupLineInterpolated(
+                        $"[yellow]Couldn't flush[/] — [bold]{live.RootName}[/] (pid {live.RootPid}) didn't answer (no/old profiler?). It's written at exit regardless.");
+                    return;
+                }
+                path = flushed;
+            }
+            else
+            {
+                context.Console.MarkupLineInterpolated($"[red]error:[/] profile not found: {path}");
+                return;
+            }
         }
 
         AllocationProfile profile = AllocationProfileReader.Read(path);
