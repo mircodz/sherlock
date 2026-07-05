@@ -44,8 +44,7 @@ internal static class Program
                 Thread.Sleep(1000);
             }
             Console.WriteLine("Done growing; holding. Ctrl-C to stop.");
-            Thread.Sleep(1000);
-            // Thread.Sleep(Timeout.Infinite);
+            Thread.Sleep(3000);
             GC.KeepAlive(Registry);
             return 0;
         }
@@ -57,6 +56,25 @@ internal static class Program
             Console.WriteLine($"Demo crashing. PID {Environment.ProcessId}, " +
                               $"holding {Registry.Customers.Count} customers.");
             throw new InvalidOperationException("Demo intentional crash with a live object graph.");
+        }
+
+        // `--throw`: build the graph, throw+catch a DemoException (so it fires an exception
+        // trigger but stays alive), then hold — for testing `snapshot-on throw:...`.
+        if (args.Length > 0 && args[0] == "--throw")
+        {
+            BuildGraph();
+            Console.WriteLine($"Demo throwing. PID {Environment.ProcessId}, holding {Registry.Customers.Count} customers.");
+            try
+            {
+                throw new DemoException("Demo trigger exception.");
+            }
+            catch (DemoException)
+            {
+                Console.WriteLine("Caught DemoException; holding. Ctrl-C to stop.");
+            }
+            Thread.Sleep(Timeout.Infinite);
+            GC.KeepAlive(Registry);
+            return 0;
         }
 
         string dumpPath = args.Length > 0
@@ -137,6 +155,9 @@ internal sealed class Customer(int id, string name, string email)
 }
 
 internal sealed record Order(int Id, string Description, decimal Amount);
+
+/// <summary>A distinct exception type so <c>snapshot-on throw:Sherlock.Demo.DemoException</c> can target it.</summary>
+internal sealed class DemoException(string message) : Exception(message);
 
 /// <summary>Thin wrapper that invokes the runtime's <c>createdump</c> on the current process.</summary>
 internal static class CreateDump

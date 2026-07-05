@@ -14,7 +14,7 @@ public sealed class RunReplCommand : IReplCommand
 {
     public string Name => "run";
     public string Summary => "Launch a process and track it as a live target.";
-    public string Usage => "run [--profile] [--correlate] [--break <Type.Method[:snapshot]>] [--] <path> [args...]";
+    public string Usage => "run [--profile] [--correlate] [--snapshot-on <event>] [--] <path> [args...]";
     public string Category => "Live";
 
     public void Execute(ReplContext context, string[] args)
@@ -23,7 +23,7 @@ public sealed class RunReplCommand : IReplCommand
         // first non-flag token is the path and the rest its args.
         bool profile = false;
         bool correlate = false;
-        string? breakSpec = null;
+        string? snapshotOn = null;
         var rest = new List<string>();
         for (int i = 0; i < args.Length; i++)
         {
@@ -36,9 +36,9 @@ public sealed class RunReplCommand : IReplCommand
             {
                 correlate = true;
             }
-            else if (rest.Count == 0 && arg == "--break" && i + 1 < args.Length)
+            else if (rest.Count == 0 && arg == "--snapshot-on" && i + 1 < args.Length)
             {
-                breakSpec = args[++i];
+                snapshotOn = args[++i];
             }
             else if (rest.Count == 0 && arg == "--")
             {
@@ -50,8 +50,8 @@ public sealed class RunReplCommand : IReplCommand
             }
         }
 
-        // Breakpoints and correlation both ride the profiler, so they imply attaching it.
-        if (breakSpec is not null || correlate)
+        // Triggers and correlation both ride the profiler, so they imply attaching it.
+        if (snapshotOn is not null || correlate)
         {
             profile = true;
         }
@@ -84,16 +84,16 @@ public sealed class RunReplCommand : IReplCommand
         try
         {
             SupervisedProcess root = supervisor.Start(
-                rest[0], rest.Skip(1).ToList(), dumpOnCrash: true, profilerPath, captureDir: session.Dir, breakSpec: breakSpec, correlate: correlate);
+                rest[0], rest.Skip(1).ToList(), dumpOnCrash: true, profilerPath, captureDir: session.Dir, snapshotOn: snapshotOn, correlate: correlate);
             session.SourcePid = root.Pid;
             context.Workspace.Store.Persist(session);
             context.Workspace.AddTarget(supervisor);
             context.Console.MarkupLineInterpolated(
                 $"[green]launched[/] {Path.GetFileName(rest[0])} [grey](pid {root.Pid}) → session[/] [bold]{session.Id}[/][grey]. Use[/] ps[grey],[/] logs[grey],[/] snapshot[grey].[/]");
-            if (breakSpec is not null)
+            if (snapshotOn is not null)
             {
                 context.Console.MarkupLineInterpolated(
-                    $"[grey]Probing[/] {breakSpec}[grey]; snapshot-action hits will be captured into[/] [bold]{session.Id}[/][grey].[/]");
+                    $"[grey]Snapshot-on[/] {snapshotOn}[grey] armed — a heap snapshot is captured into[/] [bold]{session.Id}[/][grey] when it fires.[/]");
             }
             else if (correlate)
             {

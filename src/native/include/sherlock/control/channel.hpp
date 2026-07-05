@@ -1,10 +1,10 @@
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <mutex>
 #include <optional>
 #include <span>
-#include <stop_token>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -57,13 +57,14 @@ public:
     [[nodiscard]] bool connected() const { return fd_ >= 0; }
 
 private:
-    void serve(std::stop_token stop);
+    void serve();
     bool sendAll(std::span<const char> bytes); // best-effort; callers ignore the result
 
     Logger* logger_;
     int fd_ = -1;
     Handler handler_;
-    std::jthread worker_;
+    std::atomic<bool> running_{false};
+    std::thread worker_;
     std::mutex writeMutex_;
 };
 

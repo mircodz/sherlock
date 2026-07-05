@@ -12,6 +12,7 @@
 #include "sherlock/profiler/aggregator.hpp"
 #include "sherlock/profiler/probe.hpp"
 #include "sherlock/profiler/trace.hpp"
+#include "sherlock/profiler/triggers.hpp"
 
 namespace Sherlock {
 
@@ -140,16 +141,22 @@ private:
     std::string tracePath;
     std::unique_ptr<TraceCollector> trace;
 
-    std::string probePath;            // SHERLOCK_BREAK: method "breakpoints" via ReJIT
-    std::unique_ptr<ProbeManager> probes;
+    std::unique_ptr<ProbeManager> probes;      // call: triggers via ReJIT
+    std::unique_ptr<SnapshotTriggers> triggers; // alloc:/gc:/throw: triggers via callbacks
+    int maxGenCollected = 0;                    // set in GarbageCollectionStarted
 
     bool correlate = false;           // SHERLOCK_CORRELATE: track live objects for snapshot join
     std::string correlationPath;
 
     // sl <-> profiler control channel (SHERLOCK_CONTROL_SOCKET). Handles on-demand
-    // requests (emit-correlation, flush-allocations) and pushes events.
+    // requests (emit-correlation, flush-allocations, arm-trigger) and pushes events.
     std::unique_ptr<control::ControlChannel> control;
     control::Reply handleControl(std::string_view cmd, std::span<const std::string_view> args);
+
+    // Parse & arm one "kind:arg" snapshot trigger (call/alloc/gc/throw). Returns false
+    // for an unknown kind or (live call) an unresolved method. `live` = from the REPL.
+    bool armTrigger(const std::string& spec, bool live);
+    void fireTrigger(const std::string& display); // emit a snapshot-trigger event to sl
 };
 
 } // namespace Sherlock

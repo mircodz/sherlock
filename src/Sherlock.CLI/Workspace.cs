@@ -125,7 +125,7 @@ public sealed class Workspace : IDisposable
             foreach (string probe in signals)
             {
                 string temp = DumpCollector.Collect(target.RootPid, DumpKind.Heap, outputPath: null);
-                SnapshotEntry entry = Store.AddSnapshot(session, temp, moveIntoStore: true, label: $"break {probe}");
+                SnapshotEntry entry = Store.AddSnapshot(session, temp, moveIntoStore: true, label: $"snapshot-on {probe}");
                 (captured ??= []).Add((entry, probe));
             }
         }

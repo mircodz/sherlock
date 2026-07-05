@@ -80,6 +80,9 @@ public:
     /// collector can reuse it as a symbolizer.
     const std::string& resolveMethodName(FunctionID method);
 
+    /// Resolves a ClassID to "Ns.Type" (cached). Used by allocation/exception triggers.
+    const std::string& resolveTypeName(ClassID classId);
+
 private:
     static constexpr int kMaxShards = 1024;
 
@@ -113,7 +116,8 @@ private:
     std::vector<intervals::MoveRange> moves_;      // this GC's relocations, sorted by oldStart
     std::unordered_map<ObjectID, Live> live_;      // current live tracked objects, keyed by address
 
-    std::unordered_map<FunctionID, std::string> nameCache_; // dump-time only
+    std::unordered_map<FunctionID, std::string> nameCache_;      // dump-time only
+    std::unordered_map<ClassID, std::string> typeNameCache_;     // for triggers
 };
 
 } // namespace Sherlock

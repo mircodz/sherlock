@@ -4,42 +4,15 @@
 
 #include <algorithm>
 #include <cstdio>
-#include <cstring>
-#include <fstream>
 #include <vector>
 
 namespace Sherlock {
 
 namespace {
 
-constexpr std::size_t kMaxFrames = 64;
-
 // The single ProbeManager per process; the injected IL calls a free function
 // trampoline with no client data, so it reaches the manager through this.
 ProbeManager* g_probes = nullptr;
-
-// Reentrancy guard + scratch stack for the probe's own stack walk.
-thread_local bool t_inProbe = false;
-thread_local std::vector<FunctionID> t_frames;
-
-HRESULT __stdcall captureProbeStack(FunctionID funcId, UINT_PTR, COR_PRF_FRAME_INFO,
-                                    ULONG32, BYTE[], void*) {
-    if (funcId != 0) {
-        t_frames.push_back(funcId);
-        if (t_frames.size() >= kMaxFrames)
-            return E_ABORT;
-    }
-    return S_OK;
-}
-
-std::uint64_t hashFrames(const std::vector<FunctionID>& frames) {
-    std::uint64_t h = 1469598103934665603ull;
-    for (FunctionID f : frames) {
-        h ^= static_cast<std::uint64_t>(f);
-        h *= 1099511628211ull;
-    }
-    return h;
-}
 
 // Narrow ASCII std::string -> null-terminated WCHAR buffer (metadata names are
 // effectively ASCII; this sidesteps the L"" wchar_t-width mismatch on the PAL).
@@ -106,25 +79,29 @@ void ProbeManager::configure(const std::string& spec) {
         if (item.empty())
             continue;
 
-        // Optional ":action" suffix (default "trace"; "snapshot" dumps on first hit).
-        bool snapshot = false;
-        std::size_t colon = item.find_last_of(':');
-        if (colon != std::string::npos) {
-            std::string action = item.substr(colon + 1);
-            snapshot = (action == "snapshot" || action == "snap");
-            item.erase(colon);
-        }
-
         std::size_t dot = item.find_last_of('.');
         if (dot == std::string::npos || dot == 0 || dot + 1 >= item.size()) {
             if (logger_) logger_->logWarning("ignoring malformed probe spec (want Ns.Type.Method): " + item);
             continue;
         }
-        specs_.push_back({item.substr(0, dot), item.substr(dot + 1), snapshot, false});
+        specs_.push_back({item.substr(0, dot), item.substr(dot + 1), false});
     }
 }
 
 void ProbeManager::onModuleLoaded(ModuleID moduleId) {
+    loadedModules_.push_back(moduleId); // remembered so armLive() can resolve against it later
+    resolveInModule(moduleId);
+}
+
+bool ProbeManager::armLive(const std::string& spec) {
+    const std::size_t before = armed_.size();
+    configure(spec); // appends to specs_
+    for (ModuleID m : loadedModules_)
+        resolveInModule(m);
+    return armed_.size() > before;
+}
+
+void ProbeManager::resolveInModule(ModuleID moduleId) {
     if (specs_.empty())
         return;
 
@@ -159,8 +136,8 @@ void ProbeManager::onModuleLoaded(ModuleID moduleId) {
                 continue;
 
             std::int32_t probeId = static_cast<std::int32_t>(armed_.size());
-            armed_.push_back({moduleId, methods[i], probeId, s.snapshot, s.type + "." + s.method});
-            snapshotSignaled_.emplace_back(false);
+            armed_.push_back({moduleId, methods[i], probeId, s.type + "." + s.method});
+            fired_.emplace_back(false);
             reMods.push_back(moduleId);
             reToks.push_back(methods[i]);
             s.resolved = true;
@@ -344,66 +321,12 @@ bool ProbeManager::isArmed(ModuleID moduleId, mdMethodDef token) const {
 }
 
 void ProbeManager::onProbeHit(std::int32_t probeId) {
-    if (t_inProbe)
-        return;
-    t_inProbe = true;
-
-    t_frames.clear();
-    info_->DoStackSnapshot(0 /* current thread */, captureProbeStack, COR_PRF_SNAPSHOT_DEFAULT, nullptr, nullptr, 0);
-    std::uint64_t h = hashFrames(t_frames);
-
-    {
-        std::lock_guard<std::mutex> lock(hitsMutex_);
-        PathStat& ps = hits_[h];
-        if (ps.frames.empty() && !t_frames.empty())
-            ps.frames = t_frames;
-        ps.hits += 1;
-    }
-
-    // Snapshot action: tell sl to dump the live heap, exactly once per probe.
+    // Pure trigger: fire sl once, the first time this probe is hit. No recording — all
+    // provenance comes from the heap snapshot sl takes in response.
     if (probeId >= 0 && static_cast<std::size_t>(probeId) < armed_.size() &&
-        armed_[probeId].snapshot && onHit_ &&
-        !snapshotSignaled_[probeId].exchange(true)) {
+        onHit_ && !fired_[probeId].exchange(true)) {
         onHit_(armed_[probeId].display);
     }
-
-    t_inProbe = false;
-}
-
-void ProbeManager::dump(const std::string& path, const std::function<std::string(FunctionID)>& symbolize) {
-    std::vector<const PathStat*> rows;
-    {
-        std::lock_guard<std::mutex> lock(hitsMutex_);
-        rows.reserve(hits_.size());
-        for (const auto& [h, ps] : hits_)
-            rows.push_back(&ps);
-    }
-    std::sort(rows.begin(), rows.end(), [](const PathStat* a, const PathStat* b) { return a->hits > b->hits; });
-
-    std::ofstream out(path, std::ios::trunc);
-    if (!out) {
-        if (logger_) logger_->logError("could not open probe output: " + path);
-        return;
-    }
-
-    out << "# sherlock probe hits (folded stacks, root->leaf)\n";
-    out << "# hits\tstack\n";
-    for (const PathStat* ps : rows) {
-        out << ps->hits << '\t';
-        if (ps->frames.empty()) {
-            out << "<no managed frame>";
-        } else {
-            // Captured leaf -> root; emit root -> leaf so callers come first.
-            for (std::size_t i = ps->frames.size(); i-- > 0;) {
-                out << symbolize(ps->frames[i]);
-                if (i != 0) out << ';';
-            }
-        }
-        out << '\n';
-    }
-
-    if (logger_)
-        logger_->logInfo("wrote " + std::to_string(rows.size()) + " probe stacks to " + path);
 }
 
 } // namespace Sherlock

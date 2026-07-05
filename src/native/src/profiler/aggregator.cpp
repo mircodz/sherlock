@@ -285,4 +285,29 @@ const std::string& Aggregator::resolveMethodName(FunctionID method) {
     return nameCache_.emplace(method, std::move(name)).first->second;
 }
 
+const std::string& Aggregator::resolveTypeName(ClassID classId) {
+    auto cached = typeNameCache_.find(classId);
+    if (cached != typeNameCache_.end())
+        return cached->second;
+
+    std::string name = "<unknown>";
+    if (classId != 0 && info_ != nullptr) {
+        ModuleID moduleId = 0;
+        mdTypeDef typeDef = 0;
+        if (SUCCEEDED(info_->GetClassIDInfo(classId, &moduleId, &typeDef))) {
+            IMetaDataImport* md = nullptr;
+            if (SUCCEEDED(info_->GetModuleMetaData(moduleId, ofRead, IID_IMetaDataImport, (IUnknown**)&md)) && md != nullptr) {
+                WCHAR typeName16[512];
+                ULONG typeLen = 0;
+                DWORD typeFlags = 0;
+                if (SUCCEEDED(md->GetTypeDefProps(typeDef, typeName16, 512, &typeLen, &typeFlags, nullptr)))
+                    name = narrow(typeName16, typeLen);
+                md->Release();
+            }
+        }
+    }
+
+    return typeNameCache_.emplace(classId, std::move(name)).first->second;
+}
+
 } // namespace Sherlock

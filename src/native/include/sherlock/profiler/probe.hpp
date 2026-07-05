@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
-#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -15,27 +14,30 @@ namespace Sherlock {
 
 class Logger;
 
-/// Method "breakpoints" via ReJIT + IL rewriting (MVP: trace-only).
+/// Method "breakpoints" via ReJIT + IL rewriting.
 ///
-/// Given a set of `Namespace.Type.Method` specs (from SHERLOCK_BREAK), each
-/// matching method is re-JITted with a tiny prologue spliced into its IL: a
-/// `calli` into a native trampoline that records the call. So every time the
-/// method is entered we capture the managed stack and fold it by hit count —
-/// "who calls Dispose", without an interactive debugger.
-///
-/// This is observe-and-react, not pause-and-step: the probe records and returns.
-/// Pausing/conditions are deliberately out of this MVP.
+/// Each `Namespace.Type.Method` spec (from SHERLOCK_BREAK) is re-JITted with a tiny
+/// prologue spliced into its IL: a `calli` into a native trampoline. The first time the
+/// method is entered, the trampoline fires a callback — the profiler turns that into a
+/// "snapshot now" event to sl. This is *only* a remote trigger: it records nothing itself
+/// (no stacks, no aggregation). All provenance comes from the heap snapshot that follows,
+/// so a missed trigger (inlined / tiny forwarder / NativeAOT) just means no dump at that
+/// instant — it can never corrupt an analysis.
 class ProbeManager {
 public:
     ProbeManager(ICorProfilerInfo10* info, Logger* logger);
 
-    /// Parse "Ns.Type.Method[:action];..." (';' or ',' separated). The optional
-    /// action (default "trace") is "snapshot" to also signal a heap dump on first hit.
+    /// Parse "Ns.Type.Method;Ns.Other.Dispose,..." (';' or ',' separated).
     void configure(const std::string& spec);
     bool empty() const { return specs_.empty(); }
 
-    /// Called (once per probe) when a snapshot-action probe first fires, with its display
-    /// name. The profiler routes this to sl over the control channel as a probe-hit event.
+    /// Arm a spec at runtime (from the REPL over the control channel): parse it and
+    /// resolve against already-loaded modules, ReJITting matches now. Returns true if a
+    /// method was armed (false = no match in a loaded module — e.g. not loaded yet).
+    bool armLive(const std::string& spec);
+
+    /// Called once per probe, the first time it fires, with its display name. The profiler
+    /// routes this to sl over the control channel as a probe-hit event (→ heap snapshot).
     void setHitCallback(std::function<void(const std::string&)> cb) { onHit_ = std::move(cb); }
 
     /// Resolve any pending specs that live in this freshly-loaded module and
@@ -51,14 +53,10 @@ public:
     /// Called from the injected IL (via the global trampoline) on every hit.
     void onProbeHit(std::int32_t probeId);
 
-    /// Write folded stacks weighted by hit count, using `symbolize` for frame names.
-    void dump(const std::string& path, const std::function<std::string(FunctionID)>& symbolize);
-
 private:
     struct Spec {
         std::string type;   // "Ns.Type"
         std::string method; // "Method"
-        bool snapshot = false; // action: capture a heap dump on first hit
         bool resolved = false;
     };
 
@@ -66,31 +64,25 @@ private:
         ModuleID module;
         mdMethodDef token;
         std::int32_t probeId;
-        bool snapshot;
         std::string display; // "Ns.Type.Method"
-    };
-
-    // A distinct captured call path (leaf -> root) and how often the probe hit it.
-    struct PathStat {
-        std::vector<FunctionID> frames;
-        std::uint64_t hits = 0;
     };
 
     // Per-module standalone signature token for the native trampoline (cached).
     mdSignature ensureProbeSig(ModuleID moduleId);
 
+    // Resolve unresolved specs against one module and ReJIT the matches.
+    void resolveInModule(ModuleID moduleId);
+
     ICorProfilerInfo10* info_;
     Logger* logger_;
 
+    std::vector<ModuleID> loadedModules_; // for armLive() resolution against loaded modules
     std::vector<Spec> specs_;
-    std::deque<Armed> armed_;                                   // index == probeId; deque keeps refs stable
-    std::deque<std::atomic<bool>> snapshotSignaled_;            // per-probe "already signalled" latch
+    std::deque<Armed> armed_;                                    // index == probeId; deque keeps refs stable
+    std::deque<std::atomic<bool>> fired_;                        // per-probe "already fired" latch
     std::unordered_map<std::uint64_t, mdSignature> sigByModule_; // ModuleID -> sig token
 
     std::function<void(const std::string&)> onHit_;
-
-    std::mutex hitsMutex_;
-    std::unordered_map<std::uint64_t, PathStat> hits_;         // keyed by stack hash
 };
 
 } // namespace Sherlock

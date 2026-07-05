@@ -78,14 +78,15 @@ void ControlChannel::start(std::string_view version, const std::vector<std::stri
     std::string framed = frame(joinFields(hello));
     sendAll(framed);
 
-    worker_ = std::jthread([this](std::stop_token stop) { serve(stop); });
+    running_.store(true);
+    worker_ = std::thread([this] { serve(); });
 }
 
-void ControlChannel::serve(std::stop_token stop) {
+void ControlChannel::serve() {
 #ifndef _WIN32
     std::string buffer;
     char chunk[4096];
-    while (!stop.stop_requested()) {
+    while (running_.load()) {
         ssize_t n = ::recv(fd_, chunk, sizeof chunk, 0);
         if (n <= 0) {
             break; // peer closed or error
@@ -110,8 +111,6 @@ void ControlChannel::serve(std::stop_token stop) {
     if (logger_) {
         logger_->logDebug("control channel disconnected");
     }
-#else
-    (void)stop;
 #endif
 }
 
@@ -145,7 +144,7 @@ bool ControlChannel::sendAll(std::span<const char> bytes) {
 }
 
 void ControlChannel::stop() {
-    worker_.request_stop();
+    running_.store(false);
 #ifndef _WIN32
     if (fd_ >= 0) {
         ::shutdown(fd_, SHUT_RDWR); // unblock recv() in serve()

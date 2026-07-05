@@ -9,10 +9,12 @@ namespace Sherlock.CLI.Repl.Commands;
 /// <summary>Inspects a single object by address: type, size and every field value (SOS <c>dumpobj</c>).</summary>
 public sealed class DumpObjReplCommand : IReplCommand
 {
+    private const int DefaultElementLimit = 20;
+
     public string Name => "dumpobj";
     public IReadOnlyList<string> Aliases => ["do", "print", "p"];
     public string Summary => "Inspect one object by address: its type, size and fields.";
-    public string Usage => "dumpobj <address>";
+    public string Usage => "dumpobj <address> [element-count]";
 
     public void Execute(ReplContext context, string[] args)
     {
@@ -28,6 +30,8 @@ public sealed class DumpObjReplCommand : IReplCommand
             return;
         }
 
+        int elementLimit = args.Length > 1 && int.TryParse(args[1], out int n) && n > 0 ? n : DefaultElementLimit;
+
         ObjectDetail detail = new ObjectInspector(context.Session).Inspect(address);
 
         context.Console.MarkupLineInterpolated($"[bold]{detail.TypeName}[/]");
@@ -41,7 +45,7 @@ public sealed class DumpObjReplCommand : IReplCommand
 
         if (detail.ElementCount is int count)
         {
-            PrintElements(context.Console, detail, count);
+            PrintElements(context.Console, detail, count, elementLimit);
             return;
         }
 
@@ -69,15 +73,24 @@ public sealed class DumpObjReplCommand : IReplCommand
         context.Console.Write(table);
     }
 
-    private static void PrintElements(IAnsiConsole console, ObjectDetail detail, int count)
+    private static void PrintElements(IAnsiConsole console, ObjectDetail detail, int count, int limit)
     {
         console.MarkupLineInterpolated($"  [grey]count[/] {count}");
+        int shown = 0;
         foreach (string element in detail.Elements)
-            console.MarkupLineInterpolated($"  {element}");
-
-        if (detail.Elements.Count < count)
         {
-            console.MarkupLineInterpolated($"  [grey]… {count - detail.Elements.Count} more[/]");
+            if (shown >= limit)
+            {
+                break;
+            }
+            console.MarkupLineInterpolated($"  {element}");
+            shown++;
+        }
+
+        int remaining = count - shown;
+        if (remaining > 0)
+        {
+            console.MarkupLineInterpolated($"  [grey]… {remaining} more (dumpobj 0x{detail.Address:x} <n> to show more)[/]");
         }
     }
 

@@ -6,12 +6,14 @@ using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
 
-/// <summary>Finds a GC root path keeping a given object alive.</summary>
+/// <summary>Finds GC root paths keeping a given object alive.</summary>
 public sealed class GcRootReplCommand : IReplCommand
 {
+    private const int DefaultPaths = 3;
+
     public string Name => "gcroot";
-    public string Summary => "Find a GC root path that keeps an object (by address) alive.";
-    public string Usage => "gcroot <address>";
+    public string Summary => "Find GC root paths that keep an object (by address) alive.";
+    public string Usage => "gcroot <address> [max-paths]";
 
     public void Execute(ReplContext context, string[] args)
     {
@@ -27,11 +29,17 @@ public sealed class GcRootReplCommand : IReplCommand
             return;
         }
 
+        int maxPaths = DefaultPaths;
+        if (args.Length > 1 && int.TryParse(args[1], out int n) && n > 0)
+        {
+            maxPaths = n;
+        }
+
         context.Console.MarkupLineInterpolated($"[grey]Searching for roots of[/] 0x{address:x}[grey]…[/]");
 
         IReadOnlyList<GcRootPath> paths = context.Console.Status()
             .Start("Walking references from GC roots…", _ =>
-                new RootAnalyzer(context.Session).FindRoots(address, maxPaths: 1));
+                new RootAnalyzer(context.Session).FindRoots(address, maxPaths));
 
         if (paths.Count == 0)
         {
@@ -39,8 +47,13 @@ public sealed class GcRootReplCommand : IReplCommand
             return;
         }
 
-        foreach (GcRootPath path in paths)
+        for (int p = 0; p < paths.Count; p++)
         {
+            GcRootPath path = paths[p];
+            if (paths.Count > 1)
+            {
+                context.Console.MarkupLineInterpolated($"[grey]— path {p + 1}/{paths.Count} —[/]");
+            }
             context.Console.MarkupLineInterpolated($"[bold]{path.RootDescription}[/]");
             for (int i = 0; i < path.Path.Count; i++)
             {
@@ -49,5 +62,7 @@ public sealed class GcRootReplCommand : IReplCommand
                 context.Console.MarkupLineInterpolated($"{indent}[grey]->[/] 0x{node.Address:x} [aqua]{node.TypeName}[/]");
             }
         }
+
+        context.Console.MarkupLine($"[grey]{paths.Count} root path(s). More with[/] gcroot <address> <n>[grey].[/]");
     }
 }

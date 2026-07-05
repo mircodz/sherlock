@@ -101,22 +101,25 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
     const char* traceEnv = std::getenv("SHERLOCK_TRACE");
     traceCalls = traceEnv != nullptr && traceEnv[0] != '\0' && traceEnv[0] != '0';
 
-    const char* breakEnv = std::getenv("SHERLOCK_BREAK");
-    bool breakOnCalls = breakEnv != nullptr && breakEnv[0] != '\0';
+    const char* triggerEnv = std::getenv("SHERLOCK_SNAPSHOT_ON");
+    bool hasStartupTriggers = triggerEnv != nullptr && triggerEnv[0] != '\0';
+    const char* ctlSocketEnv = std::getenv("SHERLOCK_CONTROL_SOCKET");
+    bool controlPresent = ctlSocketEnv != nullptr && ctlSocketEnv[0] != '\0';
+    // Snapshot triggers are possible if pre-armed at startup, or if the control channel
+    // lets the REPL arm them live.
+    bool triggersEnabled = hasStartupTriggers || controlPresent;
 
     // Allocation tracking is always on; tracing adds ELT on top when requested.
     DWORD eventMask = COR_PRF_MONITOR_OBJECT_ALLOCATED |
                       COR_PRF_ENABLE_OBJECT_ALLOCATED |
                       COR_PRF_ENABLE_STACK_SNAPSHOT |
-                      COR_PRF_MONITOR_GC; // GC callbacks for survivor tracking
+                      COR_PRF_MONITOR_GC; // GC callbacks for survivor tracking + gc: triggers
     if (traceCalls)
         eventMask |= COR_PRF_MONITOR_ENTERLEAVE;
-    if (breakOnCalls)
-        // ReJIT to splice probes; module loads to resolve specs. Disable inlining so
-        // armed methods always reach their own (re-JITted, probe-bearing) entry — the
-        // per-method JITInlining veto isn't reliably honored on its own.
-        eventMask |= COR_PRF_ENABLE_REJIT | COR_PRF_MONITOR_MODULE_LOADS |
-                     COR_PRF_MONITOR_JIT_COMPILATION | COR_PRF_DISABLE_INLINING;
+    if (triggersEnabled)
+        // ReJIT + module loads for call: triggers; exceptions for throw: triggers. No global
+        // inline-disable — call: triggers simply don't fire on inlined/tiny methods (documented).
+        eventMask |= COR_PRF_ENABLE_REJIT | COR_PRF_MONITOR_MODULE_LOADS | COR_PRF_MONITOR_EXCEPTIONS;
 
     hr = corProfilerInfo->SetEventMask(eventMask);
     if (FAILED(hr)) {
@@ -155,35 +158,43 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
         }
     }
 
-    if (breakOnCalls) {
-        const char* probeOut = std::getenv("SHERLOCK_BREAK_OUT");
-        probePath = (probeOut != nullptr && probeOut[0] != '\0') ? probeOut : "sherlock-probes.txt";
+    if (triggersEnabled) {
         probes = std::make_unique<ProbeManager>(corProfilerInfo, logger.get());
-        probes->configure(breakEnv);
-        logger->logInfo(std::string("probing methods: ") + breakEnv);
+        triggers = std::make_unique<SnapshotTriggers>();
+        if (hasStartupTriggers) {
+            std::string spec = triggerEnv;
+            std::size_t start = 0;
+            while (start <= spec.size()) {
+                std::size_t end = spec.find_first_of(";,", start);
+                std::string one = spec.substr(start, end == std::string::npos ? std::string::npos : end - start);
+                start = (end == std::string::npos) ? spec.size() + 1 : end + 1;
+                while (!one.empty() && (one.front() == ' ' || one.front() == '\t')) one.erase(one.begin());
+                while (!one.empty() && (one.back() == ' ' || one.back() == '\t')) one.pop_back();
+                if (!one.empty()) armTrigger(one, false);
+            }
+            logger->logInfo(std::string("snapshot-on: ") + triggerEnv);
+        }
     }
 
     // Control channel: connect to sl if a socket was provided. This is the unified
-    // sl<->profiler channel for on-demand requests (emit-correlation, flush-allocations).
-    const char* ctlSocket = std::getenv("SHERLOCK_CONTROL_SOCKET");
-    if (ctlSocket != nullptr && ctlSocket[0] != '\0') {
+    // sl<->profiler channel for on-demand requests (emit-correlation, flush-allocations,
+    // arm-trigger) and pushes events (snapshot triggers).
+    if (controlPresent) {
         control = std::make_unique<control::ControlChannel>(logger.get());
-        if (std::optional<std::string> err = control->connect(ctlSocket)) {
+        if (std::optional<std::string> err = control->connect(ctlSocketEnv)) {
             logger->logError("control channel connect failed: " + *err);
             control.reset();
         } else {
             std::vector<std::string> features = {"allocations"};
             if (correlate) features.push_back("correlate");
-            if (breakOnCalls) features.push_back("probes");
+            if (triggersEnabled) features.push_back("snapshot-triggers");
             control->start("0.1", features,
                            [this](std::string_view cmd, std::span<const std::string_view> args) {
                                return handleControl(cmd, args);
                            });
-            // Route snapshot-action probe hits to sl as events over the channel.
+            // Route call: trigger hits to sl as snapshot-trigger events over the channel.
             if (probes) {
-                probes->setHitCallback([this](const std::string& name) {
-                    if (control) control->sendEvent({"probe-hit", name});
-                });
+                probes->setHitCallback([this](const std::string& name) { fireTrigger("call:" + name); });
             }
             logger->logInfo("control channel connected");
         }
@@ -201,7 +212,7 @@ HRESULT STDMETHODCALLTYPE Profiler::InitializeForAttach(IUnknown* pICorProfilerI
     return Initialize(pICorProfilerInfoUnk);
 }
 
-control::Reply Profiler::handleControl(std::string_view cmd, std::span<const std::string_view>) {
+control::Reply Profiler::handleControl(std::string_view cmd, std::span<const std::string_view> args) {
     if (cmd == "ping") {
         return control::Reply::success("pong");
     }
@@ -222,7 +233,46 @@ control::Reply Profiler::handleControl(std::string_view cmd, std::span<const std
         aggregator->dump(outputPath);
         return control::Reply::success(outputPath);
     }
+    if (cmd == "arm-trigger") {
+        if (args.empty()) {
+            return control::Reply::error("arm-trigger needs a <kind:arg> spec");
+        }
+        return armTrigger(std::string(args[0]), /*live=*/true)
+            ? control::Reply::success("armed")
+            : control::Reply::error("could not arm (unknown kind, or method not loaded yet)");
+    }
     return control::Reply::error("unknown command");
+}
+
+bool Profiler::armTrigger(const std::string& spec, bool live) {
+    // Parse "kind:arg"; a bare "Ns.Type.Method" is shorthand for "call:".
+    std::string kind, arg;
+    std::size_t colon = spec.find(':');
+    if (colon == std::string::npos) {
+        kind = "call";
+        arg = spec;
+    } else {
+        kind = spec.substr(0, colon);
+        arg = spec.substr(colon + 1);
+    }
+
+    if (kind == "call") {
+        if (!probes) return false;
+        if (live) return probes->armLive(arg);
+        probes->configure(arg); // resolved on module load
+        return true;
+    }
+    if (!triggers) return false;
+    if (kind == "alloc") { triggers->add(SnapshotTriggers::Kind::Alloc, arg, "alloc:" + arg); return true; }
+    if (kind == "throw") { triggers->add(SnapshotTriggers::Kind::Throw, arg, arg.empty() ? "throw" : "throw:" + arg); return true; }
+    if (kind == "gc")    { triggers->add(SnapshotTriggers::Kind::Gc, arg, arg.empty() ? "gc" : "gc:" + arg); return true; }
+    return false; // unknown kind
+}
+
+void Profiler::fireTrigger(const std::string& display) {
+    if (control) {
+        control->sendEvent({"snapshot-trigger", display});
+    }
 }
 
 HRESULT STDMETHODCALLTYPE Profiler::Shutdown() {
@@ -244,18 +294,21 @@ HRESULT STDMETHODCALLTYPE Profiler::Shutdown() {
         trace->stop();
         trace->dump(tracePath, [this](FunctionID f) { return aggregator->resolveMethodName(f); });
     }
-    if (probes) {
-        probes->dump(probePath, [this](FunctionID f) { return aggregator->resolveMethodName(f); });
-    }
     if (correlate && aggregator) {
         aggregator->emitCorrelation(correlationPath);
     }
     return S_OK;
 }
 
-HRESULT STDMETHODCALLTYPE Profiler::ObjectAllocated(ObjectID objectId, ClassID) {
+HRESULT STDMETHODCALLTYPE Profiler::ObjectAllocated(ObjectID objectId, ClassID classId) {
     if (!isInitialized.load() || isShuttingDown.load()) {
         return S_OK;
+    }
+
+    // alloc: snapshot triggers — fire once when an instance of the armed type is allocated.
+    if (triggers && triggers->wantsAlloc()) {
+        if (auto display = triggers->onAlloc(aggregator->resolveTypeName(classId)))
+            fireTrigger(*display);
     }
 
     ULONG objectSize = 0;
@@ -314,20 +367,7 @@ HRESULT STDMETHODCALLTYPE Profiler::JITCompilationFinished(FunctionID, HRESULT, 
 HRESULT STDMETHODCALLTYPE Profiler::JITCachedFunctionSearchStarted(FunctionID, BOOL*) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::JITCachedFunctionSearchFinished(FunctionID, COR_PRF_JIT_CACHE) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::JITFunctionPitched(FunctionID) { return S_OK; }
-HRESULT STDMETHODCALLTYPE Profiler::JITInlining(FunctionID, FunctionID calleeId, BOOL* pfShouldInline) {
-    // Don't let armed methods get inlined away — the probe lives in their prologue,
-    // and an inlined body never goes through its own (re-JITted) entry.
-    if (probes && pfShouldInline != nullptr) {
-        ClassID classId = 0;
-        ModuleID moduleId = 0;
-        mdToken token = 0;
-        if (SUCCEEDED(corProfilerInfo->GetFunctionInfo(calleeId, &classId, &moduleId, &token)) &&
-            probes->isArmed(moduleId, token)) {
-            *pfShouldInline = FALSE;
-        }
-    }
-    return S_OK;
-}
+HRESULT STDMETHODCALLTYPE Profiler::JITInlining(FunctionID, FunctionID, BOOL*) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ThreadCreated(ThreadID) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ThreadDestroyed(ThreadID) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ThreadAssignedToOSThread(ThreadID, DWORD) { return S_OK; }
@@ -352,7 +392,17 @@ HRESULT STDMETHODCALLTYPE Profiler::MovedReferences(ULONG, ObjectID[], ObjectID[
 HRESULT STDMETHODCALLTYPE Profiler::ObjectsAllocatedByClass(ULONG, ClassID[], ULONG[]) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ObjectReferences(ObjectID, ClassID, ULONG, ObjectID[]) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::RootReferences(ULONG, ObjectID[]) { return S_OK; }
-HRESULT STDMETHODCALLTYPE Profiler::ExceptionThrown(ObjectID) { return S_OK; }
+HRESULT STDMETHODCALLTYPE Profiler::ExceptionThrown(ObjectID thrownObjectId) {
+    // throw: snapshot triggers — fire once when a matching exception type is thrown.
+    if (triggers && triggers->wantsThrow() && aggregator) {
+        ClassID classId = 0;
+        if (SUCCEEDED(corProfilerInfo->GetClassFromObject(thrownObjectId, &classId))) {
+            if (auto display = triggers->onThrow(aggregator->resolveTypeName(classId)))
+                fireTrigger(*display);
+        }
+    }
+    return S_OK;
+}
 HRESULT STDMETHODCALLTYPE Profiler::ExceptionSearchFunctionEnter(FunctionID) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ExceptionSearchFunctionLeave() { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ExceptionSearchFilterEnter(FunctionID) { return S_OK; }
@@ -371,13 +421,22 @@ HRESULT STDMETHODCALLTYPE Profiler::COMClassicVTableDestroyed(ClassID, REFGUID, 
 HRESULT STDMETHODCALLTYPE Profiler::ExceptionCLRCatcherFound() { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ExceptionCLRCatcherExecute() { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ThreadNameChanged(ThreadID, ULONG, WCHAR[]) { return S_OK; }
-HRESULT STDMETHODCALLTYPE Profiler::GarbageCollectionStarted(int, BOOL[], COR_PRF_GC_REASON) {
+HRESULT STDMETHODCALLTYPE Profiler::GarbageCollectionStarted(int cGenerations, BOOL generationCollected[], COR_PRF_GC_REASON) {
     if (aggregator) aggregator->beginGc();
+    // Remember the highest generation being collected, for gc: triggers.
+    maxGenCollected = 0;
+    for (int g = 0; g < cGenerations; ++g)
+        if (generationCollected[g]) maxGenCollected = g;
     return S_OK;
 }
 HRESULT STDMETHODCALLTYPE Profiler::SurvivingReferences(ULONG, ObjectID[], ULONG[]) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::GarbageCollectionFinished() {
     if (aggregator) aggregator->endGc();
+    // gc: snapshot triggers — fire once after a collection of the armed generation.
+    if (triggers && triggers->wantsGc()) {
+        if (auto display = triggers->onGc(maxGenCollected))
+            fireTrigger(*display);
+    }
     return S_OK;
 }
 HRESULT STDMETHODCALLTYPE Profiler::FinalizeableObjectQueued(DWORD, ObjectID) { return S_OK; }

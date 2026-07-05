@@ -71,7 +71,7 @@ public sealed class ProcessSupervisor : IDisposable
     /// When set, attaches the CLR allocation profiler at startup by exporting the
     /// <c>CORECLR_*</c> env vars (inherited by the launched .NET process).
     /// </param>
-    public SupervisedProcess Start(string path, IReadOnlyList<string> args, bool dumpOnCrash, string? profilerPath = null, string? captureDir = null, string? breakSpec = null, bool correlate = false)
+    public SupervisedProcess Start(string path, IReadOnlyList<string> args, bool dumpOnCrash, string? profilerPath = null, string? captureDir = null, string? snapshotOn = null, bool correlate = false)
     {
         if (captureDir is not null)
         {
@@ -103,13 +103,11 @@ public sealed class ProcessSupervisor : IDisposable
                 : Path.Combine(Path.GetTempPath(), $"sherlock-alloc-{Guid.NewGuid():n}.tsv");
             psi.Environment["SHERLOCK_PROFILE_OUT"] = ProfileOutPath;
 
-            // Method breakpoints: arm probes and route the folded hit profile next to the
-            // allocations. Snapshot-action hits arrive as events on the control channel.
-            if (!string.IsNullOrWhiteSpace(breakSpec))
+            // Snapshot triggers pre-armed at launch (call:/alloc:/gc:/throw:). A trigger
+            // firing arrives as a snapshot-trigger event on the control channel.
+            if (!string.IsNullOrWhiteSpace(snapshotOn))
             {
-                psi.Environment["SHERLOCK_BREAK"] = breakSpec;
-                string dir = captureDir ?? Path.GetTempPath();
-                psi.Environment["SHERLOCK_BREAK_OUT"] = Path.Combine(dir, "probes.tsv");
+                psi.Environment["SHERLOCK_SNAPSHOT_ON"] = snapshotOn;
             }
 
             // Correlation: track live objects and emit an address→allocation-stack
@@ -129,7 +127,7 @@ public sealed class ProcessSupervisor : IDisposable
             _control = new ProfilerControlServer(Path.Combine(ctlDir, "control.sock"));
             _control.EventReceived += fields =>
             {
-                if (fields.Length >= 3 && fields[1] == "probe-hit")
+                if (fields.Length >= 3 && fields[1] == "snapshot-trigger")
                 {
                     _probeHits.Enqueue(fields[2]);
                 }
@@ -262,6 +260,19 @@ public sealed class ProcessSupervisor : IDisposable
 
         (bool ok, string detail) = _control.RequestAsync("emit-correlation", timeout).GetAwaiter().GetResult();
         return ok && File.Exists(detail) ? detail : null;
+    }
+
+    /// <summary>
+    /// Arms a snapshot trigger at runtime over the control channel (call:/alloc:/gc:/throw:).
+    /// Returns (ok, detail): ok=false with a reason if the profiler can't arm it.
+    /// </summary>
+    public (bool Ok, string Detail) ArmSnapshotTrigger(string spec, TimeSpan timeout)
+    {
+        if (_control is null || _root is null || _root.HasExited)
+        {
+            return (false, "no live profiler");
+        }
+        return _control.RequestAsync("arm-trigger", timeout, spec).GetAwaiter().GetResult();
     }
 
     /// <summary>

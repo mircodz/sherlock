@@ -51,6 +51,7 @@ set(SOURCES
     src/profiler/aggregator.cpp
     src/profiler/trace.cpp
     src/profiler/probe.cpp
+    src/profiler/triggers.cpp
     src/control/channel.cpp)
 
 if(WIN32)
