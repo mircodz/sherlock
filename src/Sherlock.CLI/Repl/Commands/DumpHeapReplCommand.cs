@@ -21,7 +21,12 @@ public sealed class DumpHeapReplCommand : IReplCommand
     {
         string? filter = args.Length > 0 ? args[0] : null;
 
-        IReadOnlyList<HeapTypeStat> stats = new HeapAnalyzer(context.Session).GetStatistics(filter);
+        // Cached full histogram, filtered in-memory — no re-enumeration on repeat/filtered calls.
+        IReadOnlyList<HeapTypeStat> stats = context.Session.GetHistogram();
+        if (filter is not null)
+        {
+            stats = stats.Where(s => s.TypeName.Contains(filter, System.StringComparison.OrdinalIgnoreCase)).ToList();
+        }
 
         if (stats.Count == 0)
         {
@@ -31,7 +36,7 @@ public sealed class DumpHeapReplCommand : IReplCommand
             return;
         }
 
-        var table = new Table().Border(TableBorder.Rounded).Expand();
+        var table = new Table().Border(TableBorder.Square).Expand();
         table.AddColumn(new TableColumn("[bold]Type[/]"));
         table.AddColumn(new TableColumn("[bold]Count[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]Total[/]").RightAligned());
@@ -48,9 +53,9 @@ public sealed class DumpHeapReplCommand : IReplCommand
         foreach (HeapTypeStat stat in stats.Take(DefaultLimit))
         {
             table.AddRow(
-                Markup.Escape(stat.TypeName),
+                $"[aqua]{Markup.Escape(stat.TypeName)}[/]",
                 stat.Count.ToString("N0"),
-                ByteSize.Format((long)stat.TotalSize),
+                $"[bold green]{ByteSize.Format((long)stat.TotalSize)}[/]",
                 ByteSize.Format((long)stat.AverageSize));
         }
 
@@ -62,6 +67,6 @@ public sealed class DumpHeapReplCommand : IReplCommand
         }
 
         context.Console.MarkupLine(
-            $"[bold]{stats.Count:N0}[/] types, [bold]{totalCount:N0}[/] objects, [bold]{ByteSize.Format((long)totalSize)}[/] total.");
+            $"[bold]{stats.Count:N0}[/] types, [bold]{totalCount:N0}[/] objects, [bold green]{ByteSize.Format((long)totalSize)}[/] total.");
     }
 }

@@ -18,11 +18,7 @@ public sealed class DominatorsReplCommand : IReplCommand
 
     public void Execute(ReplContext context, string[] args)
     {
-        int limit = DefaultLimit;
-        if (args.Length > 0 && !int.TryParse(args[0], out limit))
-        {
-            limit = DefaultLimit;
-        }
+        int limit = args.Length > 0 && int.TryParse(args[0], out int n) && n > 0 ? n : DefaultLimit;
 
         DominatorTree tree = context.Console.Status()
             .Start("Building dominator tree…", _ => context.Session.GetDominatorTree());
@@ -30,7 +26,7 @@ public sealed class DominatorsReplCommand : IReplCommand
         IReadOnlyList<DominatorNode> top = tree.TopDominators(limit);
         ulong total = tree.TotalReachableBytes;
 
-        var table = new Table().Border(TableBorder.Rounded).Expand();
+        var table = new Table().Border(TableBorder.Square).Expand();
         table.AddColumn("[bold]Address[/]");
         table.AddColumn(new TableColumn("[bold]Retained[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]%[/]").RightAligned());
@@ -42,15 +38,15 @@ public sealed class DominatorsReplCommand : IReplCommand
             double pct = total == 0 ? 0 : 100.0 * node.RetainedSize / total;
             table.AddRow(
                 $"[grey]0x{node.Address:x}[/]",
-                ByteSize.Format((long)node.RetainedSize),
+                $"[bold green]{ByteSize.Format((long)node.RetainedSize)}[/]",
                 $"{pct:0.0}%",
                 ByteSize.Format((long)node.OwnSize),
-                Markup.Escape(node.TypeName));
+                $"[aqua]{Markup.Escape(TypeNames.Short(node.TypeName))}[/]");
         }
 
         context.Console.Write(table);
         context.Console.MarkupLine(
-            $"[grey]{tree.ObjectCount:N0} reachable objects,[/] [bold]{ByteSize.Format((long)total)}[/] [grey]retained from roots. " +
+            $"[grey]{tree.ObjectCount:N0} reachable objects,[/] [bold green]{ByteSize.Format((long)total)}[/] [grey]retained from roots. " +
             $"Drill in with[/] retained <address>.");
     }
 }

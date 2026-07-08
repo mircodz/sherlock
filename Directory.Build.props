@@ -1,6 +1,5 @@
 <Project>
   <PropertyGroup>
-    <!-- Single source of truth for the version: the `version` file at the repo root. -->
     <VersionFile>$(MSBuildThisFileDirectory)version</VersionFile>
     <Version>$([System.IO.File]::ReadAllText('$(VersionFile)').Trim())</Version>
     <AssemblyVersion>$(Version)</AssemblyVersion>

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using Microsoft.Diagnostics.Runtime;
@@ -6,6 +7,11 @@ using Sherlock.Core.Analysis;
 
 namespace Sherlock.Core;
 
+/// <summary>
+/// An open dump and its analysis facade. A dump is immutable, so expensive whole-heap
+/// results (dominator tree, type histogram) are computed once and cached for the session's
+/// lifetime; loading another snapshot creates a fresh session with a fresh cache.
+/// </summary>
 public sealed class DumpSession : IDisposable
 {
     private DumpSession(string path, DataTarget dataTarget, ClrInfo clrInfo, ClrRuntime runtime)
@@ -22,13 +28,15 @@ public sealed class DumpSession : IDisposable
     public ClrRuntime Runtime { get; }
 
     private DominatorTree? _dominatorTree;
+    private IReadOnlyList<HeapTypeStat>? _histogram;
 
-    /// <summary>
-    /// Returns the heap's dominator tree, building it on first use and caching it
-    /// for the lifetime of the session (it is expensive and immutable for a dump).
-    /// </summary>
+    /// <summary>The heap's dominator tree — built once, cached.</summary>
     public DominatorTree GetDominatorTree(CancellationToken cancellationToken = default) =>
         _dominatorTree ??= new DominatorAnalyzer(this).Build(cancellationToken);
+
+    /// <summary>The full per-type heap histogram — built once, cached. Filter in-memory.</summary>
+    public IReadOnlyList<HeapTypeStat> GetHistogram() =>
+        _histogram ??= new HeapAnalyzer(this).GetStatistics();
 
     /// <summary>
     /// Opens a dump file and attaches to the first CLR runtime it contains.

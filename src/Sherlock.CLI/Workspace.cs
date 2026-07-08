@@ -132,18 +132,25 @@ public sealed class Workspace : IDisposable
         return (IReadOnlyList<(SnapshotEntry, string)>?)captured ?? [];
     }
 
-    /// <summary>Collects a dump from a live process, catalogs it under the right session, and loads it.</summary>
+    /// <summary>Collects a dump from a live process (sl-side WriteDump), catalogs it, and loads it.</summary>
     public SnapshotEntry Collect(int pid, DumpKind kind, bool load = true)
     {
         string temp = DumpCollector.Collect(pid, kind, outputPath: null);
+        return Ingest(pid, temp, load);
+    }
 
-        // Attach to the run session this pid belongs to, else a fresh collect session.
+    /// <summary>
+    /// Catalogs an already-written dump file (e.g. one the profiler self-dumped) under the
+    /// run session this pid belongs to, and optionally loads it.
+    /// </summary>
+    public SnapshotEntry Ingest(int pid, string dumpPath, bool load = true)
+    {
         ProcessSupervisor? target = _targets.FirstOrDefault(t => t.RootPid == pid && t.SessionId is not null);
         Session session = target?.SessionId is { } sid && Store.GetSession(sid) is { } s
             ? s
             : Store.BeginSession(SessionKind.Collect, NameOf(pid), pid);
 
-        SnapshotEntry entry = Store.AddSnapshot(session, temp, moveIntoStore: true);
+        SnapshotEntry entry = Store.AddSnapshot(session, dumpPath, moveIntoStore: true);
         if (load)
         {
             Load(session, entry);

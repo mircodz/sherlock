@@ -22,6 +22,6 @@ public static class ByteSize
 
         return unit == 0
             ? $"{bytes} {Units[unit]}"
-            : $"{value:0.##} {Units[unit]} ({bytes:N0} bytes)";
+            : $"{value:0.##} {Units[unit]}";
     }
 }

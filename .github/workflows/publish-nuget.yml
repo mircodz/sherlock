@@ -11,7 +11,6 @@ permissions:
   packages: write
 
 jobs:
-  # Build the native profiler for every shipped RID; the tool bundles them all.
   native:
     name: native ${{ matrix.rid }}
     runs-on: ${{ matrix.os }}
@@ -88,20 +87,6 @@ jobs:
       - name: Pack
         run: dotnet pack src/Sherlock.CLI -c Release -o $OUT_DIR /p:Version=${{ steps.version.outputs.VERSION }}
 
-      - name: NuGet login
-        id: nuget_login
-        uses: NuGet/login@v1
-        with:
-          server: https://api.nuget.org/v3/index.json
-          user: ${{ secrets.NUGET_USER }}
-
-      - name: Push to NuGet.org
-        run: |
-          dotnet nuget push "$OUT_DIR"/*.nupkg \
-            --source "https://api.nuget.org/v3/index.json" \
-            --api-key "${{ steps.nuget_login.outputs.NUGET_API_KEY }}" \
-            --skip-duplicate
-
       - name: Push to GitHub Packages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -109,4 +94,21 @@ jobs:
           dotnet nuget push "$OUT_DIR"/*.nupkg \
             --source "https://nuget.pkg.github.com/${OWNER}/index.json" \
             --api-key "$GITHUB_TOKEN" \
+            --skip-duplicate
+
+      - name: NuGet.org login
+        id: nuget_login
+        continue-on-error: true
+        uses: NuGet/login@v1
+        with:
+          server: https://api.nuget.org/v3/index.json
+          user: ${{ secrets.NUGET_USER }}
+
+      - name: Push to NuGet.org
+        if: steps.nuget_login.outcome == 'success'
+        continue-on-error: true
+        run: |
+          dotnet nuget push "$OUT_DIR"/*.nupkg \
+            --source "https://api.nuget.org/v3/index.json" \
+            --api-key "${{ steps.nuget_login.outputs.NUGET_API_KEY }}" \
             --skip-duplicate

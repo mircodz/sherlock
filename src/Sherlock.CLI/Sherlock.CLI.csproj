@@ -16,12 +16,11 @@
     <RootNamespace>Sherlock.CLI</RootNamespace>
     <AssemblyName>sherlock</AssemblyName>
 
-    <!-- Tool configuration -->
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>sl</ToolCommandName>
     <PackageId>sherlock-tools</PackageId>
     <Authors>Mirco De Zorzi</Authors>
-    <Description>Sherlock — a .NET memory dump analyzer with an interactive REPL.</Description>
+    <Description>Sherlock</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageLicenseFile>LICENSE</PackageLicenseFile>
   </PropertyGroup>
@@ -32,12 +31,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Native allocation profiler, one shared library per RID. Built by
-         src/native (build.sh / build.cmd) and populated across platforms by CI;
-         copied next to the tool and resolved at runtime by ProfilerLibrary.Rid().
-         The binaries themselves are git-ignored (see runtimes/.gitignore). -->
-    <None Include="runtimes/**/*.dylib;runtimes/**/*.so;runtimes/**/*.dll"
-          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="runtimes/**/*.dylib;runtimes/**/*.so;runtimes/**/*.dll" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

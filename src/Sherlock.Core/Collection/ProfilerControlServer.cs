@@ -51,8 +51,8 @@ public sealed class ProfilerControlServer : IDisposable
         _ = Task.Run(AcceptAndServeAsync);
     }
 
-    /// <summary>Sends a request and awaits its response. Returns (ok, detail).</summary>
-    public async Task<(bool Ok, string Detail)> RequestAsync(string cmd, TimeSpan timeout, params string[] args)
+    /// <summary>Sends a request and awaits its response. Returns (ok, detail fields after ok/err).</summary>
+    public async Task<(bool Ok, string[] Fields)> RequestAsync(string cmd, TimeSpan timeout, params string[] args)
     {
         try
         {
@@ -60,13 +60,13 @@ public sealed class ProfilerControlServer : IDisposable
         }
         catch
         {
-            return (false, "profiler not connected");
+            return (false, []);
         }
 
         Socket? client = _client;
         if (client is null)
         {
-            return (false, "profiler not connected");
+            return (false, []);
         }
 
         int id = Interlocked.Increment(ref _nextId);
@@ -81,12 +81,13 @@ public sealed class ProfilerControlServer : IDisposable
         {
             string[] res = await tcs.Task.WaitAsync(timeout);
             bool ok = res.Length >= 3 && res[2] == "ok";
-            return (ok, res.Length >= 4 ? res[3] : "");
+            string[] fields = res.Length > 3 ? res[3..] : [];
+            return (ok, fields);
         }
         catch
         {
             _pending.TryRemove(id, out _);
-            return (false, "timeout");
+            return (false, []);
         }
     }
 

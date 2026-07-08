@@ -19,14 +19,14 @@ public sealed class InfoReplCommand : IReplCommand
 
         var grid = new Grid().AddColumn().AddColumn();
         grid.AddRow("[grey]Dump[/]", Markup.Escape(Path.GetFileName(info.DumpPath)));
-        grid.AddRow("[grey]File size[/]", ByteSize.Format(info.FileSizeBytes));
+        grid.AddRow("[grey]File size[/]", $"[bold green]{ByteSize.Format(info.FileSizeBytes)}[/]");
         grid.AddRow("[grey]Runtime[/]", Markup.Escape($"{info.ClrFlavor} {info.ClrVersion}"));
         grid.AddRow("[grey]Architecture[/]", Markup.Escape(info.Architecture));
         grid.AddRow("[grey]Platform[/]", Markup.Escape(info.Platform));
         grid.AddRow("[grey]Process id[/]", info.ProcessId?.ToString() ?? "[grey50]n/a[/]");
         grid.AddRow("[grey]GC mode[/]", info.ServerGc ? "Server" : "Workstation");
         grid.AddRow("[grey]Heaps[/]", info.HeapCount.ToString());
-        grid.AddRow("[grey]Managed heap[/]", ByteSize.Format((long)info.TotalHeapBytes));
+        grid.AddRow("[grey]Managed heap[/]", $"[bold green]{ByteSize.Format((long)info.TotalHeapBytes)}[/]");
         grid.AddRow("[grey]Threads[/]", info.ThreadCount.ToString());
         grid.AddRow("[grey]Modules[/]", info.ModuleCount.ToString());
 

@@ -144,6 +144,7 @@ private:
     std::unique_ptr<ProbeManager> probes;      // call: triggers via ReJIT
     std::unique_ptr<SnapshotTriggers> triggers; // alloc:/gc:/throw: triggers via callbacks
     int maxGenCollected = 0;                    // set in GarbageCollectionStarted
+    std::atomic<std::uint64_t> gcCount{0};      // GCs seen — for snapshot drift detection
 
     bool correlate = false;           // SHERLOCK_CORRELATE: track live objects for snapshot join
     std::string correlationPath;

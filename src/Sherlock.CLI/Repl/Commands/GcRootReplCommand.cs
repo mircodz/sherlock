@@ -59,7 +59,7 @@ public sealed class GcRootReplCommand : IReplCommand
             {
                 GcRootNode node = path.Path[i];
                 string indent = new string(' ', i * 2);
-                context.Console.MarkupLineInterpolated($"{indent}[grey]->[/] 0x{node.Address:x} [aqua]{node.TypeName}[/]");
+                context.Console.MarkupLineInterpolated($"{indent}[grey]->[/] 0x{node.Address:x} [aqua]{TypeNames.Short(node.TypeName)}[/]");
             }
         }
 

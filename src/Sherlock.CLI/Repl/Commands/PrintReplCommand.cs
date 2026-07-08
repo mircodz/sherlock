@@ -7,14 +7,14 @@ using Spectre.Console;
 namespace Sherlock.CLI.Repl.Commands;
 
 /// <summary>Inspects a single object by address: type, size and every field value (SOS <c>dumpobj</c>).</summary>
-public sealed class DumpObjReplCommand : IReplCommand
+public sealed class PrintReplCommand : IReplCommand
 {
     private const int DefaultElementLimit = 20;
 
-    public string Name => "dumpobj";
-    public IReadOnlyList<string> Aliases => ["do", "print", "p"];
-    public string Summary => "Inspect one object by address: its type, size and fields.";
-    public string Usage => "dumpobj <address> [element-count]";
+    public string Name => "print";
+    public IReadOnlyList<string> Aliases => ["p", "do"];
+    public string Summary => "Print one object by address: its type, size and fields (px for a graph).";
+    public string Usage => "print <address> [element-count]";
 
     public void Execute(ReplContext context, string[] args)
     {
@@ -35,7 +35,7 @@ public sealed class DumpObjReplCommand : IReplCommand
         ObjectDetail detail = new ObjectInspector(context.Session).Inspect(address);
 
         context.Console.MarkupLineInterpolated($"[bold]{detail.TypeName}[/]");
-        context.Console.MarkupLineInterpolated($"  [grey]address[/] 0x{detail.Address:x}   [grey]size[/] {ByteSize.Format((long)detail.Size)}");
+        context.Console.MarkupLineInterpolated($"  [grey]address[/] 0x{detail.Address:x}   [grey]size[/] [bold green]{ByteSize.Format((long)detail.Size)}[/]");
 
         if (detail.StringValue is not null)
         {
@@ -55,7 +55,7 @@ public sealed class DumpObjReplCommand : IReplCommand
             return;
         }
 
-        var table = new Table().Border(TableBorder.Rounded);
+        var table = new Table().Border(TableBorder.Square);
         table.AddColumn(new TableColumn("[bold]Offset[/]").RightAligned());
         table.AddColumn("[bold]Field[/]");
         table.AddColumn("[bold]Type[/]");
@@ -66,7 +66,7 @@ public sealed class DumpObjReplCommand : IReplCommand
             table.AddRow(
                 $"[grey]+0x{field.Offset:x}[/]",
                 Markup.Escape(field.Name),
-                Markup.Escape(ShortTypeName(field.TypeName)),
+                Markup.Escape(TypeNames.Short(field.TypeName)),
                 Markup.Escape(field.Value));
         }
 
@@ -90,16 +90,7 @@ public sealed class DumpObjReplCommand : IReplCommand
         int remaining = count - shown;
         if (remaining > 0)
         {
-            console.MarkupLineInterpolated($"  [grey]… {remaining} more (dumpobj 0x{detail.Address:x} <n> to show more)[/]");
+            console.MarkupLineInterpolated($"  [grey]… {remaining} more (print 0x{detail.Address:x} <n> to show more)[/]");
         }
-    }
-
-    /// <summary>Trims a namespace-qualified type to its last segment for compactness.</summary>
-    private static string ShortTypeName(string typeName)
-    {
-        int generic = typeName.IndexOf('<');
-        string head = generic < 0 ? typeName : typeName[..generic];
-        int dot = head.LastIndexOf('.');
-        return dot < 0 ? typeName : typeName[(dot + 1)..];
     }
 }

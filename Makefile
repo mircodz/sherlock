@@ -1,6 +1,5 @@
 .PHONY: help build build-release native test clean pack install uninstall reinstall setup all
 
-# Variables
 VERSION   := $(shell cat version)
 NUPKG_DIR := ./nupkgs
 TOOL_NAME := sl
@@ -60,15 +59,15 @@ setup: ## Restore packages
 	dotnet restore $(SOLUTION)
 
 # Release: bump the version file
-bump-major: ## Bump major version (1.2.3 -> 2.0.0)
+bump-major: ## Bump major version
 	@echo $(VERSION) | awk -F. '{print $$1+1".0.0"}' > version
 	@echo "Version: $(VERSION) -> $$(cat version)"
 
-bump-minor: ## Bump minor version (1.2.3 -> 1.3.0)
+bump-minor: ## Bump minor version
 	@echo $(VERSION) | awk -F. '{print $$1"."$$2+1".0"}' > version
 	@echo "Version: $(VERSION) -> $$(cat version)"
 
-bump-patch: ## Bump patch version (1.2.3 -> 1.2.4)
+bump-patch: ## Bump patch version
 	@echo $(VERSION) | awk -F. '{print $$1"."$$2"."$$3+1}' > version
 	@echo "Version: $(VERSION) -> $$(cat version)"
 

@@ -1,8 +1,5 @@
-using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
-using System.Linq;
 using Microsoft.Diagnostics.Runtime;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core.Profiling;
@@ -26,7 +23,7 @@ public sealed class WhoAllocReplCommand : IReplCommand
 
     public void Execute(ReplContext context, string[] args)
     {
-        if (args.Length == 0 || !TryParseAddress(args[0], out ulong address))
+        if (args.Length == 0 || !Addresses.TryParse(args[0], out ulong address))
         {
             context.Console.MarkupLineInterpolated($"[red]error:[/] usage: {Usage} (hex address, e.g. 0x141d2d0c0)");
             return;
@@ -68,11 +65,5 @@ public sealed class WhoAllocReplCommand : IReplCommand
             string frame = frames[frames.Length - 1 - i]; // reverse to leaf→root
             context.Console.MarkupLineInterpolated($"  [aqua]#{i}[/] {frame}");
         }
-    }
-
-    private static bool TryParseAddress(string s, out ulong address)
-    {
-        string hex = s.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? s[2..] : s;
-        return ulong.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out address);
     }
 }

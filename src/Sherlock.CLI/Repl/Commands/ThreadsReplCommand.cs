@@ -13,7 +13,7 @@ namespace Sherlock.CLI.Repl.Commands;
 public sealed class ThreadsReplCommand : IReplCommand
 {
     public string Name => "threads";
-    public IReadOnlyList<string> Aliases => ["t", "clrstack"];
+    public IReadOnlyList<string> Aliases => ["t"];
     public string Summary => "List managed threads, or show one thread's stack with `threads <id>`.";
     public string Usage => "threads [managed-thread-id]";
 
@@ -44,7 +44,7 @@ public sealed class ThreadsReplCommand : IReplCommand
 
         IReadOnlyList<ThreadInfo> threads = analyzer.GetThreads(includeStacks: false);
 
-        var table = new Table().Border(TableBorder.Rounded);
+        var table = new Table().Border(TableBorder.Square);
         table.AddColumn(new TableColumn("[bold]Managed[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]OS[/]").RightAligned());
         table.AddColumn("[bold]Flags[/]");

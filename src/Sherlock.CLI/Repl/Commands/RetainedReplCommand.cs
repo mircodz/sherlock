@@ -15,7 +15,6 @@ public sealed class RetainedReplCommand : IReplCommand
     private const int ChildLimit = 15;
 
     public string Name => "retained";
-    public IReadOnlyList<string> Aliases => ["objsize"];
     public string Summary => "Show an object's retained size and what it dominates.";
     public string Usage => "retained <address>";
 
@@ -44,7 +43,7 @@ public sealed class RetainedReplCommand : IReplCommand
         }
 
         context.Console.MarkupLineInterpolated($"[bold]{node.TypeName}[/] [grey]@ 0x{node.Address:x}[/]");
-        context.Console.MarkupLineInterpolated($"  [grey]shallow[/] {ByteSize.Format((long)node.OwnSize)}   [grey]retained[/] [bold]{ByteSize.Format((long)node.RetainedSize)}[/]");
+        context.Console.MarkupLineInterpolated($"  [grey]shallow[/] {ByteSize.Format((long)node.OwnSize)}   [grey]retained[/] [bold green]{ByteSize.Format((long)node.RetainedSize)}[/]");
 
         IReadOnlyList<DominatorNode> children = tree.ImmediateChildren(address, ChildLimit);
         if (children.Count == 0)
@@ -56,7 +55,7 @@ public sealed class RetainedReplCommand : IReplCommand
         foreach (DominatorNode child in children)
         {
             context.Console.MarkupLineInterpolated(
-                $"  [bold]{ByteSize.Format((long)child.RetainedSize)}[/]  [grey]0x{child.Address:x}[/]  [aqua]{child.TypeName}[/]");
+                $"  [bold green]{ByteSize.Format((long)child.RetainedSize)}[/]  [grey]0x{child.Address:x}[/]  [aqua]{TypeNames.Short(child.TypeName)}[/]");
         }
     }
 }

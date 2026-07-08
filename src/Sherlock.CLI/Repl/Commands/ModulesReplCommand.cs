@@ -13,7 +13,7 @@ namespace Sherlock.CLI.Repl.Commands;
 public sealed class ModulesReplCommand : IReplCommand
 {
     public string Name => "modules";
-    public IReadOnlyList<string> Aliases => ["assemblies", "lm"];
+    public IReadOnlyList<string> Aliases => ["lm"];
     public string Summary => "List loaded managed modules/assemblies.";
     public string Usage => "modules [name-filter]";
 
@@ -33,7 +33,7 @@ public sealed class ModulesReplCommand : IReplCommand
             return;
         }
 
-        var table = new Table().Border(TableBorder.Rounded).Expand();
+        var table = new Table().Border(TableBorder.Square).Expand();
         table.AddColumn("[bold]Module[/]");
         table.AddColumn(new TableColumn("[bold]ImageBase[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]Size[/]").RightAligned());
@@ -44,7 +44,7 @@ public sealed class ModulesReplCommand : IReplCommand
             table.AddRow(
                 Markup.Escape(name),
                 module.ImageBase == 0 ? "-" : $"[grey]0x{module.ImageBase:x}[/]",
-                module.Size == 0 ? "-" : ByteSize.Format((long)module.Size));
+                module.Size == 0 ? "-" : $"[bold green]{ByteSize.Format((long)module.Size)}[/]");
         }
 
         context.Console.Write(table);

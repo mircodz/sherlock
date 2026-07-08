@@ -45,15 +45,19 @@ public sealed class SnapshotReplCommand : IReplCommand
 
     internal static void Collect(ReplContext context, int pid)
     {
-        // If this pid is a correlation-enabled run, settle addresses (force GC) and emit
-        // the live-object → allocation-stack sidecar *before* the dump, so the two line up.
+        // For a correlation run, force a GC and emit the live-object → allocation-stack sidecar
+        // *right before* the dump so their addresses line up (the dump itself is the runtime's
+        // own in-process diagnostic-server dump — see Workspace.Collect / DumpCollector).
         ProcessSupervisor? correlated = context.Workspace.Targets
             .FirstOrDefault(t => t.RootPid == pid && t.HasCorrelation && !t.RootExited);
         string? sidecar = null;
+        long gcAtEmit = -1;
         if (correlated is not null)
         {
-            sidecar = context.Console.Status().Start("Forcing GC + emitting allocation provenance…",
+            (string? path, long gc) = context.Console.Status().Start("Forcing GC + emitting allocation provenance…",
                 _ => correlated.RequestCorrelationSnapshot(TimeSpan.FromSeconds(10)));
+            sidecar = path;
+            gcAtEmit = gc;
         }
 
         SnapshotEntry entry;
@@ -68,10 +72,9 @@ public sealed class SnapshotReplCommand : IReplCommand
             return;
         }
 
-        // Persist the sidecar next to the dump so the snapshot carries its own allocation
-        // provenance; `whoalloc <address>` reads it back.
+        // Persist the sidecar next to the dump so the snapshot carries its own provenance.
         bool withProvenance = false;
-        if (sidecar is not null)
+        if (sidecar is not null && File.Exists(sidecar))
         {
             try { File.Copy(sidecar, entry.Path + ".corr.tsv", overwrite: true); withProvenance = true; }
             catch { /* keep the dump even if the sidecar copy fails */ }
@@ -81,11 +84,18 @@ public sealed class SnapshotReplCommand : IReplCommand
             $"[green]saved & loaded[/] [bold]{entry.Id}[/] [grey]({ByteSize.Format(entry.SizeBytes)})[/]");
         if (withProvenance)
         {
-            context.Console.MarkupLine("[grey]Allocation provenance captured; use[/] whoalloc <address> [grey]to see where an object was allocated.[/]");
-        }
-        else if (correlated is not null)
-        {
-            context.Console.MarkupLine("[yellow]warning:[/] correlation capture failed; snapshot has no allocation provenance.");
+            // Drift check: if a GC ran between the emit and the dump, some objects moved and
+            // the address join is stale. Detect it (we can't prevent it with an external dump).
+            bool drifted = correlated is not null && gcAtEmit >= 0 &&
+                           correlated.GcCount(TimeSpan.FromSeconds(3)) is long now && now >= 0 && now != gcAtEmit;
+            if (drifted)
+            {
+                context.Console.MarkupLine("[yellow]⚠ a GC ran during capture[/] [grey]— some allocation provenance may be stale; re-snapshot for exact results.[/]");
+            }
+            else
+            {
+                context.Console.MarkupLine("[grey]Allocation provenance captured (exact); use[/] whoalloc <address> [grey]to see where an object was allocated.[/]");
+            }
         }
     }
 }

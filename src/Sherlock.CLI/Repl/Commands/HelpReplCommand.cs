@@ -19,8 +19,8 @@ public sealed class HelpReplCommand : IReplCommand
     /// </param>
     public HelpReplCommand(Func<IEnumerable<IReplCommand>> commands) => _commands = commands;
 
-    // Categories are printed in this order; any others follow alphabetically.
-    private static readonly string[] CategoryOrder = ["Analysis", "Live", "Library", "Session"];
+    // Categories are printed in this order; any others follow after.
+    private static readonly string[] CategoryOrder = ["Analysis", "Allocation profiling", "Live", "Library", "Session"];
 
     public string Name => "help";
     public IReadOnlyList<string> Aliases => ["?", "h"];

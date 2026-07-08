@@ -48,6 +48,7 @@ public sealed class ProcessSupervisor : IDisposable
     /// <summary>Capabilities the attached profiler advertised over the control channel.</summary>
     public IReadOnlyList<string> ProfilerFeatures => _control?.Features ?? [];
 
+
     /// <summary>Library session id this run belongs to, if launched into the library.</summary>
     public string? SessionId { get; set; }
 
@@ -251,15 +252,34 @@ public sealed class ProcessSupervisor : IDisposable
     /// path once written, or null on timeout / if correlation isn't available. Call the
     /// dump immediately after so addresses line up.
     /// </summary>
-    public string? RequestCorrelationSnapshot(TimeSpan timeout)
+    public (string? Sidecar, long GcAtEmit) RequestCorrelationSnapshot(TimeSpan timeout)
     {
         if (_control is null || _root is null || _root.HasExited)
         {
-            return null;
+            return (null, -1);
         }
 
-        (bool ok, string detail) = _control.RequestAsync("emit-correlation", timeout).GetAwaiter().GetResult();
-        return ok && File.Exists(detail) ? detail : null;
+        (bool ok, string[] fields) = _control.RequestAsync("emit-correlation", timeout).GetAwaiter().GetResult();
+        if (!ok)
+        {
+            return (null, -1);
+        }
+
+        string path = fields.Length > 0 ? fields[0] : CorrelationOutPath ?? "";
+        long gc = fields.Length > 1 && long.TryParse(fields[1], out long g) ? g : -1;
+        return (File.Exists(path) ? path : null, gc);
+    }
+
+    /// <summary>The number of GCs the profiler has seen — used to detect drift across a snapshot.</summary>
+    public long GcCount(TimeSpan timeout)
+    {
+        if (_control is null || _root is null || _root.HasExited)
+        {
+            return -1;
+        }
+
+        (bool ok, string[] fields) = _control.RequestAsync("gc-count", timeout).GetAwaiter().GetResult();
+        return ok && fields.Length > 0 && long.TryParse(fields[0], out long g) ? g : -1;
     }
 
     /// <summary>
@@ -272,7 +292,8 @@ public sealed class ProcessSupervisor : IDisposable
         {
             return (false, "no live profiler");
         }
-        return _control.RequestAsync("arm-trigger", timeout, spec).GetAwaiter().GetResult();
+        (bool ok, string[] fields) = _control.RequestAsync("arm-trigger", timeout, spec).GetAwaiter().GetResult();
+        return (ok, fields.Length > 0 ? fields[0] : (ok ? "armed" : "failed"));
     }
 
     /// <summary>
@@ -287,8 +308,9 @@ public sealed class ProcessSupervisor : IDisposable
             return null;
         }
 
-        (bool ok, string detail) = _control.RequestAsync("flush-allocations", timeout).GetAwaiter().GetResult();
-        return ok && File.Exists(detail) ? detail : null;
+        (bool ok, string[] fields) = _control.RequestAsync("flush-allocations", timeout).GetAwaiter().GetResult();
+        string path = fields.Length > 0 ? fields[0] : "";
+        return ok && File.Exists(path) ? path : null;
     }
 
     /// <summary>The live supervised subtree (root + descendants), root first.</summary>

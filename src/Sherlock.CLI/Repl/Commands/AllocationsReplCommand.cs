@@ -19,28 +19,43 @@ public sealed class AllocationsReplCommand : IReplCommand
 
     public string Name => "allocations";
     public IReadOnlyList<string> Aliases => ["alloc"];
-    public string Summary => "Allocation call tree (allocated vs. survived bytes). --flat for a leaf list.";
+    public string Summary => "Allocation views: call tree (default), hot methods, callers.";
     public string Category => "Allocation profiling";
-    public string Usage => "allocations [--flat] [path] [count]";
+    public string Usage => "allocations [tree|hot|callers <method>] [path] [count]";
+
+    private static bool IsMode(string arg) => arg is "tree" or "hot" or "callers";
 
     public void Execute(ReplContext context, string[] args)
     {
-        bool flat = false;
         int limit = DefaultLimit;
         string? path = null;
-        foreach (string arg in args)
+        string mode = "tree";
+        string? method = null;
+
+        int i = 0;
+        if (args.Length > 0 && IsMode(args[0]))
         {
-            if (arg == "--flat")
+            mode = args[0];
+            i = 1;
+            if (mode == "callers")
             {
-                flat = true;
+                if (args.Length <= i)
+                {
+                    context.Console.MarkupLineInterpolated($"[red]error:[/] usage: {Usage}");
+                    return;
+                }
+                method = args[i++];
             }
-            else if (int.TryParse(arg, out int n))
+        }
+        for (; i < args.Length; i++)
+        {
+            if (int.TryParse(args[i], out int n))
             {
                 limit = n;
             }
             else
             {
-                path = arg;
+                path = args[i];
             }
         }
 
@@ -83,17 +98,15 @@ public sealed class AllocationsReplCommand : IReplCommand
             return;
         }
 
-        if (flat)
+        switch (mode)
         {
-            RenderFlat(context.Console, profile, limit);
-        }
-        else
-        {
-            RenderTree(context.Console, profile);
+            case "hot": RenderHot(context.Console, profile, limit); break;
+            case "callers": RenderCallers(context.Console, profile, method!); break;
+            default: RenderTree(context.Console, profile); break;
         }
 
         context.Console.MarkupLineInterpolated(
-            $"[grey]{profile.Sites.Count:N0} call paths,[/] [bold]{ByteSize.Format(profile.TotalAllocBytes)}[/] [grey]allocated, [/][bold]{ByteSize.Format(profile.TotalSurvivedBytes)}[/] [grey]survived first GC.[/]");
+            $"[grey]{profile.Sites.Count:N0} call paths,[/] [bold green]{ByteSize.Format(profile.TotalAllocBytes)}[/] [grey]allocated,[/] [bold green]{ByteSize.Format(profile.TotalSurvivedBytes)}[/] [grey]survived first GC.[/]");
     }
 
     /// <summary>Top-down call tree: nodes carry inclusive allocated (+survived) bytes.</summary>
@@ -103,8 +116,66 @@ public sealed class AllocationsReplCommand : IReplCommand
         long total = root.AllocBytes == 0 ? 1 : root.AllocBytes;
         const double minFraction = 0.01; // hide branches under 1% of total
 
-        var tree = new Tree("[bold]allocations[/] [grey](inclusive bytes; % of total; survived %)[/]");
+        var tree = new Tree("[bold gold1]Allocation call tree[/] [grey](inclusive bytes · % of total · survived)[/]")
+        {
+            Style = new Style(foreground: Color.Grey),
+        };
         AddChildren(tree, root, total, minFraction);
+        console.Write(tree);
+    }
+
+    /// <summary>Hot methods: bottom-up, self bytes (allocated directly by the method) first.</summary>
+    private static void RenderHot(IAnsiConsole console, AllocationProfile profile, int limit)
+    {
+        var self = new Dictionary<string, (long Bytes, long Count)>();
+        var inclusive = new Dictionary<string, long>();
+        foreach (AllocationSite site in profile.Sites)
+        {
+            string leaf = site.Frames[^1];
+            (long Bytes, long Count) cur = self.GetValueOrDefault(leaf);
+            self[leaf] = (cur.Bytes + site.AllocBytes, cur.Count + site.AllocCount);
+            foreach (string frame in site.Frames.Distinct()) // inclusive = passes through, once per stack
+            {
+                inclusive[frame] = inclusive.GetValueOrDefault(frame) + site.AllocBytes;
+            }
+        }
+
+        var table = new Table().Border(TableBorder.Square).Expand();
+        table.AddColumn(new TableColumn("[bold]Self[/]").RightAligned());
+        table.AddColumn(new TableColumn("[bold]Inclusive[/]").RightAligned());
+        table.AddColumn(new TableColumn("[bold]Count[/]").RightAligned());
+        table.AddColumn("[bold]Method[/]");
+
+        foreach ((string method, (long Bytes, long Count) val) in self.OrderByDescending(kv => kv.Value.Bytes).Take(limit))
+        {
+            table.AddRow(
+                $"[bold green]{ByteSize.Format(val.Bytes)}[/]",
+                $"[green]{ByteSize.Format(inclusive.GetValueOrDefault(method))}[/]",
+                $"[grey]{Counts.Compact(val.Count)}×[/]",
+                Markup.Escape(method));
+        }
+
+        console.Write(table);
+    }
+
+    /// <summary>Back-traces: the inverted caller tree of a method, weighted by bytes through it.</summary>
+    private static void RenderCallers(IAnsiConsole console, AllocationProfile profile, string method)
+    {
+        AllocationTreeNode root = AllocationTreeNode.BuildCallers(profile, method);
+        if (root.AllocBytes == 0)
+        {
+            console.MarkupLineInterpolated(
+                $"[yellow]No allocations flow through[/] {method}[yellow].[/] [grey]Check the name with[/] allocations hot[grey].[/]");
+            return;
+        }
+
+        long total = root.AllocBytes;
+        var tree = new Tree(
+            $"[bold gold1]{Markup.Escape(method)}[/] [grey]— callers ·[/] [bold green]{ByteSize.Format(total)}[/] [grey]allocated through it[/]")
+        {
+            Style = new Style(foreground: Color.Grey),
+        };
+        AddChildren(tree, root, total, 0.01);
         console.Write(tree);
     }
 
@@ -118,7 +189,8 @@ public sealed class AllocationsReplCommand : IReplCommand
             double pct = 100.0 * child.AllocBytes / total;
             double survPct = child.AllocBytes == 0 ? 0 : 100.0 * child.SurvivedBytes / child.AllocBytes;
             TreeNode tn = parent.AddNode(
-                $"[bold]{ByteSize.Format(child.AllocBytes)}[/] [grey]{pct:0.0}%[/]  {Markup.Escape(child.Frame)} [grey]· {survPct:0}% surv[/]");
+                $"[bold green]{ByteSize.Format(child.AllocBytes)}[/] [grey]{pct:0.0}% · {Counts.Compact(child.AllocCount)}×[/]  " +
+                $"{Markup.Escape(child.Frame)} [grey]· {survPct:0}% surv[/]");
             AddChildren(tn, child, total, minFraction);
         }
 
@@ -130,25 +202,4 @@ public sealed class AllocationsReplCommand : IReplCommand
         }
     }
 
-    /// <summary>The old flat view keyed by leaf method, biggest first.</summary>
-    private static void RenderFlat(IAnsiConsole console, AllocationProfile profile, int limit)
-    {
-        var table = new Table().Border(TableBorder.Rounded).Expand();
-        table.AddColumn(new TableColumn("[bold]Allocated[/]").RightAligned());
-        table.AddColumn(new TableColumn("[bold]Survived[/]").RightAligned());
-        table.AddColumn(new TableColumn("[bold]%[/]").RightAligned());
-        table.AddColumn("[bold]Stack (root → leaf)[/]");
-
-        foreach (AllocationSite site in profile.Sites.OrderByDescending(s => s.AllocBytes).Take(limit))
-        {
-            double survivedPct = site.AllocBytes == 0 ? 0 : 100.0 * site.SurvivedBytes / site.AllocBytes;
-            table.AddRow(
-                $"{ByteSize.Format(site.AllocBytes)} [grey]({site.AllocCount:N0})[/]",
-                $"{ByteSize.Format(site.SurvivedBytes)} [grey]({site.SurvivedCount:N0})[/]",
-                $"{survivedPct:0}%",
-                Markup.Escape(string.Join(" → ", site.Frames)));
-        }
-
-        console.Write(table);
-    }
 }

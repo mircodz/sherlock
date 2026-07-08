@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using Sherlock.Core.Analysis;
 using Spectre.Console;
@@ -29,7 +30,7 @@ public sealed class ExceptionsReplCommand : IReplCommand
             string thread = ex.ThreadId is int id
                 ? $" [yellow](in-flight on thread {id})[/]"
                 : "";
-            context.Console.MarkupLineInterpolated($"[red]{ex.TypeName}[/] [grey]@ 0x{ex.Address:x}[/]");
+            context.Console.MarkupLineInterpolated($"[red]{TypeNames.Short(ex.TypeName)}[/] [grey]@ 0x{ex.Address:x}[/]");
             context.Console.MarkupInterpolated($"  {ex.Message ?? "<no message>"}");
             context.Console.MarkupLine(thread);
             if (ex.StackFrameCount > 0)

@@ -144,6 +144,7 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
         correlationPath = (corrOut != nullptr && corrOut[0] != '\0') ? corrOut : "sherlock-correlation.txt";
     }
 
+
     if (traceCalls) {
         const char* traceOut = std::getenv("SHERLOCK_TRACE_OUT");
         tracePath = (traceOut != nullptr && traceOut[0] != '\0') ? traceOut : "sherlock-trace.txt";
@@ -224,7 +225,12 @@ control::Reply Profiler::handleControl(std::string_view cmd, std::span<const std
             corProfilerInfo->ForceGC(); // settle addresses before emitting
         }
         aggregator->emitCorrelation(correlationPath);
-        return control::Reply::success(correlationPath);
+        // Return the GC count at emit; sl re-checks after the dump to detect drift (a GC
+        // between emit and dump would move objects and invalidate the address join).
+        return control::Reply::success(correlationPath + "\t" + std::to_string(gcCount.load()));
+    }
+    if (cmd == "gc-count") {
+        return control::Reply::success(std::to_string(gcCount.load()));
     }
     if (cmd == "flush-allocations") {
         if (!aggregator) {
@@ -422,6 +428,7 @@ HRESULT STDMETHODCALLTYPE Profiler::ExceptionCLRCatcherFound() { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ExceptionCLRCatcherExecute() { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ThreadNameChanged(ThreadID, ULONG, WCHAR[]) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::GarbageCollectionStarted(int cGenerations, BOOL generationCollected[], COR_PRF_GC_REASON) {
+    gcCount.fetch_add(1, std::memory_order_relaxed); // for snapshot drift detection
     if (aggregator) aggregator->beginGc();
     // Remember the highest generation being collected, for gc: triggers.
     maxGenCollected = 0;

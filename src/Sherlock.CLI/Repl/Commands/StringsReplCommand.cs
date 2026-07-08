@@ -16,7 +16,7 @@ public sealed class StringsReplCommand : IReplCommand
 
     public string Name => "strings";
     public IReadOnlyList<string> Aliases => ["str"];
-    public string Summary => "Find duplicate string values wasting memory (most wasteful first).";
+    public string Summary => "Find duplicate string values wasting memory.";
     public string Usage => "strings [count]";
 
     public void Execute(ReplContext context, string[] args)
@@ -39,7 +39,7 @@ public sealed class StringsReplCommand : IReplCommand
             return;
         }
 
-        var table = new Table().Border(TableBorder.Rounded).Expand();
+        var table = new Table().Border(TableBorder.Square).Expand();
         table.AddColumn(new TableColumn("[bold]Count[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]Wasted[/]").RightAligned());
         table.AddColumn("[bold]Value[/]");
@@ -50,17 +50,12 @@ public sealed class StringsReplCommand : IReplCommand
             totalWasted += dupString.WastedBytes;
             table.AddRow(
                 dupString.Count.ToString("N0"),
-                ByteSize.Format((long)dupString.WastedBytes),
-                $"[aqua]{Markup.Escape(Preview(dupString.Value))}[/]");
+                $"[bold green]{ByteSize.Format((long)dupString.WastedBytes)}[/]",
+                $"[aqua]{Markup.Escape(TextUtil.Preview(dupString.Value, 80))}[/]");
         }
 
         context.Console.Write(table);
-        context.Console.MarkupLine($"[grey]Top {duplicates.Count} duplicated strings waste[/] [bold]{ByteSize.Format((long)totalWasted)}[/].");
+        context.Console.MarkupLine($"[grey]Top {duplicates.Count} duplicated strings waste[/] [bold green]{ByteSize.Format((long)totalWasted)}[/].");
     }
 
-    private static string Preview(string value)
-    {
-        value = value.ReplaceLineEndings(" ");
-        return value.Length > 80 ? value[..80] + "…" : value;
-    }
 }

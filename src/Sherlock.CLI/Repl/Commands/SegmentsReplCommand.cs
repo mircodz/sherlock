@@ -24,7 +24,7 @@ public sealed class SegmentsReplCommand : IReplCommand
             return;
         }
 
-        var table = new Table().Border(TableBorder.Rounded).Expand();
+        var table = new Table().Border(TableBorder.Square).Expand();
         table.AddColumn("[bold]Kind[/]");
         table.AddColumn(new TableColumn("[bold]Start[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]End[/]").RightAligned());
@@ -36,7 +36,7 @@ public sealed class SegmentsReplCommand : IReplCommand
                 Markup.Escape(segment.Kind),
                 $"[grey]0x{segment.Start:x}[/]",
                 $"[grey]0x{segment.End:x}[/]",
-                ByteSize.Format((long)segment.Length));
+                $"[bold green]{ByteSize.Format((long)segment.Length)}[/]");
         }
 
         context.Console.Write(table);

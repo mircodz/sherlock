@@ -7,7 +7,6 @@ namespace Sherlock.CLI.Repl.Commands;
 public sealed class RmReplCommand : IReplCommand
 {
     public string Name => "rm";
-    public IReadOnlyList<string> Aliases => ["delete"];
     public string Summary => "Remove a snapshot (sN) or a whole session (rN) from the library.";
     public string Usage => "rm <id>";
     public string Category => "Library";

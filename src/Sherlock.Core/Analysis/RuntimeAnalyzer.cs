@@ -20,7 +20,10 @@ public sealed class RuntimeAnalyzer(DumpSession session)
                 Size: module.Size,
                 IsDynamic: module.IsDynamic));
         }
-        return modules.OrderBy(m => Path.GetFileName(m.Name), StringComparer.OrdinalIgnoreCase).ToList();
+        
+        return modules
+            .OrderBy(m => Path.GetFileName(m.Name), StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     public IReadOnlyList<SegmentInfo> GetSegments()
@@ -34,6 +37,10 @@ public sealed class RuntimeAnalyzer(DumpSession session)
                 Length: segment.Length,
                 Kind: segment.Kind.ToString()));
         }
-        return segments.OrderBy(s => s.Kind, StringComparer.Ordinal).ThenBy(s => s.Start).ToList();
+        
+        return segments
+            .OrderBy(s => s.Kind, StringComparer.Ordinal)
+            .ThenBy(s => s.Start)
+            .ToList();
     }
 }

@@ -45,7 +45,7 @@ public sealed class ObjectsReplCommand : IReplCommand
             return;
         }
 
-        var table = new Table().Border(TableBorder.Rounded).Expand();
+        var table = new Table().Border(TableBorder.Square).Expand();
         table.AddColumn(new TableColumn("[bold]Address[/]"));
         table.AddColumn(new TableColumn("[bold]Size[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]Type[/]"));
@@ -55,15 +55,15 @@ public sealed class ObjectsReplCommand : IReplCommand
         {
             table.AddRow(
                 $"[grey]0x{instance.Address:x}[/]",
-                ByteSize.Format((long)instance.Size),
-                Markup.Escape(instance.TypeName),
-                instance.Preview is null ? "" : $"[aqua]{Markup.Escape(instance.Preview)}[/]");
+                $"[bold green]{ByteSize.Format((long)instance.Size)}[/]",
+                $"[aqua]{Markup.Escape(TypeNames.Short(instance.TypeName))}[/]",
+                instance.Preview is null ? "" : $"[gold1]{Markup.Escape(instance.Preview)}[/]");
         }
 
         context.Console.Write(table);
         context.Console.MarkupLine(
             $"Showing top [bold]{listing.Instances.Count}[/] of [bold]{listing.TotalMatched:N0}[/] matches, " +
-            $"[bold]{ByteSize.Format((long)listing.TotalMatchedSize)}[/] total. " +
+            $"[bold green]{ByteSize.Format((long)listing.TotalMatchedSize)}[/] total. " +
             $"[grey]Copy an address into[/] gcroot <address>.");
     }
 }
