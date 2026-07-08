@@ -47,9 +47,19 @@ Aggregator::~Aggregator() {
         delete shards_[i];
 }
 
+// Reserve the per-thread shard structures up front so the hot path never pays for a
+// map rehash or a pending-vector realloc mid-allocation — bounded latency on the
+// allocating thread. `pending` is clear()ed (not freed) each GC, so it keeps capacity.
+namespace {
+constexpr std::size_t kSitesReserve = 4096;    // distinct allocation stacks per thread
+constexpr std::size_t kPendingReserve = 2048;  // sampled objects awaiting their first GC
+} // namespace
+
 Aggregator::Shard& Aggregator::localShard() {
     if (t_shard == nullptr) {
         auto* shard = new Shard();
+        shard->sites.reserve(kSitesReserve);
+        shard->pending.reserve(kPendingReserve);
         int idx = shardCount_.fetch_add(1, std::memory_order_acq_rel);
         if (idx < kMaxShards)
             shards_[idx] = shard;       // registered; GC sweep & dump will see it
@@ -115,6 +125,7 @@ void Aggregator::endGc() {
     // objects allocated since the last GC that survived this one (fresh identity).
     std::unordered_map<ObjectID, Live> next;
     if (correlate_) {
+        next.reserve(live_.size()); // avoid rehashing mid-rebuild (extends the GC pause)
         for (const auto& [addr, lv] : live_)
             if (survived(addr))
                 next.insert_or_assign(remap(addr), lv);

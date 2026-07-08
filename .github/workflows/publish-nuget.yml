@@ -1,12 +1,10 @@
-name: Publish NuGet
+name: Release
 
 on:
-  push:
-    tags: [ 'v*' ]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write   # to create and push the release tag
   id-token: write
   packages: write
 
@@ -52,7 +50,7 @@ jobs:
           path: dist/
 
   publish:
-    name: pack & push
+    name: tag & publish
     needs: native
     if: github.actor == 'mircodz'
     environment: publish
@@ -61,11 +59,33 @@ jobs:
       OUT_DIR: artifacts/nupkg
       OWNER: ${{ github.repository_owner }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - uses: actions/setup-dotnet@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+
+      - name: Read version
+        id: version
+        run: echo "VERSION=$(cat version)" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure tag does not already exist
+        run: |
+          if git rev-parse "${{ steps.version.outputs.VERSION }}" >/dev/null 2>&1; then
+            echo "Tag ${{ steps.version.outputs.VERSION }} already exists. Bump the version file." >&2
+            exit 1
+          fi
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.version.outputs.VERSION }}" -m "Release ${{ steps.version.outputs.VERSION }}"
+          git push origin "${{ steps.version.outputs.VERSION }}"
 
       - name: Collect native libraries
         uses: actions/download-artifact@v4
@@ -80,12 +100,22 @@ jobs:
           cp -r dist/runtimes/* src/Sherlock.CLI/runtimes/
           find src/Sherlock.CLI/runtimes -type f
 
-      - name: Read version
-        id: version
-        run: echo "VERSION=$(cat version)" >> "$GITHUB_OUTPUT"
-
       - name: Pack
         run: dotnet pack src/Sherlock.CLI -c Release -o $OUT_DIR /p:Version=${{ steps.version.outputs.VERSION }}
+
+      - name: NuGet login
+        id: nuget_login
+        uses: NuGet/login@v1
+        with:
+          server: https://api.nuget.org/v3/index.json
+          user: ${{ secrets.NUGET_USER }}
+
+      - name: Push to NuGet.org
+        run: |
+          dotnet nuget push "$OUT_DIR"/*.nupkg \
+            --source "https://api.nuget.org/v3/index.json" \
+            --api-key "${{ steps.nuget_login.outputs.NUGET_API_KEY }}" \
+            --skip-duplicate
 
       - name: Push to GitHub Packages
         env:
@@ -94,21 +124,4 @@ jobs:
           dotnet nuget push "$OUT_DIR"/*.nupkg \
             --source "https://nuget.pkg.github.com/${OWNER}/index.json" \
             --api-key "$GITHUB_TOKEN" \
-            --skip-duplicate
-
-      - name: NuGet.org login
-        id: nuget_login
-        continue-on-error: true
-        uses: NuGet/login@v1
-        with:
-          server: https://api.nuget.org/v3/index.json
-          user: ${{ secrets.NUGET_USER }}
-
-      - name: Push to NuGet.org
-        if: steps.nuget_login.outcome == 'success'
-        continue-on-error: true
-        run: |
-          dotnet nuget push "$OUT_DIR"/*.nupkg \
-            --source "https://api.nuget.org/v3/index.json" \
-            --api-key "${{ steps.nuget_login.outputs.NUGET_API_KEY }}" \
             --skip-duplicate
