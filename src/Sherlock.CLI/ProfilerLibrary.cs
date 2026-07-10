@@ -2,11 +2,10 @@ using System;
 using System.IO;
 using System.Runtime.InteropServices;
 
-namespace Sherlock.CLI.Commands;
+namespace Sherlock.CLI;
 
 /// <summary>
-/// Locates the native CLR allocation profiler library produced by
-/// <c>src/native/build.sh</c> (or <c>build.cmd</c>).
+/// Locates the native CLR allocation profiler library
 /// </summary>
 public static class ProfilerLibrary
 {
@@ -53,11 +52,12 @@ public static class ProfilerLibrary
     }
 
     /// <summary>The runtime identifier of the current process, e.g. osx-arm64, linux-x64, win-x64.</summary>
-    public static string Rid()
+    private static string Rid()
     {
         string os = OperatingSystem.IsWindows() ? "win"
             : OperatingSystem.IsMacOS() ? "osx"
             : "linux";
+        
         string arch = RuntimeInformation.ProcessArchitecture switch
         {
             Architecture.X64 => "x64",
@@ -66,6 +66,7 @@ public static class ProfilerLibrary
             Architecture.Arm => "arm",
             _ => RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(),
         };
+        
         return os + "-" + arch;
     }
 }

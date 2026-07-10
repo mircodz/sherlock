@@ -51,7 +51,9 @@ public sealed class HelpReplCommand : IReplCommand
             table.AddColumn("cmd");
             table.AddColumn("desc");
             foreach (IReplCommand command in group)
+            {
                 table.AddRow($"[bold]{Markup.Escape(command.Usage)}[/]", Markup.Escape(command.Summary));
+            }
 
             if (group.Key == "Session")
             {

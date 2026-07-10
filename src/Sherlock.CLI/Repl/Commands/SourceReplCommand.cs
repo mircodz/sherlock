@@ -8,7 +8,7 @@ namespace Sherlock.CLI.Repl.Commands;
 public sealed class SourceReplCommand : IReplCommand
 {
     public string Name => "source";
-    public IReadOnlyList<string> Aliases => ["script", "@"];
+    public IReadOnlyList<string> Aliases => ["@"];
     public string Summary => "Run commands from a script file, one per line.";
     public string Usage => "source <file>";
     public string Category => "Session";

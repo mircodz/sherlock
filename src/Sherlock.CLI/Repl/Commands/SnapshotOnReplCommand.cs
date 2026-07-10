@@ -44,8 +44,9 @@ public sealed class SnapshotOnReplCommand : IReplCommand
             return;
         }
 
+        int armPid = target.PrimaryPid; // arm on the app (the child under a launcher, if any)
         (bool ok, string detail) = context.Console.Status()
-            .Start($"Arming snapshot-on {spec}…", _ => target.ArmSnapshotTrigger(spec, TimeSpan.FromSeconds(10)));
+            .Start($"Arming snapshot-on {spec}…", _ => target.ArmSnapshotTrigger(armPid, spec, TimeSpan.FromSeconds(10)));
 
         if (ok)
         {

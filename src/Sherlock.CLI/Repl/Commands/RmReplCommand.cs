@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -7,7 +6,7 @@ namespace Sherlock.CLI.Repl.Commands;
 public sealed class RmReplCommand : IReplCommand
 {
     public string Name => "rm";
-    public string Summary => "Remove a snapshot (sN) or a whole session (rN) from the library.";
+    public string Summary => "Remove a snapshot (sN) or a whole workspace (wN) from the library.";
     public string Usage => "rm <id>";
     public string Category => "Library";
 

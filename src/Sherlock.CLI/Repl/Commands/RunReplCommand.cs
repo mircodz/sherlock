@@ -1,7 +1,6 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using Sherlock.CLI.Commands;
 using Sherlock.Core;
 using Sherlock.Core.Collection;
 using Sherlock.Core.Store;
@@ -14,7 +13,7 @@ public sealed class RunReplCommand : IReplCommand
 {
     public string Name => "run";
     public string Summary => "Launch a process and track it as a live target.";
-    public string Usage => "run [--profile] [--correlate] [--snapshot-on <event>] [--] <path> [args...]";
+    public string Usage => "run [--profile] [--correlate] [--children] [--snapshot-on <event>] [--] <path> [args...]";
     public string Category => "Live";
 
     public void Execute(ReplContext context, string[] args)
@@ -23,6 +22,7 @@ public sealed class RunReplCommand : IReplCommand
         // first non-flag token is the path and the rest its args.
         bool profile = false;
         bool correlate = false;
+        bool collectChildren = false;
         string? snapshotOn = null;
         var rest = new List<string>();
         for (int i = 0; i < args.Length; i++)
@@ -35,6 +35,10 @@ public sealed class RunReplCommand : IReplCommand
             else if (rest.Count == 0 && arg == "--correlate")
             {
                 correlate = true;
+            }
+            else if (rest.Count == 0 && arg == "--children")
+            {
+                collectChildren = true;
             }
             else if (rest.Count == 0 && arg == "--snapshot-on" && i + 1 < args.Length)
             {
@@ -50,8 +54,8 @@ public sealed class RunReplCommand : IReplCommand
             }
         }
 
-        // Triggers and correlation both ride the profiler, so they imply attaching it.
-        if (snapshotOn is not null || correlate)
+        // Triggers, correlation, and child collection all ride the profiler → imply attaching it.
+        if (snapshotOn is not null || correlate || collectChildren)
         {
             profile = true;
         }
@@ -76,16 +80,16 @@ public sealed class RunReplCommand : IReplCommand
 
         Session session = context.Workspace.Store.BeginSession(
             SessionKind.Run,
-            sourceProcess: Path.GetFileName(rest[0]),
-            withLog: true,
-            withAllocations: profilerPath is not null);
+            command: string.Join(' ', rest),
+            withLog: true);
 
         var supervisor = new ProcessSupervisor { SessionId = session.Id };
         try
         {
             SupervisedProcess root = supervisor.Start(
-                rest[0], rest.Skip(1).ToList(), dumpOnCrash: true, profilerPath, captureDir: session.Dir, snapshotOn: snapshotOn, correlate: correlate);
-            session.SourcePid = root.Pid;
+                rest[0], rest.Skip(1).ToList(), dumpOnCrash: true, profilerPath, captureDir: session.Dir, snapshotOn: snapshotOn, correlate: correlate, collectChildren: collectChildren);
+            ProcessRecord rootProcess = session.GetOrAddProcess(root.Pid, Path.GetFileName(rest[0]), isRoot: true);
+            rootProcess.Exec = rest[0];
             context.Workspace.Store.Persist(session);
             context.Workspace.AddTarget(supervisor);
             context.Console.MarkupLineInterpolated(

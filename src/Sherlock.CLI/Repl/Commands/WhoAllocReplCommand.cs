@@ -1,9 +1,7 @@
 using System.Collections.Generic;
-using System.IO;
 using Microsoft.Diagnostics.Runtime;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core.Profiling;
-using Sherlock.Core.Store;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -29,10 +27,9 @@ public sealed class WhoAllocReplCommand : IReplCommand
             return;
         }
 
-        // Provenance is a property of the loaded snapshot — this only works on snapshots.
-        SnapshotEntry? entry = context.Workspace.CurrentEntry;
-        string? sidecar = entry is null ? null : entry.Path + ".corr.tsv";
-        if (sidecar is null || !File.Exists(sidecar))
+        // Provenance is a property of the loaded snapshot — it's bundled in the snapshot folder.
+        string? sidecar = context.Workspace.CurrentEntry?.CorrelationPath;
+        if (sidecar is null)
         {
             context.Console.MarkupLine(
                 "[yellow]This snapshot has no allocation provenance.[/] Capture one with " +

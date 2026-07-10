@@ -59,11 +59,14 @@ public sealed class AllocationsReplCommand : IReplCommand
             }
         }
 
-        // Default to the current session's profile, if it has one.
-        path ??= context.Workspace.CurrentSession?.AllocationsPath;
+        // Resolve the profile: explicit path arg > loaded snapshot's bundle > run session > run target.
+        ProcessSupervisor? runTarget = context.Workspace.Targets.LastOrDefault(t => t.ProfileOutPath is not null);
+        path ??= context.Workspace.CurrentEntry?.AllocationsPath
+               ?? context.Workspace.CurrentSession?.Processes.FirstOrDefault(p => p.HasAllocations)?.AllocationsPath
+               ?? runTarget?.ProfileOutPath;
         if (path is null)
         {
-            context.Console.MarkupLine("[yellow]No allocation profile.[/] Pass a path, or load a snapshot from a [bold]run --profile[/] session.");
+            context.Console.MarkupLine("[yellow]No allocation profile.[/] Pass a path, or run something with [bold]run --profile[/].");
             return;
         }
         if (!File.Exists(path))
@@ -71,11 +74,11 @@ public sealed class AllocationsReplCommand : IReplCommand
             // The aggregate profile is only written at process exit — but if the target is
             // still running with a control channel, ask the profiler to flush it now.
             ProcessSupervisor? live = context.Workspace.Targets.FirstOrDefault(
-                t => t.SessionId == context.Workspace.CurrentSession?.Id && !t.RootExited);
+                t => !t.RootExited && (t.ProfileOutPath == path || t.SessionId == context.Workspace.CurrentSession?.Id));
             if (live is not null)
             {
                 string? flushed = context.Console.Status()
-                    .Start("Flushing live allocation profile…", _ => live.FlushAllocations(TimeSpan.FromSeconds(10)));
+                    .Start("Flushing live allocation profile…", _ => live.FlushAllocations(live.PrimaryPid, TimeSpan.FromSeconds(10)));
                 if (flushed is null)
                 {
                     context.Console.MarkupLineInterpolated(

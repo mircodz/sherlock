@@ -17,7 +17,9 @@ public sealed class SnapshotStore
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
-        Converters = { new JsonStringEnumConverter() },
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 
     private readonly string _catalogPath;
@@ -64,15 +66,13 @@ public sealed class SnapshotStore
         return null;
     }
 
-    /// <summary>Creates an empty session and its directory.</summary>
+    /// <summary>Creates an empty workspace and its directory.</summary>
     public Session BeginSession(
         SessionKind kind,
-        string? sourceProcess = null,
-        int? sourcePid = null,
-        bool withLog = false,
-        bool withAllocations = false)
+        string? command = null,
+        bool withLog = false)
     {
-        string id = $"r{_catalog.NextSession++}";
+        string id = $"w{_catalog.NextSession++}"; // w = workspace (a run)
         string dir = Path.Combine(Root, id);
         Directory.CreateDirectory(dir);
 
@@ -82,10 +82,8 @@ public sealed class SnapshotStore
             Kind = kind,
             Dir = dir,
             CreatedAt = DateTimeOffset.Now,
-            SourceProcess = sourceProcess,
-            SourcePid = sourcePid,
+            Command = command,
             LogPath = withLog ? Path.Combine(dir, "run.log") : null,
-            AllocationsPath = withAllocations ? Path.Combine(dir, "allocations.tsv") : null,
         };
 
         _catalog.Sessions.Add(session);
@@ -95,7 +93,16 @@ public sealed class SnapshotStore
     }
 
     /// <summary>Adds a dump to a session: moves it under the session's <c>snapshots/</c> when owned.</summary>
-    public SnapshotEntry AddSnapshot(Session session, string sourcePath, bool moveIntoStore, string? label = null)
+    public SnapshotEntry AddSnapshot(
+        Session session,
+        string sourcePath,
+        bool moveIntoStore,
+        string? label = null,
+        int? sourcePid = null,
+        string? sourceName = null,
+        string? allocationsSource = null,
+        string? correlationSource = null,
+        string? reason = null)
     {
         if (!File.Exists(sourcePath))
         {
@@ -107,10 +114,26 @@ public sealed class SnapshotStore
         bool owned;
         if (moveIntoStore)
         {
-            string snapsDir = Path.Combine(session.Dir, "snapshots");
-            Directory.CreateDirectory(snapsDir);
-            finalPath = Path.Combine(snapsDir, $"{id}.dmp");
+            // Each snapshot is a self-contained bundle folder: heap.dmp plus the coherently
+            // captured allocations/correlation, so selecting it resolves everything.
+            string bundleDir = Path.Combine(session.Dir, "snapshots", id);
+            Directory.CreateDirectory(bundleDir);
+            finalPath = Path.Combine(bundleDir, "heap.dmp");
             File.Move(sourcePath, finalPath, overwrite: true);
+            
+            if (allocationsSource is not null && File.Exists(allocationsSource))
+            {
+                File.Copy(allocationsSource, Path.Combine(bundleDir, "allocations.tsv"), overwrite: true);
+            }
+            
+            if (correlationSource is not null && File.Exists(correlationSource))
+            {
+                File.Copy(correlationSource, Path.Combine(bundleDir, "correlation.tsv"), overwrite: true);
+                // The emit target is a transient per-pid staging file (correlation.<pid>.tsv in the
+                // workspace root); it lives only to be bundled here, so don't leave it behind.
+                try { File.Delete(correlationSource); } catch { /* best effort */ }
+            }
+            
             owned = true;
         }
         else
@@ -125,9 +148,16 @@ public sealed class SnapshotStore
             Owned: owned,
             Label: label,
             CreatedAt: DateTimeOffset.Now,
-            SizeBytes: new FileInfo(finalPath).Length);
+            SizeBytes: new FileInfo(finalPath).Length)
+        {
+            Reason = reason,
+        };
 
-        session.Snapshots.Add(entry);
+        // Attribute the snapshot to the process it came from; the first process seen in a
+        // workspace is its root (a launched run sets its root explicitly, ahead of any snapshot).
+        ProcessRecord process = session.GetOrAddProcess(
+            sourcePid ?? 0, sourceName, isRoot: session.Processes.Count == 0);
+        process.Snapshots.Add(entry);
         WriteMetadata(session);
         Save();
         return entry;
@@ -142,8 +172,8 @@ public sealed class SnapshotStore
         int? sourcePid = null,
         string? label = null)
     {
-        Session session = BeginSession(kind, sourceProcess, sourcePid);
-        SnapshotEntry snap = AddSnapshot(session, sourcePath, moveIntoStore, label);
+        Session session = BeginSession(kind, sourceProcess);
+        SnapshotEntry snap = AddSnapshot(session, sourcePath, moveIntoStore, label, sourcePid, sourceProcess);
         return (session, snap);
     }
 
@@ -154,10 +184,10 @@ public sealed class SnapshotStore
         Save();
     }
 
-    /// <summary>Records that a session's allocation profile is present on disk.</summary>
-    public void MarkAllocations(Session session, string allocationsPath)
+    /// <summary>Records that a process's exit-time allocation profile is present on disk.</summary>
+    public void MarkAllocations(Session session, int pid, string? name, string allocationsPath)
     {
-        session.AllocationsPath = allocationsPath;
+        session.GetOrAddProcess(pid, name).AllocationsPath = allocationsPath;
         WriteMetadata(session);
         Save();
     }
@@ -179,18 +209,15 @@ public sealed class SnapshotStore
             return false;
         }
 
-        owner.Snapshots.Remove(snap);
+        owner.Processes.FirstOrDefault(p => p.Snapshots.Contains(snap))?.Snapshots.Remove(snap);
         if (snap.Owned)
         {
-            try { if (File.Exists(snap.Path))
-                {
-                    File.Delete(snap.Path);
-                }
-            }
-            catch { /* best effort */ }
+            TryDeleteDir(snap.Dir); // the bundle folder (heap.dmp + allocations + correlation)
         }
+        
         WriteMetadata(owner);
         Save();
+        
         return true;
     }
 
@@ -202,8 +229,11 @@ public sealed class SnapshotStore
         }
 
         SnapshotEntry updated = snap with { Label = label };
-        int i = session.Snapshots.IndexOf(snap);
-        session.Snapshots[i] = updated;
+        ProcessRecord? process = session.Processes.FirstOrDefault(p => p.Snapshots.Contains(snap));
+        if (process is not null)
+        {
+            process.Snapshots[process.Snapshots.IndexOf(snap)] = updated;
+        }
         WriteMetadata(session);
         Save();
         return updated;
@@ -224,7 +254,9 @@ public sealed class SnapshotStore
 
     private static void TryDeleteDir(string dir)
     {
-        try { if (Directory.Exists(dir))
+        try 
+        { 
+            if (Directory.Exists(dir))
             {
                 Directory.Delete(dir, recursive: true);
             }
@@ -245,6 +277,7 @@ public sealed class SnapshotStore
         {
             // A corrupt catalog shouldn't brick the tool; start fresh.
         }
+        
         return new Catalog();
     }
 

@@ -9,24 +9,13 @@ namespace Sherlock.CLI.Repl;
 /// The interactive read-eval-print loop. Holds one open <see cref="DumpSession"/>
 /// for the lifetime of the session and dispatches typed lines to commands.
 /// </summary>
-public sealed class Repl
+public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAnsiConsole console)
 {
     private static readonly string[] ExitWords = ["exit", "quit", "q"];
-
-    private readonly ReplCommandRegistry _registry;
-    private readonly ReplHistory _history;
-    private readonly IAnsiConsole _console;
 
     private ReplContext? _context;
     private Workspace? _workspace;
     private string? _lastCommand;
-
-    public Repl(ReplCommandRegistry registry, ReplHistory history, IAnsiConsole console)
-    {
-        _registry = registry;
-        _history = history;
-        _console = console;
-    }
 
     private string Prompt => _workspace?.CurrentName is { } name ? $"sherlock[{name}]> " : "sherlock> ";
 
@@ -34,10 +23,10 @@ public sealed class Repl
     public void RunBatch(Workspace workspace, IEnumerable<string> lines)
     {
         _workspace = workspace;
-        _context = new ReplContext(workspace, _console, RunLine);
+        _context = new ReplContext(workspace, console, RunLine);
         foreach (string line in lines)
         {
-            _console.MarkupLineInterpolated($"[green]{Prompt}[/]{line}");
+            console.MarkupLineInterpolated($"[green]{Prompt}[/]{line}");
             if (!RunLine(line))
             {
                 return;
@@ -49,17 +38,17 @@ public sealed class Repl
     public void RunInteractive(Workspace workspace)
     {
         _workspace = workspace;
-        _context = new ReplContext(workspace, _console, RunLine);
+        _context = new ReplContext(workspace, console, RunLine);
         PrintBanner(workspace);
 
         while (true)
         {
             HarvestCrashDumps();
 
-            string? line = LineEditor.ReadLine(Prompt, _history);
+            string? line = LineEditor.ReadLine(Prompt, history);
             if (line is null) // EOF (Ctrl-D)
             {
-                _console.WriteLine();
+                console.WriteLine();
                 return;
             }
 
@@ -74,11 +63,11 @@ public sealed class Repl
                 }
 
                 line = _lastCommand;
-                _console.MarkupLineInterpolated($"[grey]{Prompt}{line}[/]");
+                console.MarkupLineInterpolated($"[grey]{Prompt}{line}[/]");
             }
             else
             {
-                _history.Add(line);
+                history.Add(line);
                 _lastCommand = line;
             }
 
@@ -106,10 +95,10 @@ public sealed class Repl
             return false;
         }
 
-        IReplCommand? command = _registry.Resolve(name);
+        IReplCommand? command = registry.Resolve(name);
         if (command is null)
         {
-            _console.MarkupLineInterpolated($"[red]unknown command:[/] {name}. Type [bold]help[/] for a list.");
+            console.MarkupLineInterpolated($"[red]unknown command:[/] {name}. Type [bold]help[/] for a list.");
             return true;
         }
 
@@ -119,12 +108,12 @@ public sealed class Repl
         }
         catch (DumpAnalysisException ex)
         {
-            _console.MarkupLineInterpolated($"[red]error:[/] {ex.Message}");
+            console.MarkupLineInterpolated($"[red]error:[/] {ex.Message}");
         }
         catch (Exception ex)
         {
             // Keep the session alive: one bad command shouldn't end the REPL.
-            _console.MarkupLineInterpolated($"[red]{command.Name} failed:[/] {ex.Message}");
+            console.MarkupLineInterpolated($"[red]{command.Name} failed:[/] {ex.Message}");
         }
 
         return true;
@@ -139,32 +128,38 @@ public sealed class Repl
         }
 
         foreach (Sherlock.Core.Store.SnapshotEntry entry in _workspace.HarvestExitedCrashDumps())
-            _console.MarkupLineInterpolated(
+        {
+            console.MarkupLineInterpolated(
                 $"[yellow]· crash dump captured as[/] [bold]{entry.Id}[/] [grey]— load {entry.Id} to analyze[/]");
+        }
 
         foreach (Sherlock.Core.Store.Session session in _workspace.HarvestExitedAllocationProfiles())
-            _console.MarkupLineInterpolated(
-                $"[yellow]· allocation profile captured for session[/] [bold]{session.Id}[/] [grey]({session.SourceProcess})[/]");
+        {
+            console.MarkupLineInterpolated(
+                $"[yellow]· allocation profile captured for session[/] [bold]{session.Id}[/] [grey]({session.Command})[/]");
+        }
 
         foreach ((Sherlock.Core.Store.SnapshotEntry entry, string probe) in _workspace.HarvestProbeSnapshots())
-            _console.MarkupLineInterpolated(
+        {
+            console.MarkupLineInterpolated(
                 $"[yellow]●[/] [bold]{probe}[/] [yellow]fired — heap snapshot[/] [bold]{entry.Id}[/] [grey]captured; load {entry.Id} to inspect[/]");
+        }
     }
 
     private void PrintBanner(Workspace workspace)
     {
         if (workspace.Current is not null)
         {
-            _console.MarkupLineInterpolated($"[bold]Sherlock[/] — loaded [aqua]{workspace.CurrentName}[/]");
+            console.MarkupLineInterpolated($"[bold]Sherlock[/] — loaded [aqua]{workspace.CurrentName}[/]");
         }
         else
         {
             int count = workspace.Store.Sessions.Count;
-            _console.MarkupLineInterpolated($"[bold]Sherlock[/] — no snapshot loaded ([aqua]{count}[/] sessions in library)");
-            _console.MarkupLine("[grey]Use[/] snapshots[grey],[/] load <id>[grey],[/] collect[grey], or[/] import <file>[grey].[/]");
+            console.MarkupLineInterpolated($"[bold]Sherlock[/] — no snapshot loaded ([aqua]{count}[/] sessions in library)");
+            console.MarkupLine("[grey]Use[/] snapshots[grey],[/] load <id>[grey],[/] collect[grey], or[/] import <file>[grey].[/]");
         }
-        _console.MarkupLine("Type [bold]help[/] for commands, [bold]exit[/] to quit.");
-        _console.WriteLine();
+        console.MarkupLine("Type [bold]help[/] for commands, [bold]exit[/] to quit.");
+        console.WriteLine();
     }
 
     /// <summary>Splits a line into tokens, treating double-quoted spans as one token.</summary>

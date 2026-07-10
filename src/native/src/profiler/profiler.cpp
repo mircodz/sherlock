@@ -3,11 +3,19 @@
 
 #include "sherlock/profiler/profiler.hpp"
 
+#include "sherlock/control/protocol.hpp"
+
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <vector>
+
+#ifdef _WIN32
+#include <process.h> // _getpid
+#else
+#include <unistd.h> // getpid
+#endif
 
 namespace Sherlock {
 
@@ -16,6 +24,24 @@ namespace {
 // Cap stack depth so pathological recursion can't blow up the hot path or the
 // aggregation key.
 constexpr std::size_t kMaxFrames = 64;
+
+// Insert the current pid before the extension (allocations.tsv -> allocations.<pid>.tsv),
+// so every profiled process — including children that inherit the env — writes a
+// distinct file instead of clobbering a shared one.
+std::string withPid(const std::string& path) {
+#ifdef _WIN32
+    int pid = _getpid();
+#else
+    int pid = getpid();
+#endif
+    std::string suffix = "." + std::to_string(pid);
+    std::size_t slash = path.find_last_of("/\\");
+    std::size_t dot = path.find_last_of('.');
+    if (dot == std::string::npos || (slash != std::string::npos && dot < slash)) {
+        return path + suffix; // no extension
+    }
+    return path.substr(0, dot) + suffix + path.substr(dot);
+}
 
 // Filled by captureStack during a walk (leaf -> root), read right after. Thread-
 // local so concurrent allocating threads don't clobber each other; capacity is
@@ -128,7 +154,7 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
     }
 
     const char* out = std::getenv("SHERLOCK_PROFILE_OUT");
-    outputPath = (out != nullptr && out[0] != '\0') ? out : "sherlock-allocations.txt";
+    outputPath = withPid((out != nullptr && out[0] != '\0') ? out : "sherlock-allocations.txt");
 
     const char* sample = std::getenv("SHERLOCK_SAMPLE_BYTES");
     if (sample != nullptr && sample[0] != '\0')
@@ -141,7 +167,7 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
     if (correlate) {
         aggregator->enableCorrelation();
         const char* corrOut = std::getenv("SHERLOCK_CORRELATE_OUT");
-        correlationPath = (corrOut != nullptr && corrOut[0] != '\0') ? corrOut : "sherlock-correlation.txt";
+        correlationPath = withPid((corrOut != nullptr && corrOut[0] != '\0') ? corrOut : "sherlock-correlation.txt");
     }
 
 
@@ -214,10 +240,10 @@ HRESULT STDMETHODCALLTYPE Profiler::InitializeForAttach(IUnknown* pICorProfilerI
 }
 
 control::Reply Profiler::handleControl(std::string_view cmd, std::span<const std::string_view> args) {
-    if (cmd == "ping") {
+    if (cmd == control::commands::kPing) {
         return control::Reply::success("pong");
     }
-    if (cmd == "emit-correlation") {
+    if (cmd == control::commands::kEmitCorrelation) {
         if (!correlate || !aggregator) {
             return control::Reply::error("correlation not enabled for this run");
         }
@@ -229,17 +255,17 @@ control::Reply Profiler::handleControl(std::string_view cmd, std::span<const std
         // between emit and dump would move objects and invalidate the address join).
         return control::Reply::success(correlationPath + "\t" + std::to_string(gcCount.load()));
     }
-    if (cmd == "gc-count") {
+    if (cmd == control::commands::kGcCount) {
         return control::Reply::success(std::to_string(gcCount.load()));
     }
-    if (cmd == "flush-allocations") {
+    if (cmd == control::commands::kFlushAllocations) {
         if (!aggregator) {
             return control::Reply::error("no aggregator");
         }
         aggregator->dump(outputPath);
         return control::Reply::success(outputPath);
     }
-    if (cmd == "arm-trigger") {
+    if (cmd == control::commands::kArmTrigger) {
         if (args.empty()) {
             return control::Reply::error("arm-trigger needs a <kind:arg> spec");
         }
@@ -277,7 +303,7 @@ bool Profiler::armTrigger(const std::string& spec, bool live) {
 
 void Profiler::fireTrigger(const std::string& display) {
     if (control) {
-        control->sendEvent({"snapshot-trigger", display});
+        control->sendEvent({std::string(control::events::kSnapshotTrigger), display});
     }
 }
 
@@ -299,9 +325,6 @@ HRESULT STDMETHODCALLTYPE Profiler::Shutdown() {
     if (trace) {
         trace->stop();
         trace->dump(tracePath, [this](FunctionID f) { return aggregator->resolveMethodName(f); });
-    }
-    if (correlate && aggregator) {
-        aggregator->emitCorrelation(correlationPath);
     }
     return S_OK;
 }

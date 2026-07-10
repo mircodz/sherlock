@@ -11,6 +11,8 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
+#else
+#include <process.h> // _getpid
 #endif
 
 namespace Sherlock::control {
@@ -74,7 +76,14 @@ void ControlChannel::start(std::string_view version, const std::vector<std::stri
         if (i != 0) featureList += ',';
         featureList += features[i];
     }
-    std::vector<std::string> hello = {"HELLO", std::string(version), featureList};
+    // Identify ourselves by pid so sl can address this specific process on a shared socket
+    // (a whole `dotnet run` subtree connects to one control socket).
+#ifdef _WIN32
+    const int pid = _getpid();
+#else
+    const int pid = ::getpid();
+#endif
+    std::vector<std::string> hello = {"HELLO", std::string(version), featureList, std::to_string(pid)};
     std::string framed = frame(joinFields(hello));
     sendAll(framed);
 

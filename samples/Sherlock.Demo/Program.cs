@@ -1,4 +1,10 @@
+using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Threading;
 
 namespace Sherlock.Demo;
 
@@ -77,6 +83,80 @@ internal static class Program
             return 0;
         }
 
+        // `--work [seconds]`: a varied, self-driving workload — steadily leaks into the static
+        // registry, churns transient garbage, and periodically GCs. Observe it live from the
+        // Sherlock REPL (`allocations`, `snapshot`, `whoalloc`), then it exits cleanly.
+        if (args.Length > 0 && args[0] == "--work")
+        {
+            int seconds = args.Length > 1 && int.TryParse(args[1], out int s) ? s : 15;
+            Console.WriteLine($"Demo working for {seconds}s. PID {Environment.ProcessId}. " +
+                              "Observe with sl: allocations, snapshot, whoalloc.");
+            var stopwatch = Stopwatch.StartNew();
+            var transient = new List<byte[]>();
+            for (int round = 1; stopwatch.Elapsed.TotalSeconds < seconds; round++)
+            {
+                AddCustomers(100);                     // permanent: leaks into the static graph
+                transient.Add(new byte[64 * 1024]);    // transient: collectable garbage
+
+                // Rotate through distinct allocation paths so the call tree / hot methods /
+                // back-traces have variety (strings, LINQ, dictionaries, boxing).
+                switch (round % 3)
+                {
+                    case 0: BuildReport(); break;
+                    case 1: ComputeOrderStats(); break;
+                    default: IndexByEmail(); break;
+                }
+
+                if (round % 5 == 0)
+                {
+                    transient.Clear();
+                    GC.Collect();
+                    Console.WriteLine($"round {round}: GC'd; holding {Registry.Customers.Count} customers, " +
+                                      $"{Registry.TotalOrders()} orders");
+                }
+                Thread.Sleep(300);
+            }
+            // End-of-work sentinel: throw a (caught) DemoException to mark a capture point, then
+            // hold briefly so `snapshot-on throw:Sherlock.Demo.DemoException` can dump the final
+            // heap — a stand-in for "snapshot on exit" while the process is still fully alive.
+            Console.WriteLine($"Done ({Registry.Customers.Count} customers). Firing end-of-work marker; holding 5s.");
+            try { throw new DemoException("workload complete"); }
+            catch (DemoException) { /* marker only */ }
+            Thread.Sleep(5000);
+            GC.KeepAlive(Registry);
+            return 0;
+        }
+
+        // `--spawn [n] [child-mode]`: launch n child copies of the demo (default `--work`). They
+        // inherit the profiler env, so `run --profile --children -- <demo> --spawn 3` profiles the
+        // parent and every child, each into its own per-pid file.
+        if (args.Length > 0 && args[0] == "--spawn")
+        {
+            int n = args.Length > 1 && int.TryParse(args[1], out int c) ? c : 2;
+            string childMode = args.Length > 2 ? args[2] : "--work";
+            Console.WriteLine($"Spawning {n} child workers ({childMode}). Parent PID {Environment.ProcessId}.");
+            var children = new List<Process>();
+            for (int i = 0; i < n; i++)
+            {
+                var childPsi = new ProcessStartInfo(Environment.ProcessPath!);
+                childPsi.ArgumentList.Add(childMode);
+                childPsi.ArgumentList.Add("8"); // seconds
+                if (Process.Start(childPsi) is { } child)
+                {
+                    children.Add(child);
+                    Console.WriteLine($"  child pid {child.Id}");
+                }
+            }
+            BuildGraph(); // the parent holds a graph of its own too
+            foreach (Process child in children)
+            {
+                child.WaitForExit();
+            }
+            Console.WriteLine("All children exited.");
+            GC.KeepAlive(Registry);
+            return 0;
+        }
+
         string dumpPath = args.Length > 0
             ? args[0]
             : Path.Combine(Path.GetTempPath(), "sherlock-demo.dmp");
@@ -113,6 +193,42 @@ internal static class Program
 
     private static void BuildGraph() => AddCustomers(500);
 
+    /// <summary>String-heavy work: interpolation, StringBuilder, Split/Join — transient strings.</summary>
+    private static string BuildReport()
+    {
+        var sb = new StringBuilder();
+        foreach (Customer customer in Registry.Customers)
+        {
+            sb.AppendLine($"{customer.Id},{customer.Name},{customer.Email},{customer.Orders.Count}");
+        }
+        string report = sb.ToString();
+        return string.Join("|", report.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    /// <summary>LINQ-heavy work: Select/Where/OrderBy/ToList over the order graph.</summary>
+    private static void ComputeOrderStats()
+    {
+        var stats = Registry.Customers
+            .Select(c => new { c.Name, Total = c.Orders.Sum(o => o.Amount), Count = c.Orders.Count })
+            .Where(x => x.Count > 0)
+            .OrderByDescending(x => x.Total)
+            .ToList();
+        _ = stats.Take(10).ToArray();
+    }
+
+    /// <summary>Collection-heavy work: a dictionary index plus int→object boxing.</summary>
+    private static void IndexByEmail()
+    {
+        var index = new Dictionary<string, Customer>();
+        var ids = new List<object>();
+        foreach (Customer customer in Registry.Customers)
+        {
+            index[customer.Email] = customer;
+            ids.Add(customer.Id); // boxes the int
+        }
+        _ = index.Count + ids.Count;
+    }
+
     private static void AddCustomers(int count)
     {
         int start = Registry.Customers.Count;
@@ -141,7 +257,10 @@ internal sealed class CustomerRegistry
     {
         int total = 0;
         foreach (Customer customer in Customers)
+        {
             total += customer.Orders.Count;
+        }
+
         return total;
     }
 }

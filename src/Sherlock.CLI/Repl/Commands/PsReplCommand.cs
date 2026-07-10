@@ -16,7 +16,9 @@ public sealed class PsReplCommand : IReplCommand
     {
         var rows = new List<SupervisedProcess>();
         foreach (ProcessSupervisor supervisor in context.Workspace.Targets)
+        {
             rows.AddRange(supervisor.List());
+        }
 
         if (rows.Count == 0)
         {

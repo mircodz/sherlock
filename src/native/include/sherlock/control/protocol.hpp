@@ -10,13 +10,28 @@
 //
 // A message is a 4-byte little-endian length followed by a UTF-8 payload. The payload
 // is tab-separated fields; the first field is the verb:
-//   HELLO \t <version> \t <comma,separated,features>   profiler -> sl on connect
-//   REQ   \t <id> \t <command> [\t args...]            sl -> profiler
-//   RES   \t <id> \t ok|err    [\t detail]             profiler -> sl
-//   EVENT \t <name> [\t args...]                       profiler -> sl (unsolicited)
+//   HELLO \t <version> \t <comma,separated,features> \t <pid>   profiler -> sl on connect
+//   REQ   \t <id> \t <command> [\t args...]                     sl -> profiler
+//   RES   \t <id> \t ok|err    [\t detail]                      profiler -> sl
+//   EVENT \t <name> [\t args...]                                profiler -> sl (unsolicited)
 //
 // Everything here is pure (no CLR/OS deps) so it can be unit-tested directly.
 namespace Sherlock::control {
+
+/// Control command verbs (payload of a REQ frame). Mirrored on the C# side in
+/// ControlCommands so both ends agree; keep the two in sync.
+namespace commands {
+inline constexpr std::string_view kPing = "ping";
+inline constexpr std::string_view kEmitCorrelation = "emit-correlation";
+inline constexpr std::string_view kFlushAllocations = "flush-allocations";
+inline constexpr std::string_view kArmTrigger = "arm-trigger";
+inline constexpr std::string_view kGcCount = "gc-count";
+} // namespace commands
+
+/// Event names pushed in an EVENT frame. Mirrored on the C# side in ControlEvents.
+namespace events {
+inline constexpr std::string_view kSnapshotTrigger = "snapshot-trigger";
+} // namespace events
 
 /// Prepends the 4-byte little-endian length to a payload.
 [[nodiscard]] inline std::string frame(std::string_view payload) {

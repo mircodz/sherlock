@@ -1,7 +1,6 @@
 using System.Collections.Generic;
 using Microsoft.Diagnostics.Runtime;
 using Sherlock.CLI.Rendering;
-using Sherlock.Core;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;

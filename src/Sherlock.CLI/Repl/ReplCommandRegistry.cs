@@ -22,7 +22,9 @@ public sealed class ReplCommandRegistry
         {
             _byName[command.Name] = command;
             foreach (string alias in command.Aliases)
+            {
                 _byName[alias] = command;
+            }
         }
     }
 
@@ -52,7 +54,8 @@ public sealed class ReplCommandRegistry
             new AllocationsReplCommand(),
             new WhoAllocReplCommand(),
             new InspectReplCommand(),
-            new SnapshotsReplCommand(),
+            new DiffReplCommand(),
+            new ListReplCommand(),
             new LoadReplCommand(),
             new ImportReplCommand(),
             new RmReplCommand(),

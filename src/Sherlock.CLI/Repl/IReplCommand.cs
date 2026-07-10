@@ -6,23 +6,14 @@ using Spectre.Console;
 namespace Sherlock.CLI.Repl;
 
 /// <summary>The workspace and console a command operates against.</summary>
-public sealed class ReplContext(Workspace workspace, IAnsiConsole console, Func<string, bool> runLine)
+public sealed record ReplContext(Workspace Workspace, IAnsiConsole Console, Func<string, bool> RunLine)
 {
-    public Workspace Workspace => workspace;
-    public IAnsiConsole Console => console;
-
     /// <summary>
     /// The currently-loaded session. Analysis commands use this; if nothing is
     /// loaded it raises a friendly error the REPL renders.
     /// </summary>
     public DumpSession Session => Workspace.Current
         ?? throw new DumpAnalysisException("No snapshot loaded. Use `load <id>`, `collect`, or `import <file>` first.");
-
-    /// <summary>
-    /// Dispatches a raw input line through the REPL (used by <c>source</c> to run
-    /// script files). Returns false if the line requested exit.
-    /// </summary>
-    public Func<string, bool> RunLine { get; } = runLine;
 }
 
 /// <summary>

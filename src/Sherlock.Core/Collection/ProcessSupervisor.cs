@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Threading;
 using Microsoft.Diagnostics.NETCore.Client;
 
 namespace Sherlock.Core.Collection;
@@ -30,6 +29,12 @@ public sealed class ProcessSupervisor : IDisposable
     private bool _crashHarvested;
     private bool _profileHarvested;
 
+    // The profiler keys its output files by pid; keep the capture dir + templates so we can
+    // find the root's file and (with --children) discover every descendant's file.
+    private string? _captureDir;
+    private string? _profileTemplate;
+    private bool _collectChildren;
+
     /// <summary>Path the allocation profiler writes to, when launched with one.</summary>
     public string? ProfileOutPath { get; private set; }
 
@@ -39,8 +44,14 @@ public sealed class ProcessSupervisor : IDisposable
     /// <summary>The control channel to the in-process profiler, once launched with one.</summary>
     private ProfilerControlServer? _control;
 
-    /// <summary>Snapshot-action probe hits pushed by the profiler over the channel.</summary>
-    private readonly ConcurrentQueue<string> _probeHits = new();
+    /// <summary>Snapshot-action probe hits pushed by the profiler over the channel, tagged with the firing pid.</summary>
+    private readonly ConcurrentQueue<(int Pid, string Name)> _probeHits = new();
+
+    /// <summary>pid → last-seen process name, so exited processes can still be labelled.</summary>
+    private readonly ConcurrentDictionary<int, string> _names = new();
+
+    /// <summary>The last-seen name for a pid in this subtree, if we ever observed it alive.</summary>
+    public string? NameFor(int pid) => _names.TryGetValue(pid, out string? n) ? n : null;
 
     /// <summary>Whether this run was launched with correlation tracking.</summary>
     public bool HasCorrelation => CorrelationOutPath is not null;
@@ -61,6 +72,25 @@ public sealed class ProcessSupervisor : IDisposable
 
     public string? RootName { get; private set; }
 
+    /// <summary>
+    /// The process to address for control requests when no specific pid is given: the single
+    /// live .NET child (the app under a launcher like <c>dotnet run</c>) if there is exactly one,
+    /// else the first live .NET process, else the root. Mirrors how <c>snapshot</c> picks a target.
+    /// </summary>
+    public int PrimaryPid
+    {
+        get
+        {
+            List<SupervisedProcess> dotnet = List().Where(p => p.IsDotnet).ToList();
+            List<SupervisedProcess> children = dotnet.Where(p => !p.IsRoot).ToList();
+            if (children.Count == 1)
+            {
+                return children[0].Pid;
+            }
+            return dotnet.Count > 0 ? dotnet[0].Pid : RootPid; // List() orders root first
+        }
+    }
+
     /// <summary>Path to the captured stdout/stderr log, once started.</summary>
     public string? LogPath { get; private set; }
 
@@ -72,12 +102,15 @@ public sealed class ProcessSupervisor : IDisposable
     /// When set, attaches the CLR allocation profiler at startup by exporting the
     /// <c>CORECLR_*</c> env vars (inherited by the launched .NET process).
     /// </param>
-    public SupervisedProcess Start(string path, IReadOnlyList<string> args, bool dumpOnCrash, string? profilerPath = null, string? captureDir = null, string? snapshotOn = null, bool correlate = false)
+    public SupervisedProcess Start(string path, IReadOnlyList<string> args, bool dumpOnCrash, string? profilerPath = null, string? captureDir = null, string? snapshotOn = null, bool correlate = false, bool collectChildren = false)
     {
         if (captureDir is not null)
         {
             Directory.CreateDirectory(captureDir);
         }
+        _captureDir = captureDir;
+        _collectChildren = collectChildren;
+        string? correlationTemplate = null;
 
         var psi = new ProcessStartInfo(path)
         {
@@ -98,11 +131,13 @@ public sealed class ProcessSupervisor : IDisposable
             psi.Environment["CORECLR_PROFILER"] = "{cf0d821e-299b-5307-a3d8-b283c03916dd}";
             psi.Environment["CORECLR_PROFILER_PATH"] = profilerPath;
 
-            // Steer the profiler's folded output into the session dir (or temp).
-            ProfileOutPath = captureDir is not null
+            // Steer the profiler's folded output into the session dir (or temp). The profiler
+            // appends its own pid to the filename, so this is a template, not the final path;
+            // the real per-pid paths are resolved once we know the root pid (below).
+            _profileTemplate = captureDir is not null
                 ? Path.Combine(captureDir, "allocations.tsv")
                 : Path.Combine(Path.GetTempPath(), $"sherlock-alloc-{Guid.NewGuid():n}.tsv");
-            psi.Environment["SHERLOCK_PROFILE_OUT"] = ProfileOutPath;
+            psi.Environment["SHERLOCK_PROFILE_OUT"] = _profileTemplate;
 
             // Snapshot triggers pre-armed at launch (call:/alloc:/gc:/throw:). A trigger
             // firing arrives as a snapshot-trigger event on the control channel.
@@ -116,9 +151,9 @@ public sealed class ProcessSupervisor : IDisposable
             if (correlate)
             {
                 string dir = captureDir ?? Path.GetTempPath();
-                CorrelationOutPath = Path.Combine(dir, "correlation.tsv");
+                correlationTemplate = Path.Combine(dir, "correlation.tsv");
                 psi.Environment["SHERLOCK_CORRELATE"] = "1";
-                psi.Environment["SHERLOCK_CORRELATE_OUT"] = CorrelationOutPath;
+                psi.Environment["SHERLOCK_CORRELATE_OUT"] = correlationTemplate; // profiler appends the pid
             }
 
             // Unified control channel: sl listens on a socket, the profiler connects back
@@ -126,11 +161,11 @@ public sealed class ProcessSupervisor : IDisposable
             // pushes events (probe hits).
             string ctlDir = captureDir ?? Path.GetTempPath();
             _control = new ProfilerControlServer(Path.Combine(ctlDir, "control.sock"));
-            _control.EventReceived += fields =>
+            _control.EventReceived += (pid, fields) =>
             {
-                if (fields.Length >= 3 && fields[1] == "snapshot-trigger")
+                if (fields.Length >= 3 && fields[1] == ControlEvents.SnapshotTrigger)
                 {
-                    _probeHits.Enqueue(fields[2]);
+                    _probeHits.Enqueue((pid, fields[2])); // remember which process fired
                 }
             };
             psi.Environment["SHERLOCK_CONTROL_SOCKET"] = _control.SocketPath;
@@ -148,7 +183,18 @@ public sealed class ProcessSupervisor : IDisposable
         _root = Process.Start(psi)
             ?? throw new DumpAnalysisException($"Failed to start process: {path}");
 
+        // Now that we know the root pid, resolve the profiler's per-pid output files for it.
+        if (_profileTemplate is not null)
+        {
+            ProfileOutPath = InsertPid(_profileTemplate, _root.Id);
+        }
+        if (correlationTemplate is not null)
+        {
+            CorrelationOutPath = InsertPid(correlationTemplate, _root.Id);
+        }
+
         RootName = Path.GetFileName(path);
+        _names[_root.Id] = RootName;
         // %p in the dump name expands to the pid, so we know the root's crash file path.
         _crashDumpPath = Path.Combine(Path.GetTempPath(), $"sherlock-crash-{_root.Id}.dmp");
 
@@ -213,72 +259,122 @@ public sealed class ProcessSupervisor : IDisposable
     }
 
     /// <summary>
-    /// Once the profiled root has exited (so the profiler has flushed), returns the
-    /// allocation profile path exactly once. Otherwise null.
+    /// Once the root has exited (so every process in the tree has flushed), each process's
+    /// per-pid allocation profile found in the capture dir, keyed by pid. The profiler is
+    /// env-inherited, so every .NET process in the subtree writes its own
+    /// <c>allocations.&lt;pid&gt;.tsv</c> — the launcher and the app alike. Returned once.
     /// </summary>
-    public string? TryHarvestAllocationProfile()
+    public IReadOnlyList<(int Pid, string Path)> HarvestAllocationProfiles()
     {
-        if (ProfileOutPath is null || _root is null || !_root.HasExited || _profileHarvested)
+        if (ProfileOutPath is null || _profileTemplate is null || _captureDir is null ||
+            _root is null || !_root.HasExited || _profileHarvested || !Directory.Exists(_captureDir))
         {
-            return null;
+            return [];
         }
 
         _profileHarvested = true;
-        return File.Exists(ProfileOutPath) ? ProfileOutPath : null;
+        string stem = Path.GetFileNameWithoutExtension(_profileTemplate); // "allocations"
+        string ext = Path.GetExtension(_profileTemplate);                 // ".tsv"
+        var found = new List<(int, string)>();
+        foreach (string file in Directory.EnumerateFiles(_captureDir, $"{stem}.*{ext}"))
+        {
+            string inner = Path.GetFileNameWithoutExtension(file); // "allocations.<pid>"
+            int dot = inner.LastIndexOf('.');
+            if (dot >= 0 && int.TryParse(inner[(dot + 1)..], out int pid))
+            {
+                found.Add((pid, file));
+            }
+        }
+        return found;
+    }
+
+    /// <summary>Mirrors the profiler's per-pid naming: allocations.tsv → allocations.&lt;pid&gt;.tsv.</summary>
+    internal static string InsertPid(string path, int pid)
+    {
+        string dir = Path.GetDirectoryName(path) ?? string.Empty;
+        string stem = Path.GetFileNameWithoutExtension(path);
+        return Path.Combine(dir, $"{stem}.{pid}{Path.GetExtension(path)}");
+    }
+
+    /// <summary>
+    /// With <c>--children</c>, every descendant .NET process's per-pid allocation profile in the
+    /// capture dir (excluding the root's). Available once those processes have exited and flushed.
+    /// </summary>
+    public IReadOnlyList<(int Pid, string Path)> ChildAllocationProfiles()
+    {
+        if (!_collectChildren || _captureDir is null || _profileTemplate is null || !Directory.Exists(_captureDir))
+        {
+            return [];
+        }
+
+        string stem = Path.GetFileNameWithoutExtension(_profileTemplate); // "allocations"
+        string ext = Path.GetExtension(_profileTemplate);                 // ".tsv"
+        var found = new List<(int, string)>();
+        foreach (string file in Directory.EnumerateFiles(_captureDir, $"{stem}.*{ext}"))
+        {
+            string inner = Path.GetFileNameWithoutExtension(file); // "allocations.<pid>"
+            int dot = inner.LastIndexOf('.');
+            if (dot >= 0 && int.TryParse(inner[(dot + 1)..], out int pid) && pid != RootPid)
+            {
+                found.Add((pid, file));
+            }
+        }
+        return found;
     }
 
     /// <summary>
     /// Drains the snapshot-action probe hits pushed by the profiler over the control channel
     /// since the last call. Only actionable while the process is alive — a dump needs a live pid.
     /// </summary>
-    public IReadOnlyList<string> TryHarvestProbeSignals()
+    public IReadOnlyList<(int Pid, string Name)> TryHarvestProbeSignals()
     {
         if (_root is null || _root.HasExited)
         {
             return [];
         }
 
-        List<string>? hits = null;
-        while (_probeHits.TryDequeue(out string? name))
+        List<(int, string)>? hits = null;
+        while (_probeHits.TryDequeue(out (int Pid, string Name) hit))
         {
-            (hits ??= []).Add(name);
+            (hits ??= []).Add(hit);
         }
-        return (IReadOnlyList<string>?)hits ?? [];
+        return (IReadOnlyList<(int, string)>?)hits ?? [];
     }
 
     /// <summary>
-    /// Asks the in-process profiler (over the control channel) to force a GC and emit a
+    /// Asks a specific process's profiler (over the control channel) to force a GC and emit a
     /// fresh correlation sidecar so live-object addresses are settled. Returns the sidecar
     /// path once written, or null on timeout / if correlation isn't available. Call the
     /// dump immediately after so addresses line up.
     /// </summary>
-    public (string? Sidecar, long GcAtEmit) RequestCorrelationSnapshot(TimeSpan timeout)
+    public (string? Sidecar, long GcAtEmit) RequestCorrelationSnapshot(int pid, TimeSpan timeout)
     {
-        if (_control is null || _root is null || _root.HasExited)
+        if (_control is null || !IsAlive(pid))
         {
             return (null, -1);
         }
 
-        (bool ok, string[] fields) = _control.RequestAsync("emit-correlation", timeout).GetAwaiter().GetResult();
+        (bool ok, string[] fields) = _control.RequestAsync(pid, ControlCommands.EmitCorrelation, timeout).GetAwaiter().GetResult();
         if (!ok)
         {
             return (null, -1);
         }
 
-        string path = fields.Length > 0 ? fields[0] : CorrelationOutPath ?? "";
+        // The profiler reports its own (per-pid) sidecar path in the response.
+        string path = fields.Length > 0 ? fields[0] : "";
         long gc = fields.Length > 1 && long.TryParse(fields[1], out long g) ? g : -1;
         return (File.Exists(path) ? path : null, gc);
     }
 
-    /// <summary>The number of GCs the profiler has seen — used to detect drift across a snapshot.</summary>
-    public long GcCount(TimeSpan timeout)
+    /// <summary>The number of GCs a process's profiler has seen — used to detect drift across a snapshot.</summary>
+    public long GcCount(int pid, TimeSpan timeout)
     {
-        if (_control is null || _root is null || _root.HasExited)
+        if (_control is null || !IsAlive(pid))
         {
             return -1;
         }
 
-        (bool ok, string[] fields) = _control.RequestAsync("gc-count", timeout).GetAwaiter().GetResult();
+        (bool ok, string[] fields) = _control.RequestAsync(pid, ControlCommands.GcCount, timeout).GetAwaiter().GetResult();
         return ok && fields.Length > 0 && long.TryParse(fields[0], out long g) ? g : -1;
     }
 
@@ -286,29 +382,29 @@ public sealed class ProcessSupervisor : IDisposable
     /// Arms a snapshot trigger at runtime over the control channel (call:/alloc:/gc:/throw:).
     /// Returns (ok, detail): ok=false with a reason if the profiler can't arm it.
     /// </summary>
-    public (bool Ok, string Detail) ArmSnapshotTrigger(string spec, TimeSpan timeout)
+    public (bool Ok, string Detail) ArmSnapshotTrigger(int pid, string spec, TimeSpan timeout)
     {
-        if (_control is null || _root is null || _root.HasExited)
+        if (_control is null || !IsAlive(pid))
         {
             return (false, "no live profiler");
         }
-        (bool ok, string[] fields) = _control.RequestAsync("arm-trigger", timeout, spec).GetAwaiter().GetResult();
+        (bool ok, string[] fields) = _control.RequestAsync(pid, ControlCommands.ArmTrigger, timeout, spec).GetAwaiter().GetResult();
         return (ok, fields.Length > 0 ? fields[0] : (ok ? "armed" : "failed"));
     }
 
     /// <summary>
-    /// Asks the profiler to flush the aggregate allocation profile now (rather than only at
-    /// exit). Returns its path once written, or null on failure. Best-effort for a busy
-    /// target — the merge races concurrent allocations; ideal for an idle/paused process.
+    /// Asks a process's profiler to flush its aggregate allocation profile now (rather than only
+    /// at exit). Returns its (per-pid) path once written, or null on failure. Best-effort for a
+    /// busy target — the merge races concurrent allocations; ideal for an idle/paused process.
     /// </summary>
-    public string? FlushAllocations(TimeSpan timeout)
+    public string? FlushAllocations(int pid, TimeSpan timeout)
     {
-        if (_control is null || _root is null || _root.HasExited)
+        if (_control is null || !IsAlive(pid))
         {
             return null;
         }
 
-        (bool ok, string[] fields) = _control.RequestAsync("flush-allocations", timeout).GetAwaiter().GetResult();
+        (bool ok, string[] fields) = _control.RequestAsync(pid, ControlCommands.FlushAllocations, timeout).GetAwaiter().GetResult();
         string path = fields.Length > 0 ? fields[0] : "";
         return ok && File.Exists(path) ? path : null;
     }
@@ -328,7 +424,9 @@ public sealed class ProcessSupervisor : IDisposable
         {
             if (IsAlive(pid))
             {
-                result.Add(Describe(pid, pid == _root.Id, dotnet));
+                SupervisedProcess described = Describe(pid, pid == _root.Id, dotnet);
+                _names[pid] = described.Name;
+                result.Add(described);
             }
         }
 

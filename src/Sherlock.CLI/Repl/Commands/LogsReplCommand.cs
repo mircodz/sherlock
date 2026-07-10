@@ -61,6 +61,8 @@ public sealed class LogsReplCommand : IReplCommand
 
         context.Console.MarkupLineInterpolated($"[grey]── {target.RootName} (pid {target.RootPid}), last {lines.Count} lines ──[/]");
         foreach (string line in lines)
+        {
             context.Console.WriteLine(line);
+        }
     }
 }

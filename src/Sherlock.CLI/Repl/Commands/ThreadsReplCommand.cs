@@ -94,6 +94,8 @@ public sealed class ThreadsReplCommand : IReplCommand
         }
 
         foreach (StackFrameInfo frame in thread.StackTrace)
+        {
             console.MarkupLineInterpolated($"  [grey]{frame.InstructionPointer:x12}[/]  {frame.Description}");
+        }
     }
 }

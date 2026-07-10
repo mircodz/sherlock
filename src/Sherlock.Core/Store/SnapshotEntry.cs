@@ -16,6 +16,36 @@ public sealed record SnapshotEntry(
     DateTimeOffset CreatedAt,
     long SizeBytes)
 {
+    /// <summary>Why the snapshot was taken — a trigger (e.g. <c>throw:Foo</c>), <c>crash</c>, etc. Null for a manual snapshot.</summary>
+    public string? Reason { get; init; }
+
+    /// <summary>Whether an allocation profile is bundled with this snapshot (persisted for display).</summary>
+    public bool HasAllocations => AllocationsPath is not null;
+
+    /// <summary>Whether an allocation-provenance sidecar is bundled with this snapshot (persisted for display).</summary>
+    public bool HasCorrelation => CorrelationPath is not null;
+
+    /// <summary>
+    /// The snapshot's bundle folder — holds <c>heap.dmp</c> (this <see cref="Path"/>) plus the
+    /// coherently-captured <c>allocations.tsv</c> / <c>correlation.tsv</c> when profiled.
+    /// </summary>
+    [JsonIgnore]
+    public string Dir => System.IO.Path.GetDirectoryName(Path) ?? string.Empty;
+
+    /// <summary>The allocation profile captured with this snapshot, if any.</summary>
+    [JsonIgnore]
+    public string? AllocationsPath => Bundled("allocations.tsv");
+
+    /// <summary>The correlation sidecar captured with this snapshot, if any.</summary>
+    [JsonIgnore]
+    public string? CorrelationPath => Bundled("correlation.tsv");
+
+    private string? Bundled(string name)
+    {
+        string p = System.IO.Path.Combine(Dir, name);
+        return File.Exists(p) ? p : null;
+    }
+
     /// <summary>True if the underlying dump file still exists on disk.</summary>
     [JsonIgnore]
     public bool Exists => File.Exists(Path);

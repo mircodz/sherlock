@@ -120,7 +120,9 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
         table.AddColumn(new TableColumn("[bold]PID[/]").RightAligned());
         table.AddColumn("[bold]Process[/]");
         foreach (DotnetProcess process in processes)
+        {
             table.AddRow(process.Pid.ToString(), Markup.Escape(process.Name));
+        }
 
         console.Write(table);
         return 0;
@@ -155,7 +157,10 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
             default:
                 console.MarkupLineInterpolated($"[red]error:[/] '{settings.Name}' is ambiguous ({matches.Count} matches). Use --pid:");
                 foreach (DotnetProcess process in matches)
+                {
                     console.MarkupLineInterpolated($"  [grey]{process.Pid}[/]  {process.Name}");
+                }
+
                 return false;
         }
     }
