@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using Microsoft.Diagnostics.Runtime;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core.Profiling;
+using Sherlock.Core.Storage;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -28,7 +29,7 @@ public sealed class WhoAllocReplCommand : IReplCommand
         }
 
         // Provenance is a property of the loaded snapshot — it's bundled in the snapshot folder.
-        string? sidecar = context.Workspace.CurrentEntry?.CorrelationPath;
+        string? sidecar = context.Workspace.CurrentEntry is { HasCorrelation: true } entry ? entry.ProvenancePath : null;
         if (sidecar is null)
         {
             context.Console.MarkupLine(
@@ -44,8 +45,11 @@ public sealed class WhoAllocReplCommand : IReplCommand
             : "[grey]<not a live object in this dump>[/]";
         context.Console.MarkupLine($"[grey]0x{address:x}[/]  {typeLine}");
 
-        CorrelationMap map = CorrelationMap.Read(sidecar);
-        string? folded = map.StackFor(address);
+        string? folded;
+        using (ContainerReader container = ContainerReader.Open(sidecar)) // mmap; released after the lookup
+        {
+            folded = new ProvenanceReader(container).StackFor(address); // returns a materialized string
+        }
         if (folded is null)
         {
             context.Console.MarkupLine(

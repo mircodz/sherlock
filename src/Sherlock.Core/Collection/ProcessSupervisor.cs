@@ -135,7 +135,7 @@ public sealed class ProcessSupervisor : IDisposable
             // appends its own pid to the filename, so this is a template, not the final path;
             // the real per-pid paths are resolved once we know the root pid (below).
             _profileTemplate = captureDir is not null
-                ? Path.Combine(captureDir, "allocations.tsv")
+                ? Path.Combine(captureDir, "allocations.slab")
                 : Path.Combine(Path.GetTempPath(), $"sherlock-alloc-{Guid.NewGuid():n}.tsv");
             psi.Environment["SHERLOCK_PROFILE_OUT"] = _profileTemplate;
 
@@ -150,8 +150,10 @@ public sealed class ProcessSupervisor : IDisposable
             // sidecar on demand, so a snapshot can be joined to allocation call stacks.
             if (correlate)
             {
+                // A correlated snapshot writes a *unified* provenance.slab (allocation profile +
+                // per-object correlation, one shared stack table).
                 string dir = captureDir ?? Path.GetTempPath();
-                correlationTemplate = Path.Combine(dir, "correlation.tsv");
+                correlationTemplate = Path.Combine(dir, "provenance.slab");
                 psi.Environment["SHERLOCK_CORRELATE"] = "1";
                 psi.Environment["SHERLOCK_CORRELATE_OUT"] = correlationTemplate; // profiler appends the pid
             }

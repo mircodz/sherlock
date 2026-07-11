@@ -100,8 +100,8 @@ public sealed class SnapshotStore
         string? label = null,
         int? sourcePid = null,
         string? sourceName = null,
-        string? allocationsSource = null,
-        string? correlationSource = null,
+        string? provenanceSource = null,
+        bool correlated = false,
         string? reason = null)
     {
         if (!File.Exists(sourcePath))
@@ -114,26 +114,18 @@ public sealed class SnapshotStore
         bool owned;
         if (moveIntoStore)
         {
-            // Each snapshot is a self-contained bundle folder: heap.dmp plus the coherently
-            // captured allocations/correlation, so selecting it resolves everything.
+            // A self-contained bundle folder: heap.dmp plus its provenance.slab.
             string bundleDir = Path.Combine(session.Dir, "snapshots", id);
             Directory.CreateDirectory(bundleDir);
             finalPath = Path.Combine(bundleDir, "heap.dmp");
             File.Move(sourcePath, finalPath, overwrite: true);
-            
-            if (allocationsSource is not null && File.Exists(allocationsSource))
+
+            if (provenanceSource is not null && File.Exists(provenanceSource))
             {
-                File.Copy(allocationsSource, Path.Combine(bundleDir, "allocations.tsv"), overwrite: true);
+                File.Copy(provenanceSource, Path.Combine(bundleDir, "provenance.slab"), overwrite: true);
+                try { File.Delete(provenanceSource); } catch { /* transient staging file */ }
             }
-            
-            if (correlationSource is not null && File.Exists(correlationSource))
-            {
-                File.Copy(correlationSource, Path.Combine(bundleDir, "correlation.tsv"), overwrite: true);
-                // The emit target is a transient per-pid staging file (correlation.<pid>.tsv in the
-                // workspace root); it lives only to be bundled here, so don't leave it behind.
-                try { File.Delete(correlationSource); } catch { /* best effort */ }
-            }
-            
+
             owned = true;
         }
         else
@@ -151,6 +143,7 @@ public sealed class SnapshotStore
             SizeBytes: new FileInfo(finalPath).Length)
         {
             Reason = reason,
+            HasCorrelation = correlated,
         };
 
         // Attribute the snapshot to the process it came from; the first process seen in a

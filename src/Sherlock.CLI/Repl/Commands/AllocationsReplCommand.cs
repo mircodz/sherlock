@@ -61,7 +61,7 @@ public sealed class AllocationsReplCommand : IReplCommand
 
         // Resolve the profile: explicit path arg > loaded snapshot's bundle > run session > run target.
         ProcessSupervisor? runTarget = context.Workspace.Targets.LastOrDefault(t => t.ProfileOutPath is not null);
-        path ??= context.Workspace.CurrentEntry?.AllocationsPath
+        path ??= context.Workspace.CurrentEntry?.ProvenancePath
                ?? context.Workspace.CurrentSession?.Processes.FirstOrDefault(p => p.HasAllocations)?.AllocationsPath
                ?? runTarget?.ProfileOutPath;
         if (path is null)

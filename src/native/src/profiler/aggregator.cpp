@@ -1,9 +1,13 @@
 #include "sherlock/profiler/aggregator.hpp"
 
 #include "sherlock/common/logger.hpp"
+#include "sherlock/storage/profile.hpp"
 
 #include <algorithm>
 #include <fstream>
+#include <string_view>
+#include <unordered_map>
+#include <vector>
 
 namespace Sherlock {
 
@@ -173,40 +177,7 @@ void Aggregator::countPendingAsSurvived() {
     }
 }
 
-void Aggregator::emitCorrelation(const std::string& path) {
-    std::ofstream out(path, std::ios::trunc);
-    if (!out) {
-        if (logger_)
-            logger_->logError("could not open correlation output: " + path);
-        return;
-    }
-
-    // Path A join file: every live tracked object at its current address, with the
-    // allocation call stack. sl joins this to a heap dump by address (see docs).
-    out << "# sherlock correlation (live object -> allocation stack)\n";
-    out << "# address\tobject_id\tstack\n";
-    for (const auto& [addr, lv] : live_) {
-        out << "0x" << std::hex << addr << std::dec << '\t' << lv.id << '\t';
-        const std::vector<FunctionID>& frames = lv.site->frames;
-        if (frames.empty()) {
-            out << "<no managed frame>";
-        } else {
-            for (std::size_t i = frames.size(); i-- > 0;) {
-                out << resolveMethodName(frames[i]);
-                if (i != 0)
-                    out << ';';
-            }
-        }
-        out << '\n';
-    }
-
-    if (logger_)
-        logger_->logInfo("wrote " + std::to_string(live_.size()) + " live objects to " + path);
-}
-
-void Aggregator::dump(const std::string& path) {
-    // Merge all shards by stack. Safe without locking: the caller guarantees
-    // allocations have stopped (profiler is shutting down).
+std::unordered_map<std::uint64_t, Aggregator::Site> Aggregator::mergeShards() {
     std::unordered_map<std::uint64_t, Site> merged;
     int n = shardCount_.load(std::memory_order_acquire);
     for (int i = 0; i < n && i < kMaxShards; ++i) {
@@ -225,41 +196,77 @@ void Aggregator::dump(const std::string& path) {
             }
         }
     }
+    return merged;
+}
 
-    std::vector<const Site*> rows;
-    rows.reserve(merged.size());
-    for (const auto& [key, site] : merged)
-        rows.push_back(&site);
-    std::sort(rows.begin(), rows.end(),
-              [](const Site* a, const Site* b) { return a->alloc.bytes > b->alloc.bytes; });
+std::uint32_t Aggregator::internSiteStack(storage::ProvenanceWriter& pw, const Site& site) {
+    std::vector<std::string_view> names;
+    names.reserve(site.frames.size());
+    for (std::size_t i = site.frames.size(); i-- > 0;) { // stored leaf->root; intern root->leaf
+        names.push_back(resolveMethodName(site.frames[i]));
+    }
+    return pw.internStack(names);
+}
 
-    std::ofstream out(path, std::ios::trunc);
+void Aggregator::emitCorrelation(const std::string& path) {
+    // A snapshot's unified provenance.slab: the allocation profile AND per-object correlation,
+    // sharing ONE interned stack table (one identity space — dedup across the profile and the
+    // live objects). sl joins the correlation to a heap dump by address (see storage-format.md).
+    storage::ProvenanceWriter pw;
+
+    // Allocation profile (best-effort merge on a live process — same race as a live flush).
+    std::unordered_map<std::uint64_t, Site> merged = mergeShards();
+    for (const auto& [key, site] : merged) {
+        const std::uint32_t stackId = internSiteStack(pw, site);
+        pw.addAllocation(stackId, site.alloc.bytes, site.alloc.count, site.survived.bytes, site.survived.count);
+    }
+
+    // Correlation: each live object → its allocation stack id (intern each site once).
+    std::unordered_map<const Site*, std::uint32_t> siteStack;
+    for (const auto& [addr, lv] : live_) {
+        auto [it, inserted] = siteStack.try_emplace(lv.site, 0u);
+        if (inserted) {
+            it->second = internSiteStack(pw, *lv.site);
+        }
+        pw.addObject(static_cast<std::uint64_t>(addr), it->second);
+    }
+
+    if (!writeSlab(path, pw)) {
+        return;
+    }
+    if (logger_)
+        logger_->logInfo("wrote provenance (" + std::to_string(merged.size()) + " stacks, " +
+                         std::to_string(live_.size()) + " live objects) to " + path);
+}
+
+void Aggregator::dump(const std::string& path) {
+    // Exit-time (or live-flush) allocation aggregate — allocations only, no correlation.
+    std::unordered_map<std::uint64_t, Site> merged = mergeShards();
+    storage::ProvenanceWriter pw;
+    for (const auto& [key, site] : merged) {
+        const std::uint32_t stackId = internSiteStack(pw, site);
+        pw.addAllocation(stackId, site.alloc.bytes, site.alloc.count, site.survived.bytes, site.survived.count);
+    }
+
+    if (!writeSlab(path, pw)) {
+        return;
+    }
+    if (logger_)
+        logger_->logInfo("wrote " + std::to_string(merged.size()) + " stacks to " + path);
+}
+
+bool Aggregator::writeSlab(const std::string& path, const storage::ProvenanceWriter& pw) {
+    storage::ContainerWriter cw;
+    pw.writeTo(cw);
+    const std::string bytes = cw.finish();
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
     if (!out) {
         if (logger_)
             logger_->logError("could not open profile output: " + path);
-        return;
+        return false;
     }
-
-    out << "# sherlock allocation profile (folded stacks, root->leaf)\n";
-    out << "# alloc_bytes\talloc_count\tsurvived_bytes\tsurvived_count\tstack\n";
-    for (const Site* site : rows) {
-        out << site->alloc.bytes << '\t' << site->alloc.count << '\t'
-            << site->survived.bytes << '\t' << site->survived.count << '\t';
-        if (site->frames.empty()) {
-            out << "<no managed frame>";
-        } else {
-            // Stored leaf -> root; emit root -> leaf so callers come first.
-            for (std::size_t i = site->frames.size(); i-- > 0;) {
-                out << resolveMethodName(site->frames[i]);
-                if (i != 0)
-                    out << ';';
-            }
-        }
-        out << '\n';
-    }
-
-    if (logger_)
-        logger_->logInfo("wrote " + std::to_string(rows.size()) + " stacks to " + path);
+    out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    return static_cast<bool>(out);
 }
 
 const std::string& Aggregator::resolveMethodName(FunctionID method) {

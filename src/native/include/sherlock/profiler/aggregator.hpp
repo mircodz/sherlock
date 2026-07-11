@@ -14,6 +14,10 @@ namespace Sherlock {
 
 class Logger;
 
+namespace storage {
+class ProvenanceWriter;
+}
+
 /// Aggregates allocations by full call stack (the allocating method plus its
 /// callers), entirely in-process, and tracks how many sampled allocations survive
 /// their first GC (a cheap proxy for "escapes gen-0").
@@ -95,6 +99,16 @@ private:
     Shard& localShard();
     bool survived(ObjectID addr) const;    // is addr in this GC's survivor spans?
     ObjectID remap(ObjectID addr) const;   // follow addr through this GC's moves
+
+    /// Serializes a built provenance writer to a .slab file. Returns false on I/O error.
+    bool writeSlab(const std::string& path, const storage::ProvenanceWriter& pw);
+
+    /// Merges every thread's shard into one map keyed by stack hash. Best-effort on a live
+    /// process (races concurrent record()); exact at shutdown when allocations have stopped.
+    std::unordered_map<std::uint64_t, Site> mergeShards();
+
+    /// Interns a site's stack (resolving frames root→leaf) into `pw` and returns its stackId.
+    std::uint32_t internSiteStack(storage::ProvenanceWriter& pw, const Site& site);
 
     ICorProfilerInfo10* info_;
     Logger* logger_;

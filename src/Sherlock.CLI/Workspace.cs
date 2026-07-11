@@ -140,17 +140,17 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
     }
 
     /// <summary>Collects a dump from a live process (sl-side WriteDump), catalogs it, and loads it.</summary>
-    public SnapshotEntry Collect(int pid, DumpKind kind, bool load = true, string? allocations = null, string? correlation = null)
+    public SnapshotEntry Collect(int pid, DumpKind kind, bool load = true, string? provenance = null, bool correlated = false)
     {
         string temp = DumpCollector.Collect(pid, kind, outputPath: null);
-        return Ingest(pid, temp, load, allocations, correlation);
+        return Ingest(pid, temp, load, provenance, correlated);
     }
 
     /// <summary>
     /// Catalogs an already-written dump file (e.g. one the profiler self-dumped) under the
     /// run session this pid belongs to, and optionally loads it.
     /// </summary>
-    public SnapshotEntry Ingest(int pid, string dumpPath, bool load = true, string? allocations = null, string? correlation = null)
+    public SnapshotEntry Ingest(int pid, string dumpPath, bool load = true, string? provenance = null, bool correlated = false)
     {
         // A run is one workspace spanning its whole process tree — attribute the snapshot to the
         // run that owns this pid (root OR a live descendant), so snapshots of children land in the
@@ -162,7 +162,7 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
 
         SnapshotEntry entry = Store.AddSnapshot(session, dumpPath, moveIntoStore: true,
             sourcePid: pid, sourceName: NameOf(pid) ?? target?.RootName,
-            allocationsSource: allocations, correlationSource: correlation);
+            provenanceSource: provenance, correlated: correlated);
         if (load)
         {
             Load(session, entry);

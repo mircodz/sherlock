@@ -76,11 +76,11 @@ public sealed class ListReplCommand : IReplCommand
     private static string Badges(SnapshotEntry e)
     {
         var parts = new List<string>();
-        if (e.AllocationsPath is not null)
+        if (e.HasAllocations)
         {
             parts.Add("[aqua]alloc[/]");
         }
-        if (e.CorrelationPath is not null)
+        if (e.HasCorrelation)
         {
             parts.Add("[green]corr[/]");
         }

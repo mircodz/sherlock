@@ -89,9 +89,12 @@ public sealed class SnapshotReplCommand : IReplCommand
                     long gc = -1;
                     if (correlated)
                     {
+                        // Writes a unified provenance.slab (allocations + correlation, shared table).
                         (corr, gc) = target.RequestCorrelationSnapshot(pid, TimeSpan.FromSeconds(10));
                     }
-                    string? alloc = target.FlushAllocations(pid, TimeSpan.FromSeconds(10));
+                    // When correlated, the provenance.slab already carries the profile — only flush a
+                    // separate allocations.slab for a --profile (uncorrelated) snapshot.
+                    string? alloc = correlated ? null : target.FlushAllocations(pid, TimeSpan.FromSeconds(10));
                     return (corr, alloc, gc);
                 });
         }
@@ -100,7 +103,7 @@ public sealed class SnapshotReplCommand : IReplCommand
         try
         {
             entry = context.Console.Status().Start($"Snapshotting pid {pid}…",
-                _ => context.Workspace.Collect(pid, DumpKind.Heap, allocations: allocationsSrc, correlation: correlationSrc));
+                _ => context.Workspace.Collect(pid, DumpKind.Heap, provenance: correlationSrc ?? allocationsSrc, correlated: correlated));
         }
         catch (DumpAnalysisException ex)
         {
@@ -108,7 +111,7 @@ public sealed class SnapshotReplCommand : IReplCommand
             return;
         }
 
-        bool withProvenance = entry.CorrelationPath is not null;
+        bool withProvenance = entry.HasCorrelation;
 
         context.Console.MarkupLineInterpolated(
             $"[green]saved & loaded[/] [bold]{entry.Id}[/] [grey]({ByteSize.Format(entry.SizeBytes)})[/]");
