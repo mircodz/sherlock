@@ -10,7 +10,7 @@ public static class ControlCommands
     /// <summary>Liveness check.</summary>
     public const string Ping = "ping";
 
-    /// <summary>Force a GC, then emit the live-object → allocation-stack correlation sidecar.</summary>
+    /// <summary>Force a GC, then emit the live-object -> allocation-stack correlation sidecar.</summary>
     public const string EmitCorrelation = "emit-correlation";
 
     /// <summary>Flush the aggregated allocation profile to disk now (rather than at exit).</summary>

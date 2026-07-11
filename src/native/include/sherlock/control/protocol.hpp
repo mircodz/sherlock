@@ -81,7 +81,7 @@ inline constexpr std::string_view kSnapshotTrigger = "snapshot-trigger";
     return fields;
 }
 
-/// Joins fields with tabs — the inverse of splitFields.
+/// Joins fields with tabs - the inverse of splitFields.
 template <typename Range>
 [[nodiscard]] inline std::string joinFields(const Range& fields) {
     std::string out;

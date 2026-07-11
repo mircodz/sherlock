@@ -6,10 +6,7 @@ using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
 
-/// <summary>
-/// Shows the retained size of one object and what it directly dominates — i.e.
-/// how much memory frees if this object dies, and where that memory lives.
-/// </summary>
+/// <summary>Shows an object's retained size (memory freed if it dies) and what it directly dominates.</summary>
 public sealed class RetainedReplCommand : IReplCommand
 {
     private const int ChildLimit = 15;
@@ -20,20 +17,10 @@ public sealed class RetainedReplCommand : IReplCommand
 
     public void Execute(ReplContext context, string[] args)
     {
-        if (args.Length == 0)
-        {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] usage: {Usage}");
-            return;
-        }
-
-        if (!Addresses.TryParse(args[0], out ulong address))
-        {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] '{args[0]}' is not a valid object address.");
-            return;
-        }
+        ulong address = Args.Address(args, 0, Usage);
 
         DominatorTree tree = context.Console.Status()
-            .Start("Building dominator tree…", _ => context.Session.GetDominatorTree());
+            .Start("Building dominator tree…", _ => context.Snapshot.Dominators);
 
         DominatorNode? node = tree.Find(address);
         if (node is null)

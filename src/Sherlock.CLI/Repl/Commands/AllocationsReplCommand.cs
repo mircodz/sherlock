@@ -9,10 +9,7 @@ using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
 
-/// <summary>
-/// Shows the top allocation sites from a profile captured by <c>run --profile</c>
-/// (or any folded profile file): allocated vs. survived bytes by method.
-/// </summary>
+/// <summary>Shows the top allocation sites from a <c>run --profile</c> capture: allocated vs survived bytes by method.</summary>
 public sealed class AllocationsReplCommand : IReplCommand
 {
     private const int DefaultLimit = 25;
@@ -71,7 +68,7 @@ public sealed class AllocationsReplCommand : IReplCommand
         }
         if (!File.Exists(path))
         {
-            // The aggregate profile is only written at process exit — but if the target is
+            // The aggregate profile is only written at process exit - but if the target is
             // still running with a control channel, ask the profiler to flush it now.
             ProcessSupervisor? live = context.Workspace.Targets.FirstOrDefault(
                 t => !t.RootExited && (t.ProfileOutPath == path || t.SessionId == context.Workspace.CurrentSession?.Id));

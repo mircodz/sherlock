@@ -54,7 +54,7 @@ public sealed class RunReplCommand : IReplCommand
             }
         }
 
-        // Triggers, correlation, and child collection all ride the profiler → imply attaching it.
+        // Triggers, correlation, and child collection all ride the profiler -> imply attaching it.
         if (snapshotOn is not null || correlate || collectChildren)
         {
             profile = true;

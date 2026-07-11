@@ -4,7 +4,6 @@ using System.IO;
 using System.Linq;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
-using Sherlock.Core.Analysis;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -21,7 +20,7 @@ public sealed class ModulesReplCommand : IReplCommand
     {
         string? filter = args.Length > 0 ? args[0] : null;
 
-        IReadOnlyList<ModuleInfo> modules = new RuntimeAnalyzer(context.Session).GetModules();
+        IReadOnlyList<ModuleInfo> modules = context.Snapshot.Modules;
         if (filter is not null)
         {
             modules = modules.Where(m => m.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)).ToList();

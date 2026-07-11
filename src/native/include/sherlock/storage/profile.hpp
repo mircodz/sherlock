@@ -38,8 +38,8 @@ static_assert(sizeof(CorrelationRecord) == 16, "CorrelationRecord must be a pack
 inline constexpr std::uint16_t kProfileVersion = 1;
 
 /// Accumulates an interned stack table plus allocation records (and, in the next step, correlation
-/// records), then emits the whole container. Frames are given as names (root→leaf); the CLR-specific
-/// FunctionID→name resolution stays in the caller so this codec is pure and testable.
+/// records), then emits the whole container. Frames are given as names (root->leaf); the CLR-specific
+/// FunctionID->name resolution stays in the caller so this codec is pure and testable.
 class ProvenanceWriter {
 public:
     /// Interns a stack (its frames, then the sequence) and returns its shared id.

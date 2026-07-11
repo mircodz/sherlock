@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Globalization;
 using System.Threading;
+using Sherlock.Core;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -20,12 +21,10 @@ public sealed class SleepReplCommand : IReplCommand
 
     public void Execute(ReplContext context, string[] args)
     {
-        if (args.Length == 0 ||
-            !double.TryParse(args[0], NumberStyles.Float, CultureInfo.InvariantCulture, out double seconds) ||
-            seconds < 0)
+        Args.Require(args, 1, Usage);
+        if (!double.TryParse(args[0], NumberStyles.Float, CultureInfo.InvariantCulture, out double seconds) || seconds < 0)
         {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] usage: {Usage}");
-            return;
+            throw new DumpAnalysisException($"'{args[0]}' is not a valid duration in seconds.");
         }
 
         context.Console.MarkupLineInterpolated($"[grey]sleeping {seconds:0.##}s…[/]");

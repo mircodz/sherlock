@@ -6,7 +6,7 @@ namespace Sherlock.Core.Profiling;
 /// <summary>
 /// A top-down allocation call tree folded from an <see cref="AllocationProfile"/>: each
 /// node aggregates the allocated/survived bytes of every call path passing through it
-/// (inclusive), so you can navigate from the roots down to where allocation concentrates —
+/// (inclusive), so you can navigate from the roots down to where allocation concentrates -
 /// far more legible than a flat list keyed by leaf method.
 /// </summary>
 public sealed class AllocationTreeNode(string frame)

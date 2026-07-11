@@ -166,7 +166,7 @@ mdSignature ProbeManager::ensureProbeSig(ModuleID moduleId) {
     mdSignature tok = mdSignatureNil;
     IMetaDataEmit* emit = nullptr;
     if (SUCCEEDED(info_->GetModuleMetaData(moduleId, ofRead | ofWrite, IID_IMetaDataEmit, (IUnknown**)&emit)) && emit != nullptr) {
-        // void Sherlock_ProbeEnter(int32) — unmanaged C calling convention.
+        // void Sherlock_ProbeEnter(int32) - unmanaged C calling convention.
         BYTE sig[] = {
             static_cast<BYTE>(IMAGE_CEE_CS_CALLCONV_C),
             0x01,                                  // param count
@@ -321,7 +321,7 @@ bool ProbeManager::isArmed(ModuleID moduleId, mdMethodDef token) const {
 }
 
 void ProbeManager::onProbeHit(std::int32_t probeId) {
-    // Pure trigger: fire sl once, the first time this probe is hit. No recording — all
+    // Pure trigger: fire sl once, the first time this probe is hit. No recording - all
     // provenance comes from the heap snapshot sl takes in response.
     if (probeId >= 0 && static_cast<std::size_t>(probeId) < armed_.size() &&
         onHit_ && !fired_[probeId].exchange(true)) {

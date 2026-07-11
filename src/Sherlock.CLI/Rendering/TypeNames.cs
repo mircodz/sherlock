@@ -4,8 +4,8 @@ namespace Sherlock.CLI.Rendering;
 public static class TypeNames
 {
     /// <summary>
-    /// The type's short name — namespace stripped, generic arguments kept
-    /// (e.g. <c>System.Collections.Generic.List&lt;Foo.Bar&gt;</c> → <c>List&lt;Foo.Bar&gt;</c>).
+    /// The type's short name - namespace stripped, generic arguments kept
+    /// (e.g. <c>System.Collections.Generic.List&lt;Foo.Bar&gt;</c> -> <c>List&lt;Foo.Bar&gt;</c>).
     /// </summary>
     public static string Short(string typeName)
     {

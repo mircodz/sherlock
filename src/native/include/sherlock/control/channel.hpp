@@ -43,7 +43,7 @@ public:
 
     /// Connects to sl's listening socket at `socketPath`. Returns nullopt on success, or
     /// an error message on failure. (std::optional rather than std::expected for portable
-    /// C++23 — libstdc++ on some CI toolchains lacks <expected>.)
+    /// C++23 - libstdc++ on some CI toolchains lacks <expected>.)
     [[nodiscard]] std::optional<std::string> connect(const std::string& socketPath);
 
     /// Sends HELLO (version + features), then serves requests on a background thread.

@@ -1,7 +1,6 @@
 using System.IO;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
-using Sherlock.Core.Analysis;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -15,7 +14,7 @@ public sealed class InfoReplCommand : IReplCommand
 
     public void Execute(ReplContext context, string[] args)
     {
-        DumpInfo info = new DumpInspector(context.Session).Inspect();
+        DumpInfo info = context.Snapshot.Info;
 
         var grid = new Grid().AddColumn().AddColumn();
         grid.AddRow("[grey]Dump[/]", Markup.Escape(Path.GetFileName(info.DumpPath)));

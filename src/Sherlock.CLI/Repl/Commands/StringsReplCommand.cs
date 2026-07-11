@@ -2,7 +2,6 @@ using System.Collections.Generic;
 using System.Linq;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
-using Sherlock.Core.Analysis;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -31,7 +30,7 @@ public sealed class StringsReplCommand : IReplCommand
         }
 
         IReadOnlyList<DuplicateString> duplicates = context.Console.Status()
-            .Start("Hashing strings…", _ => new HeapAnalyzer(context.Session).FindDuplicateStrings(limit));
+            .Start("Hashing strings…", _ => context.Snapshot.DuplicateStrings(limit));
 
         if (duplicates.Count == 0)
         {

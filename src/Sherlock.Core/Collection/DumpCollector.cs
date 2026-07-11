@@ -9,7 +9,7 @@ public enum DumpKind
 {
     /// <summary>Smallest: threads + stacks, little heap.</summary>
     Mini,
-    /// <summary>Threads plus the managed heap — the sweet spot for analysis.</summary>
+    /// <summary>Threads plus the managed heap - the sweet spot for analysis.</summary>
     Heap,
     /// <summary>Triage dump: minimal PII, useful for sharing.</summary>
     Triage,

@@ -5,7 +5,7 @@ using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
 
-/// <summary>Lists the library — workspaces (runs) and their snapshots, grouped by process.</summary>
+/// <summary>Lists the library - workspaces (runs) and their snapshots, grouped by process.</summary>
 public sealed class ListReplCommand : IReplCommand
 {
     public string Name => "ls";
@@ -72,7 +72,7 @@ public sealed class ListReplCommand : IReplCommand
         context.Console.MarkupLine("[grey]load <id> · rm <id|workspace> · label <id> <name> · alloc[/]");
     }
 
-    /// <summary>What data the snapshot bundle carries — heap always, plus allocations/correlation when profiled.</summary>
+    /// <summary>What data the snapshot bundle carries - heap always, plus allocations/correlation when profiled.</summary>
     private static string Badges(SnapshotEntry e)
     {
         var parts = new List<string>();

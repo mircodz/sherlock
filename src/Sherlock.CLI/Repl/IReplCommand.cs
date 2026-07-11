@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Sherlock.Core;
+using Sherlock.Core.Store;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl;
@@ -8,18 +9,28 @@ namespace Sherlock.CLI.Repl;
 /// <summary>The workspace and console a command operates against.</summary>
 public sealed record ReplContext(Workspace Workspace, IAnsiConsole Console, Func<string, bool> RunLine)
 {
-    /// <summary>
-    /// The currently-loaded session. Analysis commands use this; if nothing is
-    /// loaded it raises a friendly error the REPL renders.
-    /// </summary>
-    public DumpSession Session => Workspace.Current
+    /// <summary>The loaded snapshot, or a friendly error if nothing is loaded.</summary>
+    public Snapshot Snapshot => Workspace.Current
         ?? throw new DumpAnalysisException("No snapshot loaded. Use `load <id>`, `collect`, or `import <file>` first.");
+
+    /// <summary>Resolves a snapshot by id or label, erroring if it's unknown or its file is gone.</summary>
+    public SnapshotEntry ResolveSnapshot(string idOrLabel)
+    {
+        if (Workspace.Store.FindSnapshot(idOrLabel) is not (_, { } snap))
+        {
+            throw new DumpAnalysisException($"no snapshot '{idOrLabel}'. See `snapshots`.");
+        }
+        if (!snap.Exists)
+        {
+            throw new DumpAnalysisException($"snapshot '{idOrLabel}' file is missing.");
+        }
+        return snap;
+    }
 }
 
 /// <summary>
-/// A single analysis command. The same instances back both the interactive
-/// REPL and non-interactive <c>--exec</c> invocations, so all analysis logic
-/// lives in exactly one place.
+/// An analysis command. The same instances back both the interactive REPL and <c>--exec</c>,
+/// so analysis logic lives in one place.
 /// </summary>
 public interface IReplCommand
 {

@@ -9,7 +9,7 @@ namespace Sherlock.CLI.Repl.Commands;
 
 /// <summary>
 /// Blocks until an armed snapshot trigger fires (and its heap dump is captured), or a
-/// timeout elapses. Makes scripts that arm a trigger and then inspect it deterministic —
+/// timeout elapses. Makes scripts that arm a trigger and then inspect it deterministic -
 /// no guessing a <c>sleep</c> long enough for the event.
 /// </summary>
 public sealed class WaitTriggerReplCommand : IReplCommand
@@ -42,7 +42,7 @@ public sealed class WaitTriggerReplCommand : IReplCommand
         {
             while (DateTime.UtcNow < deadline)
             {
-                IReadOnlyList<(SnapshotEntry Entry, string Probe)> caught = context.Workspace.HarvestProbeSnapshots();
+                IReadOnlyList<(SnapshotEntry Entry, string Probe)> caught = context.Workspace.PollProbeSnapshots();
                 if (caught.Count > 0)
                 {
                     foreach ((SnapshotEntry entry, string probe) in caught)

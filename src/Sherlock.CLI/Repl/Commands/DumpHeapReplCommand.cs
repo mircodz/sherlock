@@ -20,8 +20,8 @@ public sealed class DumpHeapReplCommand : IReplCommand
     {
         string? filter = args.Length > 0 ? args[0] : null;
 
-        // Cached full histogram, filtered in-memory — no re-enumeration on repeat/filtered calls.
-        IReadOnlyList<HeapTypeStat> stats = context.Session.GetHistogram();
+        // Cached full histogram, filtered in-memory - no re-enumeration on repeat/filtered calls.
+        IReadOnlyList<HeapTypeStat> stats = context.Snapshot.Histogram;
         if (filter is not null)
         {
             stats = stats.Where(s => s.TypeName.Contains(filter, System.StringComparison.OrdinalIgnoreCase)).ToList();

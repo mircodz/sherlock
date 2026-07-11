@@ -43,7 +43,7 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
 
         while (true)
         {
-            HarvestCrashDumps();
+            PollTargets();
 
             string? line = LineEditor.ReadLine(Prompt, history);
             if (line is null) // EOF (Ctrl-D)
@@ -120,26 +120,26 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
     }
 
     /// <summary>Auto-imports crash dumps from run-targets that have exited.</summary>
-    private void HarvestCrashDumps()
+    private void PollTargets()
     {
         if (_workspace is null)
         {
             return;
         }
 
-        foreach (Sherlock.Core.Store.SnapshotEntry entry in _workspace.HarvestExitedCrashDumps())
+        foreach (Sherlock.Core.Store.SnapshotEntry entry in _workspace.PollExitedCrashDumps())
         {
             console.MarkupLineInterpolated(
                 $"[yellow]· crash dump captured as[/] [bold]{entry.Id}[/] [grey]— load {entry.Id} to analyze[/]");
         }
 
-        foreach (Sherlock.Core.Store.Session session in _workspace.HarvestExitedAllocationProfiles())
+        foreach (Sherlock.Core.Store.Session session in _workspace.PollExitedAllocationProfiles())
         {
             console.MarkupLineInterpolated(
                 $"[yellow]· allocation profile captured for session[/] [bold]{session.Id}[/] [grey]({session.Command})[/]");
         }
 
-        foreach ((Sherlock.Core.Store.SnapshotEntry entry, string probe) in _workspace.HarvestProbeSnapshots())
+        foreach ((Sherlock.Core.Store.SnapshotEntry entry, string probe) in _workspace.PollProbeSnapshots())
         {
             console.MarkupLineInterpolated(
                 $"[yellow]●[/] [bold]{probe}[/] [yellow]fired — heap snapshot[/] [bold]{entry.Id}[/] [grey]captured; load {entry.Id} to inspect[/]");

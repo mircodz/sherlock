@@ -8,7 +8,7 @@ namespace Sherlock.Core.Storage;
 /// <summary>
 /// A read-only memory-mapped view of a file as <see cref="ReadOnlyMemory{Byte}"/>: zero-copy, paged
 /// in on demand, no whole-file allocation. Disposing unmaps. Files &gt; 2 GiB aren't supported yet
-/// (a single view is <c>int</c>-bounded — chunked views would be the fix).
+/// (a single view is <c>int</c>-bounded - chunked views would be the fix).
 /// </summary>
 internal sealed unsafe class MemoryMappedRegion : MemoryManager<byte>
 {

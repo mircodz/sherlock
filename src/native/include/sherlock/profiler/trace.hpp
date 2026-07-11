@@ -27,7 +27,7 @@ public:
     TraceCollector(Logger* logger, std::size_t ringCapacity = 1u << 16);
     ~TraceCollector();
 
-    // Hot path — called from the ELT hooks on managed threads.
+    // Hot path - called from the ELT hooks on managed threads.
     void onEnter(FunctionID func);
     void onLeave(FunctionID func);
 

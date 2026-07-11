@@ -42,8 +42,8 @@ public sealed class RunCommand : Command<RunCommand.Settings>
     {
         IAnsiConsole console = AnsiConsole.Console;
 
-        // The target path may be the positional arg, or — in `run [opts] -- <bin> <args>`
-        // form — the first token after `--`. Remaining tokens are the target's args.
+        // The target path may be the positional arg, or - in `run [opts] -- <bin> <args>`
+        // form - the first token after `--`. Remaining tokens are the target's args.
         var childArgs = new List<string>(settings.Args);
         childArgs.AddRange(context.Remaining.Raw);
 

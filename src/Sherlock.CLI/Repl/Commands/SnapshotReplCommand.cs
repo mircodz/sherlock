@@ -69,41 +69,10 @@ public sealed class SnapshotReplCommand : IReplCommand
 
     internal static void Collect(ReplContext context, int pid)
     {
-        // Coherent capture: for a profiled/correlated target, flush the allocation profile and
-        // emit the correlation sidecar at the same instant as the dump, and bundle all three into
-        // the snapshot folder (see SnapshotStore.AddSnapshot / SnapshotEntry).
-        // Find the run that owns this pid (its root OR a live descendant), so a child snapshot
-        // under `dotnet run` still captures allocation state — routed to that child's profiler.
-        ProcessSupervisor? target = context.Workspace.Targets
-            .FirstOrDefault(t => !t.RootExited && (t.RootPid == pid || t.List().Any(p => p.Pid == pid)));
-        bool correlated = target is { HasCorrelation: true };
-        string? correlationSrc = null;
-        string? allocationsSrc = null;
-        long gcAtEmit = -1;
-        if (target is not null && (correlated || target.ProfileOutPath is not null))
-        {
-            (correlationSrc, allocationsSrc, gcAtEmit) = context.Console.Status().Start(
-                "Forcing GC + capturing allocation state…", _ =>
-                {
-                    string? corr = null;
-                    long gc = -1;
-                    if (correlated)
-                    {
-                        // Writes a unified provenance.slab (allocations + correlation, shared table).
-                        (corr, gc) = target.RequestCorrelationSnapshot(pid, TimeSpan.FromSeconds(10));
-                    }
-                    // When correlated, the provenance.slab already carries the profile — only flush a
-                    // separate allocations.slab for a --profile (uncorrelated) snapshot.
-                    string? alloc = correlated ? null : target.FlushAllocations(pid, TimeSpan.FromSeconds(10));
-                    return (corr, alloc, gc);
-                });
-        }
-
-        SnapshotEntry entry;
+        CaptureResult result;
         try
         {
-            entry = context.Console.Status().Start($"Snapshotting pid {pid}…",
-                _ => context.Workspace.Collect(pid, DumpKind.Heap, provenance: correlationSrc ?? allocationsSrc, correlated: correlated));
+            result = context.Console.Status().Start($"Snapshotting pid {pid}…", _ => context.Workspace.Capture(pid));
         }
         catch (DumpAnalysisException ex)
         {
@@ -111,24 +80,17 @@ public sealed class SnapshotReplCommand : IReplCommand
             return;
         }
 
-        bool withProvenance = entry.HasCorrelation;
-
         context.Console.MarkupLineInterpolated(
-            $"[green]saved & loaded[/] [bold]{entry.Id}[/] [grey]({ByteSize.Format(entry.SizeBytes)})[/]");
-        if (withProvenance)
+            $"[green]saved & loaded[/] [bold]{result.Entry.Id}[/] [grey]({ByteSize.Format(result.Entry.SizeBytes)})[/]");
+
+        switch (result.Provenance)
         {
-            // Drift check: if a GC ran between the emit and the dump, some objects moved and
-            // the address join is stale. Detect it (we can't prevent it with an external dump).
-            bool drifted = correlated && gcAtEmit >= 0 &&
-                           target!.GcCount(pid, TimeSpan.FromSeconds(3)) is long now && now >= 0 && now != gcAtEmit;
-            if (drifted)
-            {
+            case ProvenanceState.Drifted:
                 context.Console.MarkupLine("[yellow]⚠ a GC ran during capture[/] [grey]— some allocation provenance may be stale; re-snapshot for exact results.[/]");
-            }
-            else
-            {
+                break;
+            case ProvenanceState.Exact:
                 context.Console.MarkupLine("[grey]Allocation provenance captured (exact); use[/] whoalloc <address> [grey]to see where an object was allocated.[/]");
-            }
+                break;
         }
     }
 }

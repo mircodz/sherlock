@@ -1,6 +1,6 @@
 namespace Sherlock.CLI.Rendering;
 
-/// <summary>Formats large counts compactly (e.g. 1234 → 1.2K, 3400000 → 3.4M).</summary>
+/// <summary>Formats large counts compactly (e.g. 1234 -> 1.2K, 3400000 -> 3.4M).</summary>
 public static class Counts
 {
     private static readonly string[] Suffixes = ["", "K", "M", "B"];

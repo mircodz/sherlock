@@ -68,14 +68,14 @@ public sealed class StackTable
         return name;
     }
 
-    /// <summary>The frame ids of a stack, root→leaf as interned.</summary>
+    /// <summary>The frame ids of a stack, root->leaf as interned.</summary>
     public ReadOnlySpan<uint> FrameIds(uint stackId)
     {
         StackRecord r = MemoryMarshal.Cast<byte, StackRecord>(_stacks.Span)[(int)stackId];
         return MemoryMarshal.Cast<byte, uint>(_stackFrames.Span).Slice((int)r.FirstFrame, (int)r.FrameCount);
     }
 
-    /// <summary>Resolves a stack to its method names, root→leaf.</summary>
+    /// <summary>Resolves a stack to its method names, root->leaf.</summary>
     public string[] FrameNames(uint stackId)
     {
         ReadOnlySpan<uint> ids = FrameIds(stackId);

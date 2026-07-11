@@ -64,7 +64,7 @@ public sealed record ObjectDetail(
     IReadOnlyList<FieldValue> Fields);
 
 /// <summary>
-/// A node in the dominator tree: an object plus its retained size — the total
+/// A node in the dominator tree: an object plus its retained size - the total
 /// memory that becomes collectable if this object is freed.
 /// </summary>
 public sealed record DominatorNode(

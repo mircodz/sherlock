@@ -18,10 +18,10 @@ public sealed class DominatorsReplCommand : IReplCommand
 
     public void Execute(ReplContext context, string[] args)
     {
-        int limit = args.Length > 0 && int.TryParse(args[0], out int n) && n > 0 ? n : DefaultLimit;
+        int limit = Args.Limit(args, 0, DefaultLimit);
 
         DominatorTree tree = context.Console.Status()
-            .Start("Building dominator tree…", _ => context.Session.GetDominatorTree());
+            .Start("Building dominator tree…", _ => context.Snapshot.Dominators);
 
         IReadOnlyList<DominatorNode> top = tree.TopDominators(limit);
         ulong total = tree.TotalReachableBytes;

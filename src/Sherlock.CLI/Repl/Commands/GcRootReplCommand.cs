@@ -1,7 +1,6 @@
 using System.Collections.Generic;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
-using Sherlock.Core.Analysis;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -17,29 +16,14 @@ public sealed class GcRootReplCommand : IReplCommand
 
     public void Execute(ReplContext context, string[] args)
     {
-        if (args.Length == 0)
-        {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] usage: {Usage}");
-            return;
-        }
-
-        if (!Addresses.TryParse(args[0], out ulong address))
-        {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] '{args[0]}' is not a valid object address.");
-            return;
-        }
-
-        int maxPaths = DefaultPaths;
-        if (args.Length > 1 && int.TryParse(args[1], out int n) && n > 0)
-        {
-            maxPaths = n;
-        }
+        ulong address = Args.Address(args, 0, Usage);
+        int maxPaths = Args.Limit(args, 1, DefaultPaths);
 
         context.Console.MarkupLineInterpolated($"[grey]Searching for roots of[/] 0x{address:x}[grey]…[/]");
 
         IReadOnlyList<GcRootPath> paths = context.Console.Status()
             .Start("Walking references from GC roots…", _ =>
-                new RootAnalyzer(context.Session).FindRoots(address, maxPaths));
+                context.Snapshot.Roots(address, maxPaths));
 
         if (paths.Count == 0)
         {

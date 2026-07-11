@@ -11,13 +11,10 @@ using System.Threading.Tasks;
 namespace Sherlock.Core.Collection;
 
 /// <summary>
-/// The sl side of the sl ↔ profiler control channel: a Unix-domain-socket server that the
-/// in-process profiler(s) connect back to. A whole supervised subtree (e.g. every .NET
-/// process under <c>dotnet run</c>) shares one socket, so the server is <em>multi-client</em>:
-/// each connection identifies itself by pid in its HELLO, and requests are routed to a
-/// specific process. Handles the capability handshake (HELLO), request/response
-/// (emit-correlation, flush-allocations, …), and unsolicited events (probe hits, tagged
-/// with the firing pid). Framing/verbs mirror <c>sherlock/control/protocol.hpp</c>.
+/// The sl side of the control channel: a Unix-domain-socket server the in-process profilers connect
+/// back to. A whole supervised subtree shares one socket, so it's multi-client - each connection
+/// identifies itself by pid in its HELLO and requests route to a specific process. Handles the HELLO
+/// handshake, request/response, and unsolicited events (probe hits, tagged with the firing pid).
 /// </summary>
 public sealed class ProfilerControlServer : IDisposable
 {

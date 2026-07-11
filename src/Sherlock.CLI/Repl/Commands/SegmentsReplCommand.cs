@@ -2,7 +2,6 @@ using System.Collections.Generic;
 using System.Linq;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
-using Sherlock.Core.Analysis;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -17,7 +16,7 @@ public sealed class SegmentsReplCommand : IReplCommand
 
     public void Execute(ReplContext context, string[] args)
     {
-        IReadOnlyList<SegmentInfo> segments = new RuntimeAnalyzer(context.Session).GetSegments();
+        IReadOnlyList<SegmentInfo> segments = context.Snapshot.Segments;
         if (segments.Count == 0)
         {
             context.Console.MarkupLine("[yellow]No GC segments found.[/]");

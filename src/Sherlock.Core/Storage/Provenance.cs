@@ -16,7 +16,7 @@ public struct AllocationRecord
     public ulong SurvivedCount;
 }
 
-/// <summary>A live object's provenance: address → allocating stack id. Stored sorted by address. Mirrors native <c>CorrelationRecord</c>.</summary>
+/// <summary>A live object's provenance: address -> allocating stack id. Stored sorted by address. Mirrors native <c>CorrelationRecord</c>.</summary>
 [StructLayout(LayoutKind.Sequential)]
 public struct CorrelationRecord
 {

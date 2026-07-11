@@ -3,13 +3,12 @@ using System.Collections.Generic;
 using System.Linq;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
+using Sherlock.Core.Store;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
 
-/// <summary>
-/// Compares two snapshots by type — what grew, what's new — the core leak-finding workflow 
-/// </summary>
+/// <summary>Compares two snapshots by type - what grew, what's new. The core leak-finding workflow.</summary>
 public sealed class DiffReplCommand : IReplCommand
 {
     private const int DefaultLimit = 30;
@@ -22,20 +21,12 @@ public sealed class DiffReplCommand : IReplCommand
 
     public void Execute(ReplContext context, string[] args)
     {
-        if (args.Length < 2)
-        {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] usage: {Usage}");
-            return;
-        }
+        Args.Require(args, 2, Usage);
+        int limit = Args.Limit(args, 2, DefaultLimit);
 
-        int limit = args.Length > 2 && int.TryParse(args[2], out int n) && n > 0 ? n : DefaultLimit;
-
-        if (!Resolve(context, args[0], out string basePath, out string baseId) ||
-            !Resolve(context, args[1], out string targetPath, out string targetId))
-        {
-            return;
-        }
-        if (basePath == targetPath)
+        SnapshotEntry baseSnap = context.ResolveSnapshot(args[0]);
+        SnapshotEntry targetSnap = context.ResolveSnapshot(args[1]);
+        if (baseSnap.Path == targetSnap.Path)
         {
             context.Console.MarkupLine("[yellow]Base and target are the same snapshot.[/]");
             return;
@@ -44,8 +35,8 @@ public sealed class DiffReplCommand : IReplCommand
         (Dictionary<string, HeapTypeStat> baseline, Dictionary<string, HeapTypeStat> target) =
             context.Console.Status().Start("Comparing snapshots…", _ =>
             {
-                using DumpSession a = DumpSession.Open(basePath);
-                using DumpSession b = DumpSession.Open(targetPath);
+                using DumpSession a = DumpSession.Open(baseSnap.Path);
+                using DumpSession b = DumpSession.Open(targetSnap.Path);
                 return (Index(a.GetHistogram()), Index(b.GetHistogram()));
             });
 
@@ -66,7 +57,7 @@ public sealed class DiffReplCommand : IReplCommand
 
         if (rows.Count == 0)
         {
-            context.Console.MarkupLineInterpolated($"[green]No differences[/] between {baseId} and {targetId}.");
+            context.Console.MarkupLineInterpolated($"[green]No differences[/] between {baseSnap.Id} and {targetSnap.Id}.");
             return;
         }
 
@@ -74,7 +65,7 @@ public sealed class DiffReplCommand : IReplCommand
             rows.Where(r => r.DBytes > 0).OrderByDescending(r => r.DBytes).ToList();
 
         context.Console.MarkupLineInterpolated(
-            $"[grey]diff[/] [bold]{baseId}[/] [grey]→[/] [bold]{targetId}[/]  [grey](growth = leak candidates)[/]");
+            $"[grey]diff[/] [bold]{baseSnap.Id}[/] [grey]→[/] [bold]{targetSnap.Id}[/]  [grey](growth = leak candidates)[/]");
 
         var table = new Table().Border(TableBorder.Square).Expand();
         table.AddColumn(new TableColumn("[bold]Δ bytes[/]").RightAligned());
@@ -100,24 +91,4 @@ public sealed class DiffReplCommand : IReplCommand
 
     private static Dictionary<string, HeapTypeStat> Index(IReadOnlyList<HeapTypeStat> stats) =>
         stats.ToDictionary(s => s.TypeName, s => s);
-
-    private static bool Resolve(ReplContext context, string idOrLabel, out string path, out string id)
-    {
-        path = string.Empty;
-        id = idOrLabel;
-        if (context.Workspace.Store.FindSnapshot(idOrLabel) is not (_, { } snap))
-        {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] no snapshot '{idOrLabel}'. See [bold]snapshots[/].");
-            return false;
-        }
-        if (!snap.Exists)
-        {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] snapshot '{idOrLabel}' file is missing.");
-            return false;
-        }
-
-        path = snap.Path;
-        id = snap.Id;
-        return true;
-    }
 }

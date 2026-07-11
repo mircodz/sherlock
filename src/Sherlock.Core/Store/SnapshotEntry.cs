@@ -22,7 +22,7 @@ public sealed record SnapshotEntry(
     /// <summary>Whether the bundled provenance carries per-object correlation (a <c>--correlate</c> capture).</summary>
     public bool HasCorrelation { get; init; }
 
-    /// <summary>Whether a provenance container (allocation profile ± correlation) is bundled.</summary>
+    /// <summary>Whether a provenance container (allocation profile, plus correlation when captured) is bundled.</summary>
     public bool HasAllocations => ProvenancePath is not null;
 
     /// <summary>The bundle folder: <c>heap.dmp</c> (this <see cref="Path"/>) plus <c>provenance.slab</c>.</summary>

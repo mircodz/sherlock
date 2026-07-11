@@ -9,10 +9,8 @@ using Spectre.Console;
 namespace Sherlock.CLI.Repl.Commands;
 
 /// <summary>
-/// "Just tell me what's wrong." Runs heuristics over the loaded snapshot and reports
-/// suspected memory issues (big retained graphs, duplicate strings, fragmentation,
-/// growth-suspect types), each with a pointer to the command that drills in.
-/// Works on any ClrMD-readable dump — no profiler required.
+/// Runs heuristics over the snapshot and reports suspected memory issues (big retained graphs,
+/// duplicate strings, fragmentation), each pointing at the command that drills in.
 /// </summary>
 public sealed class InspectReplCommand : IReplCommand
 {
@@ -31,12 +29,11 @@ public sealed class InspectReplCommand : IReplCommand
 
         context.Console.Status().Start("Inspecting heap…", _ =>
         {
-            var heap = new HeapAnalyzer(context.Session);
-            IReadOnlyList<HeapTypeStat> stats = context.Session.GetHistogram(); // cached
+            IReadOnlyList<HeapTypeStat> stats = context.Snapshot.Histogram;
             long heapTotal = stats.Sum(s => (long)s.TotalSize);
 
-            LargeRetainers(context.Session, findings);
-            DuplicateStrings(heap, heapTotal, findings);
+            LargeRetainers(context.Snapshot, findings);
+            DuplicateStrings(context.Snapshot, heapTotal, findings);
             Fragmentation(stats, heapTotal, findings);
             GrowthSuspects(stats, heapTotal, findings);
         });
@@ -62,19 +59,19 @@ public sealed class InspectReplCommand : IReplCommand
         }
     }
 
-    /// <summary>Biggest retained graphs — where memory concentrates and where a leak hides.</summary>
-    private static void LargeRetainers(DumpSession session, List<Finding> findings)
+    /// <summary>Biggest retained graphs - where memory concentrates and where a leak hides.</summary>
+    private static void LargeRetainers(Snapshot snapshot, List<Finding> findings)
     {
-        DominatorTree tree = session.GetDominatorTree();
+        DominatorTree tree = snapshot.Dominators;
         ulong total = tree.TotalReachableBytes;
         if (total == 0)
         {
             return;
         }
 
-        // Report only the single biggest retained graph — the top dominators tend to be a
-        // nested chain (Object[] ⊃ Registry ⊃ List ⊃ …) that all retain ~the same bytes, so
-        // listing them all is noise. `dominators` shows the full breakdown.
+        // Report only the single biggest retained graph. The top dominators tend to be a nested
+        // chain (Object[] > Registry > List > ...) that all retain about the same bytes, so listing
+        // them all is noise. `dominators` shows the full breakdown.
         DominatorNode? node = tree.TopDominators(1).FirstOrDefault();
         if (node is null)
         {
@@ -94,9 +91,9 @@ public sealed class InspectReplCommand : IReplCommand
             $"0x{node.Address:x} — [bold]gcroot[/] why it's held, [bold]retained[/] what it holds, [bold]whoalloc[/] where it came from. [bold]dominators[/] for the full list."));
     }
 
-    private static void DuplicateStrings(HeapAnalyzer heap, long heapTotal, List<Finding> findings)
+    private static void DuplicateStrings(Snapshot snapshot, long heapTotal, List<Finding> findings)
     {
-        IReadOnlyList<DuplicateString> dups = heap.FindDuplicateStrings(limit: 100);
+        IReadOnlyList<DuplicateString> dups = snapshot.DuplicateStrings(limit: 100);
         long wasted = dups.Sum(d => (long)d.WastedBytes);
         if (wasted < 64 * 1024 && (heapTotal == 0 || (double)wasted / heapTotal < 0.02))
         {
@@ -128,7 +125,7 @@ public sealed class InspectReplCommand : IReplCommand
             "High free-space ratio — fragmentation, or a large collection that just happened. Check [bold]segments[/]."));
     }
 
-    /// <summary>A user type with a large instance count — a candidate for unbounded growth.</summary>
+    /// <summary>A user type with a large instance count - a candidate for unbounded growth.</summary>
     private static void GrowthSuspects(IReadOnlyList<HeapTypeStat> stats, long heapTotal, List<Finding> findings)
     {
         HeapTypeStat? suspect = stats

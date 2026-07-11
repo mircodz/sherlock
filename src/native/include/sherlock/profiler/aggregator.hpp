@@ -22,8 +22,8 @@ class ProvenanceWriter;
 /// callers), entirely in-process, and tracks how many sampled allocations survive
 /// their first GC (a cheap proxy for "escapes gen-0").
 ///
-/// Caching is the whole point: the hot path is lock-free — each thread folds
-/// allocations into its own shard, keyed by a 64-bit hash of the captured stack —
+/// Caching is the whole point: the hot path is lock-free - each thread folds
+/// allocations into its own shard, keyed by a 64-bit hash of the captured stack -
 /// and name resolution (the expensive metadata lookups) is deferred to dump time
 /// and memoized, so a given FunctionID is symbolized at most once.
 class Aggregator {
@@ -42,7 +42,7 @@ public:
     };
 
     // A sampled object awaiting its first-GC verdict. `site` points into the
-    // owning shard's map — stable, since unordered_map never invalidates element
+    // owning shard's map - stable, since unordered_map never invalidates element
     // pointers on insert/rehash.
     struct Pending {
         ObjectID addr;
@@ -107,8 +107,11 @@ private:
     /// process (races concurrent record()); exact at shutdown when allocations have stopped.
     std::unordered_map<std::uint64_t, Site> mergeShards();
 
-    /// Interns a site's stack (resolving frames root→leaf) into `pw` and returns its stackId.
+    /// Interns a site's stack (resolving frames root->leaf) into `pw` and returns its stackId.
     std::uint32_t internSiteStack(storage::ProvenanceWriter& pw, const Site& site);
+
+    /// Writes one AllocationRecord per merged site into `pw`.
+    void writeProfile(storage::ProvenanceWriter& pw, const std::unordered_map<std::uint64_t, Site>& sites);
 
     ICorProfilerInfo10* info_;
     Logger* logger_;

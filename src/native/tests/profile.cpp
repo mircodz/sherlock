@@ -86,7 +86,7 @@ TEST(Profile, CorrelationIsSortedAndBinarySearchable) {
     EXPECT_EQ(corr[1].address, 0x2000u);
     EXPECT_EQ(corr[2].address, 0x3000u);
 
-    // Address → allocating stack, resolved through the shared table.
+    // Address -> allocating stack, resolved through the shared table.
     auto sid = r.stackForAddress(0x2000);
     ASSERT_TRUE(sid.has_value());
     EXPECT_EQ(*sid, s1);

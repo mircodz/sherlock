@@ -12,12 +12,7 @@ public sealed class RmReplCommand : IReplCommand
 
     public void Execute(ReplContext context, string[] args)
     {
-        if (args.Length == 0)
-        {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] usage: {Usage}");
-            return;
-        }
-
+        Args.Require(args, 1, Usage);
         string id = args[0];
 
         // If we're deleting the loaded snapshot (or the session that owns it), unload first.

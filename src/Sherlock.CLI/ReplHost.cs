@@ -14,7 +14,7 @@ internal static class ReplHost
 
     /// <summary>
     /// Opens a dump as a transient current snapshot and runs the interactive REPL.
-    /// Used by <c>collect --analyze</c> and <c>run … snapshot --analyze</c>.
+    /// Used by <c>collect --analyze</c> and <c>run ... snapshot --analyze</c>.
     /// </summary>
     public static int OpenAndRun(IAnsiConsole console, string dumpPath)
     {

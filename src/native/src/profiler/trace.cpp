@@ -197,7 +197,7 @@ void TraceCollector::dump(const std::string& path, const std::function<std::stri
         }
     }
 
-    // Folded stacks weighted by exclusive (self) time — feeds speedscope/flamegraph.
+    // Folded stacks weighted by exclusive (self) time - feeds speedscope/flamegraph.
     out << "# sherlock method trace (folded stacks, exclusive nanoseconds)\n";
     out << "# exclusive_ns\tcount\tstack\n";
     for (const PathStat* ps : rows) {

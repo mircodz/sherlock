@@ -5,11 +5,7 @@ using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
 
-/// <summary>
-/// Fancy print (<c>px</c>): a depth-limited, cycle-detecting object graph — the object, its
-/// reference fields, and what they point at, expanded a few levels. Complements <c>print</c>
-/// (<c>p</c>), which prints one object's fields flat.
-/// </summary>
+/// <summary>Prints an object's reference graph to a depth (cycle-detecting). <c>print</c> shows one object's fields flat.</summary>
 public sealed class PrintExReplCommand : IReplCommand
 {
     private const int DefaultDepth = 2;
@@ -22,15 +18,10 @@ public sealed class PrintExReplCommand : IReplCommand
 
     public void Execute(ReplContext context, string[] args)
     {
-        if (args.Length == 0 || !Addresses.TryParse(args[0], out ulong address))
-        {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] usage: {Usage}");
-            return;
-        }
-
+        ulong address = Args.Address(args, 0, Usage);
         int depth = args.Length > 1 && int.TryParse(args[1], out int d) && d >= 0 ? d : DefaultDepth;
 
-        ClrHeap heap = context.Session.Runtime.Heap;
+        ClrHeap heap = context.Snapshot.Runtime.Heap;
         ClrObject root = heap.GetObject(address);
         if (!root.IsValid || root.Type is null)
         {
@@ -108,7 +99,7 @@ public sealed class PrintExReplCommand : IReplCommand
         }
     }
 
-    /// <summary>Reference fields (non-string) and array elements — the recursable edges.</summary>
+    /// <summary>Reference fields (non-string) and array elements - the recursable edges.</summary>
     private static IEnumerable<(string Edge, ClrObject Target)> ObjectFields(ClrObject obj)
     {
         if (obj.IsArray)

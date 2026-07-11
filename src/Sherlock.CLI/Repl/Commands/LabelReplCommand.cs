@@ -13,12 +13,7 @@ public sealed class LabelReplCommand : IReplCommand
 
     public void Execute(ReplContext context, string[] args)
     {
-        if (args.Length == 0)
-        {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] usage: {Usage}");
-            return;
-        }
-
+        Args.Require(args, 1, Usage);
         string? label = args.Length > 1 ? string.Join(' ', args[1..]) : null;
         SnapshotEntry? updated = context.Workspace.Store.SetLabel(args[0], label);
 

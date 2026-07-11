@@ -1,15 +1,11 @@
 using System.Collections.Generic;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
-using Sherlock.Core.Analysis;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
 
-/// <summary>
-/// Lists individual object instances of a type — the SOS <c>dumpheap -type</c>
-/// view — showing the largest first. e.g. <c>objects System.String</c>.
-/// </summary>
+/// <summary>Lists instances of a type, largest first (like SOS <c>dumpheap -type</c>).</summary>
 public sealed class ObjectsReplCommand : IReplCommand
 {
     private const int DefaultLimit = 20;
@@ -21,23 +17,13 @@ public sealed class ObjectsReplCommand : IReplCommand
 
     public void Execute(ReplContext context, string[] args)
     {
-        if (args.Length == 0)
-        {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] usage: {Usage}");
-            return;
-        }
-
+        Args.Require(args, 1, Usage);
         string filter = args[0];
-        int limit = DefaultLimit;
-        if (args.Length > 1 && !int.TryParse(args[1], out limit))
-        {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] '{args[1]}' is not a valid count.");
-            return;
-        }
+        int limit = Args.Limit(args, 1, DefaultLimit);
 
         InstanceListing listing = context.Console.Status()
             .Start($"Scanning heap for '{filter}'…", _ =>
-                new HeapAnalyzer(context.Session).ListInstances(filter, limit));
+                context.Snapshot.Instances(filter, limit));
 
         if (listing.TotalMatched == 0)
         {

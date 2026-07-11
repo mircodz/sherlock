@@ -34,7 +34,7 @@ using AddrRange = std::pair<std::uint64_t, std::uint64_t>;
 
 /// Maps a pre-GC address to its post-GC address by applying the relocations. `moves` must
 /// be sorted by oldStart and non-overlapping. Addresses not covered by any move (in-place
-/// survivors) are returned unchanged — so this is identity when `moves` is empty.
+/// survivors) are returned unchanged - so this is identity when `moves` is empty.
 [[nodiscard]] inline std::uint64_t remap(std::uint64_t addr, std::span<const MoveRange> moves) {
     auto it = std::upper_bound(moves.begin(), moves.end(), addr,
                                [](std::uint64_t a, const MoveRange& m) { return a < m.oldStart; });

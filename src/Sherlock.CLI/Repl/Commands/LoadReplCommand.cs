@@ -13,11 +13,7 @@ public sealed class LoadReplCommand : IReplCommand
 
     public void Execute(ReplContext context, string[] args)
     {
-        if (args.Length == 0)
-        {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] usage: {Usage}");
-            return;
-        }
+        Args.Require(args, 1, Usage);
 
         if (context.Workspace.Store.FindSnapshot(args[0]) is not ({ } session, { } entry))
         {

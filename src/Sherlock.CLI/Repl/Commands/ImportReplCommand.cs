@@ -14,12 +14,7 @@ public sealed class ImportReplCommand : IReplCommand
 
     public void Execute(ReplContext context, string[] args)
     {
-        if (args.Length == 0)
-        {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] usage: {Usage}");
-            return;
-        }
-
+        Args.Require(args, 1, Usage);
         string path = args[0];
         if (!File.Exists(path))
         {

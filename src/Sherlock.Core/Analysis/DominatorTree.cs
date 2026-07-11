@@ -9,7 +9,7 @@ namespace Sherlock.Core.Analysis;
 ///
 /// An object X <i>dominates</i> Y if every path from a GC root to Y passes
 /// through X. The <i>retained size</i> of X is its own size plus the sizes of
-/// everything it dominates — i.e. the memory freed if X became unreachable.
+/// everything it dominates - i.e. the memory freed if X became unreachable.
 ///
 /// Internally everything is indexed in reverse-postorder (RPO) space, where the
 /// synthetic root (which points at every GC root) is node 0 and a node's
@@ -40,7 +40,7 @@ public sealed class DominatorTree
     /// <summary>Total retained memory reachable from all GC roots.</summary>
     public ulong TotalReachableBytes => _retained.Length == 0 ? 0 : _retained[0];
 
-    /// <summary>The objects with the largest retained size — the biggest memory holders.</summary>
+    /// <summary>The objects with the largest retained size - the biggest memory holders.</summary>
     public IReadOnlyList<DominatorNode> TopDominators(int count)
     {
         return Enumerable.Range(1, _address.Length - 1)
@@ -56,7 +56,7 @@ public sealed class DominatorTree
 
     /// <summary>
     /// The objects immediately dominated by <paramref name="address"/> (its children
-    /// in the dominator tree), largest retained first — i.e. what it directly holds onto.
+    /// in the dominator tree), largest retained first - i.e. what it directly holds onto.
     /// </summary>
     public IReadOnlyList<DominatorNode> ImmediateChildren(ulong address, int count)
     {

@@ -109,7 +109,7 @@ public sealed class HeapAnalyzer(DumpSession session)
 
     /// <summary>
     /// Finds string values that occur more than once, ordered by wasted memory
-    /// Wasted = (count - 1) × size.
+    /// Wasted = (count - 1) * size.
     /// </summary>
     public IReadOnlyList<DuplicateString> FindDuplicateStrings(int limit = 20, CancellationToken cancellationToken = default)
     {

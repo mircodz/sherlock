@@ -26,7 +26,7 @@ namespace {
 constexpr std::size_t kMaxFrames = 64;
 
 // Insert the current pid before the extension (allocations.tsv -> allocations.<pid>.tsv),
-// so every profiled process — including children that inherit the env — writes a
+// so every profiled process - including children that inherit the env - writes a
 // distinct file instead of clobbering a shared one.
 std::string withPid(const std::string& path) {
 #ifdef _WIN32
@@ -66,7 +66,7 @@ HRESULT __stdcall captureStack(FunctionID funcId, UINT_PTR, COR_PRF_FRAME_INFO, 
 // client data, so they reach it through this.
 TraceCollector* g_trace = nullptr;
 
-// ELT2 hooks — the canonical CoreCLR slow-path variant (the runtime saves/restores
+// ELT2 hooks - the canonical CoreCLR slow-path variant (the runtime saves/restores
 // registers around these, so they can be plain C functions). We only use funcId.
 void STDMETHODCALLTYPE EnterHook(FunctionID funcId, UINT_PTR, COR_PRF_FRAME_INFO, COR_PRF_FUNCTION_ARGUMENT_INFO*) {
     if (g_trace) g_trace->onEnter(funcId);
@@ -144,7 +144,7 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
         eventMask |= COR_PRF_MONITOR_ENTERLEAVE;
     if (triggersEnabled)
         // ReJIT + module loads for call: triggers; exceptions for throw: triggers. No global
-        // inline-disable — call: triggers simply don't fire on inlined/tiny methods (documented).
+        // inline-disable - call: triggers simply don't fire on inlined/tiny methods (documented).
         eventMask |= COR_PRF_ENABLE_REJIT | COR_PRF_MONITOR_MODULE_LOADS | COR_PRF_MONITOR_EXCEPTIONS;
 
     hr = corProfilerInfo->SetEventMask(eventMask);
@@ -334,7 +334,7 @@ HRESULT STDMETHODCALLTYPE Profiler::ObjectAllocated(ObjectID objectId, ClassID c
         return S_OK;
     }
 
-    // alloc: snapshot triggers — fire once when an instance of the armed type is allocated.
+    // alloc: snapshot triggers - fire once when an instance of the armed type is allocated.
     if (triggers && triggers->wantsAlloc()) {
         if (auto display = triggers->onAlloc(aggregator->resolveTypeName(classId)))
             fireTrigger(*display);
@@ -422,7 +422,7 @@ HRESULT STDMETHODCALLTYPE Profiler::ObjectsAllocatedByClass(ULONG, ClassID[], UL
 HRESULT STDMETHODCALLTYPE Profiler::ObjectReferences(ObjectID, ClassID, ULONG, ObjectID[]) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::RootReferences(ULONG, ObjectID[]) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ExceptionThrown(ObjectID thrownObjectId) {
-    // throw: snapshot triggers — fire once when a matching exception type is thrown.
+    // throw: snapshot triggers - fire once when a matching exception type is thrown.
     if (triggers && triggers->wantsThrow() && aggregator) {
         ClassID classId = 0;
         if (SUCCEEDED(corProfilerInfo->GetClassFromObject(thrownObjectId, &classId))) {
@@ -462,7 +462,7 @@ HRESULT STDMETHODCALLTYPE Profiler::GarbageCollectionStarted(int cGenerations, B
 HRESULT STDMETHODCALLTYPE Profiler::SurvivingReferences(ULONG, ObjectID[], ULONG[]) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::GarbageCollectionFinished() {
     if (aggregator) aggregator->endGc();
-    // gc: snapshot triggers — fire once after a collection of the armed generation.
+    // gc: snapshot triggers - fire once after a collection of the armed generation.
     if (triggers && triggers->wantsGc()) {
         if (auto display = triggers->onGc(maxGenCollected))
             fireTrigger(*display);

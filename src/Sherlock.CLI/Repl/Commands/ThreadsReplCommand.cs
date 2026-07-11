@@ -1,7 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
 using Sherlock.Core;
-using Sherlock.Core.Analysis;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -19,8 +18,6 @@ public sealed class ThreadsReplCommand : IReplCommand
 
     public void Execute(ReplContext context, string[] args)
     {
-        var analyzer = new ThreadAnalyzer(context.Session);
-
         if (args.Length > 0)
         {
             if (!int.TryParse(args[0], out int id))
@@ -29,8 +26,7 @@ public sealed class ThreadsReplCommand : IReplCommand
                 return;
             }
 
-            ThreadInfo? thread = analyzer.GetThreads(includeStacks: true)
-                .FirstOrDefault(t => t.ManagedThreadId == id);
+            ThreadInfo? thread = context.Snapshot.Threads.FirstOrDefault(t => t.ManagedThreadId == id);
 
             if (thread is null)
             {
@@ -42,7 +38,7 @@ public sealed class ThreadsReplCommand : IReplCommand
             return;
         }
 
-        IReadOnlyList<ThreadInfo> threads = analyzer.GetThreads(includeStacks: false);
+        IReadOnlyList<ThreadInfo> threads = context.Snapshot.Threads;
 
         var table = new Table().Border(TableBorder.Square);
         table.AddColumn(new TableColumn("[bold]Managed[/]").RightAligned());

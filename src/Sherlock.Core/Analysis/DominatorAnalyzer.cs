@@ -8,7 +8,7 @@ namespace Sherlock.Core.Analysis;
 
 /// <summary>
 /// Builds a <see cref="DominatorTree"/> for the managed heap using the
-/// Cooper–Harvey–Kennedy iterative dominators algorithm
+/// Cooper-Harvey-Kennedy iterative dominators algorithm
 /// (<i>A Simple, Fast Dominance Algorithm</i>, 2001).
 /// </summary>
 /// <remarks>
@@ -129,8 +129,8 @@ public sealed class DominatorAnalyzer(DumpSession session)
         }
 
         // 6. Retained sizes. own[k] for the synthetic root is 0; otherwise the
-        //    object's shallow size. Walk RPO high→low, accumulating each node into
-        //    its immediate dominator — descendants (higher RPO) are already summed.
+        //    object's shallow size. Walk RPO high->low, accumulating each node into
+        //    its immediate dominator - descendants (higher RPO) are already summed.
         var address = new ulong[m];
         var own = new ulong[m];
         for (int rpo = 0; rpo < m; rpo++)

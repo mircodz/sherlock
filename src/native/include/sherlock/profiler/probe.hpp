@@ -18,11 +18,11 @@ class Logger;
 ///
 /// Each `Namespace.Type.Method` spec (from SHERLOCK_BREAK) is re-JITted with a tiny
 /// prologue spliced into its IL: a `calli` into a native trampoline. The first time the
-/// method is entered, the trampoline fires a callback — the profiler turns that into a
+/// method is entered, the trampoline fires a callback - the profiler turns that into a
 /// "snapshot now" event to sl. This is *only* a remote trigger: it records nothing itself
 /// (no stacks, no aggregation). All provenance comes from the heap snapshot that follows,
 /// so a missed trigger (inlined / tiny forwarder / NativeAOT) just means no dump at that
-/// instant — it can never corrupt an analysis.
+/// instant - it can never corrupt an analysis.
 class ProbeManager {
 public:
     ProbeManager(ICorProfilerInfo10* info, Logger* logger);
@@ -33,11 +33,11 @@ public:
 
     /// Arm a spec at runtime (from the REPL over the control channel): parse it and
     /// resolve against already-loaded modules, ReJITting matches now. Returns true if a
-    /// method was armed (false = no match in a loaded module — e.g. not loaded yet).
+    /// method was armed (false = no match in a loaded module - e.g. not loaded yet).
     bool armLive(const std::string& spec);
 
     /// Called once per probe, the first time it fires, with its display name. The profiler
-    /// routes this to sl over the control channel as a probe-hit event (→ heap snapshot).
+    /// routes this to sl over the control channel as a probe-hit event (-> heap snapshot).
     void setHitCallback(std::function<void(const std::string&)> cb) { onHit_ = std::move(cb); }
 
     /// Resolve any pending specs that live in this freshly-loaded module and
@@ -47,7 +47,7 @@ public:
     /// ReJIT callback: hand the runtime the rewritten IL for an armed method.
     HRESULT getReJITParameters(ModuleID moduleId, mdMethodDef methodId, ICorProfilerFunctionControl* control);
 
-    /// True if (module, token) is armed — used to forbid inlining so the probe fires.
+    /// True if (module, token) is armed - used to forbid inlining so the probe fires.
     bool isArmed(ModuleID moduleId, mdMethodDef token) const;
 
     /// Called from the injected IL (via the global trampoline) on every hit.

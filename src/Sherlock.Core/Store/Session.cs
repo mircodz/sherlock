@@ -34,7 +34,7 @@ public sealed class ProcessRecord
 
 /// <summary>
 /// A workspace under <c>~/.sherlock/&lt;id&gt;/</c>: one launched run (or a one-off collect/import),
-/// spanning one or more processes — each owning the heap snapshots taken from it. Side artifacts
+/// spanning one or more processes - each owning the heap snapshots taken from it. Side artifacts
 /// (log, per-process allocation profiles, snapshot bundles) live in the same directory.
 /// </summary>
 public sealed class Session

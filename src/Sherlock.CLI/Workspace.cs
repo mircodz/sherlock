@@ -9,9 +9,8 @@ using Sherlock.Core.Store;
 namespace Sherlock.CLI;
 
 /// <summary>
-/// The interactive workspace: the session library plus the one snapshot that
-/// analysis commands currently operate on. Loading a snapshot swaps the live
-/// <see cref="DumpSession"/>; the previous one is disposed.
+/// The session library plus the one loaded snapshot that analysis commands operate on. Loading a
+/// snapshot swaps the live <see cref="DumpSession"/> and disposes the previous one.
 /// </summary>
 public sealed class Workspace(SnapshotStore store) : IDisposable
 {
@@ -24,10 +23,10 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
 
     public void AddTarget(ProcessSupervisor supervisor) => _targets.Add(supervisor);
 
-    /// <summary>The currently-loaded dump session, or null if nothing is loaded.</summary>
-    public DumpSession? Current { get; private set; }
+    /// <summary>The currently-loaded snapshot (dump + provenance), or null if nothing is loaded.</summary>
+    public Snapshot? Current { get; private set; }
 
-    /// <summary>The snapshot backing <see cref="Current"/>, if it came from the library.</summary>
+    /// <summary>The catalog entry backing <see cref="Current"/>, if it came from the library.</summary>
     public SnapshotEntry? CurrentEntry { get; private set; }
 
     /// <summary>The session that owns <see cref="CurrentEntry"/>.</summary>
@@ -39,27 +38,22 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
     /// <summary>Loads a catalogued snapshot as the current target.</summary>
     public void Load(Session session, SnapshotEntry entry)
     {
-        DumpSession dump = DumpSession.Open(entry.Path);
-        Swap(dump, session, entry, entry.Id);
+        Swap(new Snapshot(DumpSession.Open(entry.Path), entry), session, entry, entry.Id);
     }
 
     /// <summary>Loads a dump file directly, without adding it to the library.</summary>
     public void LoadTransient(string path)
     {
-        DumpSession dump = DumpSession.Open(path);
-        Swap(dump, session: null, entry: null, Path.GetFileName(path));
+        Swap(new Snapshot(DumpSession.Open(path)), session: null, entry: null, Path.GetFileName(path));
     }
 
-    /// <summary>
-    /// Imports crash dumps left behind by run-targets that have exited since the last
-    /// check, attaching each to its run's session. Returns the new snapshots.
-    /// </summary>
-    public IReadOnlyList<SnapshotEntry> HarvestExitedCrashDumps()
+    /// <summary>Imports crash dumps left by exited run-targets, each attached to its run's session.</summary>
+    public IReadOnlyList<SnapshotEntry> PollExitedCrashDumps()
     {
         List<SnapshotEntry>? imported = null;
         foreach (ProcessSupervisor target in _targets)
         {
-            string? path = target.TryHarvestRootCrashDump();
+            string? path = target.TryPollRootCrashDump();
             if (path is null)
             {
                 continue;
@@ -72,11 +66,8 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
         return (IReadOnlyList<SnapshotEntry>?)imported ?? [];
     }
 
-    /// <summary>
-    /// Records allocation profiles from <c>run --profile</c> targets that have exited
-    /// (and so flushed). The profile already lives in the session dir; this just marks it.
-    /// </summary>
-    public IReadOnlyList<Session> HarvestExitedAllocationProfiles()
+    /// <summary>Marks exit-time allocation profiles from exited <c>run --profile</c> targets.</summary>
+    public IReadOnlyList<Session> PollExitedAllocationProfiles()
     {
         List<Session>? marked = null;
         foreach (ProcessSupervisor target in _targets)
@@ -86,9 +77,7 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
                 continue;
             }
 
-            // Every .NET process in the tree flushes its own per-pid profile — attribute each to
-            // its process, so both the launcher and the app carry their allocation data.
-            IReadOnlyList<(int Pid, string Path)> profiles = target.HarvestAllocationProfiles();
+            IReadOnlyList<(int Pid, string Path)> profiles = target.PollAllocationProfiles();
             if (profiles.Count == 0)
             {
                 continue;
@@ -104,34 +93,23 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
         return (IReadOnlyList<Session>?)marked ?? [];
     }
 
-    /// <summary>
-    /// For each run-target whose probes have signalled a snapshot request since the last
-    /// check, captures a live heap dump into that run's session, labelled with the probe.
-    /// Returns the new snapshots paired with the probe that triggered them.
-    /// </summary>
-    public IReadOnlyList<(SnapshotEntry Entry, string Probe)> HarvestProbeSnapshots()
+    /// <summary>For each probe that has signalled, dumps the firing process into its run's session, labelled with the probe.</summary>
+    public IReadOnlyList<(SnapshotEntry Entry, string Probe)> PollProbeSnapshots()
     {
         List<(SnapshotEntry, string)>? captured = null;
         foreach (ProcessSupervisor target in _targets)
         {
-            IReadOnlyList<(int Pid, string Name)> signals = target.TryHarvestProbeSignals();
+            IReadOnlyList<(int Pid, string Name)> signals = target.TryPollProbeSignals();
             if (signals.Count == 0 || target.SessionId is null)
-            {
-                continue;
-            }
-
-            Session? session = Store.GetSession(target.SessionId);
-            if (session is null)
             {
                 continue;
             }
 
             foreach ((int firingPid, string probe) in signals)
             {
-                // Dump the process that actually fired (a child under `dotnet run`, not the launcher).
-                string temp = DumpCollector.Collect(firingPid, DumpKind.Heap, outputPath: null);
-                SnapshotEntry entry = Store.AddSnapshot(session, temp, moveIntoStore: true,
-                    sourcePid: firingPid, sourceName: target.NameFor(firingPid) ?? NameOf(firingPid), reason: probe);
+                // Coherently capture the process that fired (a child under `dotnet run`, not the
+                // launcher), so a triggered snapshot carries provenance too. Don't auto-load it.
+                SnapshotEntry entry = Capture(firingPid, load: false, reason: probe).Entry;
                 (captured ??= []).Add((entry, probe));
             }
         }
@@ -140,21 +118,17 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
     }
 
     /// <summary>Collects a dump from a live process (sl-side WriteDump), catalogs it, and loads it.</summary>
-    public SnapshotEntry Collect(int pid, DumpKind kind, bool load = true, string? provenance = null, bool correlated = false)
+    public SnapshotEntry Collect(int pid, DumpKind kind, bool load = true, string? provenance = null, bool correlated = false, string? reason = null)
     {
         string temp = DumpCollector.Collect(pid, kind, outputPath: null);
-        return Ingest(pid, temp, load, provenance, correlated);
+        return Ingest(pid, temp, load, provenance, correlated, reason);
     }
 
-    /// <summary>
-    /// Catalogs an already-written dump file (e.g. one the profiler self-dumped) under the
-    /// run session this pid belongs to, and optionally loads it.
-    /// </summary>
-    public SnapshotEntry Ingest(int pid, string dumpPath, bool load = true, string? provenance = null, bool correlated = false)
+    /// <summary>Catalogs an already-written dump file under the run session this pid belongs to.</summary>
+    public SnapshotEntry Ingest(int pid, string dumpPath, bool load = true, string? provenance = null, bool correlated = false, string? reason = null)
     {
-        // A run is one workspace spanning its whole process tree — attribute the snapshot to the
-        // run that owns this pid (root OR a live descendant), so snapshots of children land in the
-        // run's workspace rather than a stray collect session.
+        // Attribute the snapshot to the run that owns this pid (root or a live descendant), so a
+        // child's snapshot lands in the run's workspace instead of a stray collect session.
         ProcessSupervisor? target = _targets.FirstOrDefault(t => t.SessionId is not null && Owns(t, pid));
         Session session = target?.SessionId is { } sid && Store.GetSession(sid) is { } s
             ? s
@@ -162,7 +136,7 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
 
         SnapshotEntry entry = Store.AddSnapshot(session, dumpPath, moveIntoStore: true,
             sourcePid: pid, sourceName: NameOf(pid) ?? target?.RootName,
-            provenanceSource: provenance, correlated: correlated);
+            provenanceSource: provenance, correlated: correlated, reason: reason);
         if (load)
         {
             Load(session, entry);
@@ -170,6 +144,46 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
         
         return entry;
     }
+
+    /// <summary>
+    /// Coherently snapshots a live process: for a profiled/correlated target it forces a GC and
+    /// captures the allocation state at the same instant as the dump, bundling it into the snapshot.
+    /// </summary>
+    public CaptureResult Capture(int pid, bool load = true, string? reason = null)
+    {
+        ProcessSupervisor? target = _targets.FirstOrDefault(t => !t.RootExited && Owns(t, pid));
+        bool correlated = target is { HasCorrelation: true };
+
+        string? provenance = null;
+        long gcAtEmit = -1;
+        if (target is not null && (correlated || target.ProfileOutPath is not null))
+        {
+            if (correlated)
+            {
+                // A unified provenance.slab (allocations + correlation) at this instant.
+                (provenance, gcAtEmit) = target.RequestCorrelationSnapshot(pid, CaptureTimeout);
+            }
+            else
+            {
+                provenance = target.FlushAllocations(pid, CaptureTimeout);
+            }
+        }
+
+        SnapshotEntry entry = Collect(pid, DumpKind.Heap, load: load, provenance: provenance, correlated: correlated, reason: reason);
+
+        ProvenanceState state = ProvenanceState.None;
+        if (entry.HasCorrelation)
+        {
+            // Drift: a GC between the emit and the external dump moves objects and stales the
+            // address join. We can detect it (via the GC count) but not prevent it.
+            bool drifted = gcAtEmit >= 0 && target!.GcCount(pid, DriftTimeout) is long now && now >= 0 && now != gcAtEmit;
+            state = drifted ? ProvenanceState.Drifted : ProvenanceState.Exact;
+        }
+        return new CaptureResult(entry, state);
+    }
+
+    private static readonly TimeSpan CaptureTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan DriftTimeout = TimeSpan.FromSeconds(3);
 
     /// <summary>Whether a run-target's process tree contains this pid (its root or a live descendant).</summary>
     private static bool Owns(ProcessSupervisor target, int pid) =>
@@ -208,10 +222,10 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
         CurrentName = null;
     }
 
-    private void Swap(DumpSession dump, Session? session, SnapshotEntry? entry, string name)
+    private void Swap(Snapshot snapshot, Session? session, SnapshotEntry? entry, string name)
     {
         Current?.Dispose();
-        Current = dump;
+        Current = snapshot;
         CurrentSession = session;
         CurrentEntry = entry;
         CurrentName = name;
@@ -226,3 +240,14 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
         }
     }
 }
+
+/// <summary>Whether a snapshot carries allocation provenance, and if the address join is trustworthy.</summary>
+public enum ProvenanceState
+{
+    None,
+    Exact,
+    Drifted,
+}
+
+/// <summary>The outcome of <see cref="Workspace.Capture"/>: the new snapshot and its provenance state.</summary>
+public sealed record CaptureResult(SnapshotEntry Entry, ProvenanceState Provenance);

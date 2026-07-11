@@ -30,11 +30,11 @@ public sealed class DumpSession : IDisposable
     private DominatorTree? _dominatorTree;
     private IReadOnlyList<HeapTypeStat>? _histogram;
 
-    /// <summary>The heap's dominator tree — built once, cached.</summary>
+    /// <summary>The heap's dominator tree - built once, cached.</summary>
     public DominatorTree GetDominatorTree(CancellationToken cancellationToken = default) =>
         _dominatorTree ??= new DominatorAnalyzer(this).Build(cancellationToken);
 
-    /// <summary>The full per-type heap histogram — built once, cached. Filter in-memory.</summary>
+    /// <summary>The full per-type heap histogram - built once, cached. Filter in-memory.</summary>
     public IReadOnlyList<HeapTypeStat> GetHistogram() =>
         _histogram ??= new HeapAnalyzer(this).GetStatistics();
 

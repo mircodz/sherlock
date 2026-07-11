@@ -29,7 +29,7 @@ public static class LineEditor
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException)
         {
-            // No real console (e.g. some CI shells) — degrade gracefully.
+            // No real console (e.g. some CI shells) - degrade gracefully.
             Console.Write(prompt);
             return Console.ReadLine();
         }

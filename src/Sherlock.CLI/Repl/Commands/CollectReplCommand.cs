@@ -14,12 +14,7 @@ public sealed class CollectReplCommand : IReplCommand
 
     public void Execute(ReplContext context, string[] args)
     {
-        if (args.Length == 0)
-        {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] usage: {Usage}  (or [bold]ps[/] to list processes)");
-            return;
-        }
-
+        Args.Require(args, 1, Usage);
         if (!TryResolvePid(context.Console, args, out int pid))
         {
             return;

@@ -1,7 +1,6 @@
 using System.Collections.Generic;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
-using Sherlock.Core.Analysis;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -18,21 +17,10 @@ public sealed class PrintReplCommand : IReplCommand
 
     public void Execute(ReplContext context, string[] args)
     {
-        if (args.Length == 0)
-        {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] usage: {Usage}");
-            return;
-        }
+        ulong address = Args.Address(args, 0, Usage);
+        int elementLimit = Args.Limit(args, 1, DefaultElementLimit);
 
-        if (!Addresses.TryParse(args[0], out ulong address))
-        {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] '{args[0]}' is not a valid object address.");
-            return;
-        }
-
-        int elementLimit = args.Length > 1 && int.TryParse(args[1], out int n) && n > 0 ? n : DefaultElementLimit;
-
-        ObjectDetail detail = new ObjectInspector(context.Session).Inspect(address);
+        ObjectDetail detail = context.Snapshot.Inspect(address);
 
         context.Console.MarkupLineInterpolated($"[bold]{detail.TypeName}[/]");
         context.Console.MarkupLineInterpolated($"  [grey]address[/] 0x{detail.Address:x}   [grey]size[/] [bold green]{ByteSize.Format((long)detail.Size)}[/]");

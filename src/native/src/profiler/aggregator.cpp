@@ -18,7 +18,7 @@ namespace {
 // after the first allocation on a thread).
 thread_local Aggregator::Shard* t_shard = nullptr;
 
-// FNV-1a over the frame ids — cheap and good enough to key distinct stacks.
+// FNV-1a over the frame ids - cheap and good enough to key distinct stacks.
 std::uint64_t hashFrames(const std::vector<FunctionID>& frames) {
     std::uint64_t h = 1469598103934665603ull;
     for (FunctionID f : frames) {
@@ -52,7 +52,7 @@ Aggregator::~Aggregator() {
 }
 
 // Reserve the per-thread shard structures up front so the hot path never pays for a
-// map rehash or a pending-vector realloc mid-allocation — bounded latency on the
+// map rehash or a pending-vector realloc mid-allocation - bounded latency on the
 // allocating thread. `pending` is clear()ed (not freed) each GC, so it keeps capacity.
 namespace {
 constexpr std::size_t kSitesReserve = 4096;    // distinct allocation stacks per thread
@@ -67,7 +67,7 @@ Aggregator::Shard& Aggregator::localShard() {
         int idx = shardCount_.fetch_add(1, std::memory_order_acq_rel);
         if (idx < kMaxShards)
             shards_[idx] = shard;       // registered; GC sweep & dump will see it
-        // else: too many threads — shard still works locally, just isn't dumped.
+        // else: too many threads - shard still works locally, just isn't dumped.
         t_shard = shard;
     }
     return *t_shard;
@@ -161,7 +161,7 @@ void Aggregator::endGc() {
 }
 
 void Aggregator::countPendingAsSurvived() {
-    // At shutdown, anything still pending was never collected — i.e. still alive.
+    // At shutdown, anything still pending was never collected - i.e. still alive.
     int n = shardCount_.load(std::memory_order_acquire);
     for (int i = 0; i < n && i < kMaxShards; ++i) {
         Shard* shard = shards_[i];
@@ -208,20 +208,23 @@ std::uint32_t Aggregator::internSiteStack(storage::ProvenanceWriter& pw, const S
     return pw.internStack(names);
 }
 
-void Aggregator::emitCorrelation(const std::string& path) {
-    // A snapshot's unified provenance.slab: the allocation profile AND per-object correlation,
-    // sharing ONE interned stack table (one identity space — dedup across the profile and the
-    // live objects). sl joins the correlation to a heap dump by address (see storage-format.md).
-    storage::ProvenanceWriter pw;
-
-    // Allocation profile (best-effort merge on a live process — same race as a live flush).
-    std::unordered_map<std::uint64_t, Site> merged = mergeShards();
-    for (const auto& [key, site] : merged) {
+void Aggregator::writeProfile(storage::ProvenanceWriter& pw, const std::unordered_map<std::uint64_t, Site>& sites) {
+    for (const auto& [key, site] : sites) {
         const std::uint32_t stackId = internSiteStack(pw, site);
         pw.addAllocation(stackId, site.alloc.bytes, site.alloc.count, site.survived.bytes, site.survived.count);
     }
+}
 
-    // Correlation: each live object → its allocation stack id (intern each site once).
+// A snapshot's unified provenance.slab: the allocation profile plus per-object correlation over one
+// shared stack table. sl joins the correlation to a heap dump by address.
+void Aggregator::emitCorrelation(const std::string& path) {
+    storage::ProvenanceWriter pw;
+
+    // Best-effort on a live process: the merge races concurrent record().
+    std::unordered_map<std::uint64_t, Site> merged = mergeShards();
+    writeProfile(pw, merged);
+
+    // Each live object's address -> its allocation stack id (intern each site once).
     std::unordered_map<const Site*, std::uint32_t> siteStack;
     for (const auto& [addr, lv] : live_) {
         auto [it, inserted] = siteStack.try_emplace(lv.site, 0u);
@@ -239,14 +242,11 @@ void Aggregator::emitCorrelation(const std::string& path) {
                          std::to_string(live_.size()) + " live objects) to " + path);
 }
 
+// Exit-time (or live-flush) allocation aggregate: allocations only, no correlation.
 void Aggregator::dump(const std::string& path) {
-    // Exit-time (or live-flush) allocation aggregate — allocations only, no correlation.
     std::unordered_map<std::uint64_t, Site> merged = mergeShards();
     storage::ProvenanceWriter pw;
-    for (const auto& [key, site] : merged) {
-        const std::uint32_t stackId = internSiteStack(pw, site);
-        pw.addAllocation(stackId, site.alloc.bytes, site.alloc.count, site.survived.bytes, site.survived.count);
-    }
+    writeProfile(pw, merged);
 
     if (!writeSlab(path, pw)) {
         return;

@@ -1,7 +1,6 @@
 using System.Collections.Generic;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
-using Sherlock.Core.Analysis;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -17,7 +16,7 @@ public sealed class ExceptionsReplCommand : IReplCommand
     public void Execute(ReplContext context, string[] args)
     {
         IReadOnlyList<ExceptionInfo> exceptions = context.Console.Status()
-            .Start("Scanning for exceptions…", _ => new ExceptionAnalyzer(context.Session).FindExceptions());
+            .Start("Scanning for exceptions…", _ => context.Snapshot.Exceptions);
 
         if (exceptions.Count == 0)
         {
