@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "sherlock": {
+      "type": "stdio",
+      "command": "sl",
+      "args": [
+        "mcp"
+      ],
+      "env": {}
+    }
+  }
+}

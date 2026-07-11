@@ -4,18 +4,17 @@ using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Threading;
-using Sherlock.CLI.Rendering;
-using Sherlock.CLI.Repl;
-using Sherlock.Core;
 using Sherlock.Core.Collection;
+using Sherlock.Core.Store;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
 namespace Sherlock.CLI.Commands;
 
 /// <summary>
-/// Launches a process under supervision, tracks its .NET subtree, and lets you
-/// take snapshots on demand from a small live console.
+/// Launches a process under supervision, runs it to completion while capturing triggered snapshots
+/// and exit-time artifacts (crash dump, allocation profile) into the library, then exits. For
+/// interactive, on-demand snapshotting use the REPL's <c>run</c> instead.
 /// </summary>
 public sealed class RunCommand : Command<RunCommand.Settings>
 {
@@ -29,179 +28,160 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         [Description("Arguments passed to the launched process.")]
         public string[] Args { get; init; } = [];
 
+        [CommandOption("--profile")]
+        [Description("Attach the allocation profiler; capture the exit-time allocation profile.")]
+        public bool Profile { get; init; }
+
+        [CommandOption("--correlate")]
+        [Description("Track per-object allocation provenance (enables whoalloc on snapshots).")]
+        public bool Correlate { get; init; }
+
+        [CommandOption("--children")]
+        [Description("Also capture allocation profiles for child processes, not just the root.")]
+        public bool Children { get; init; }
+
         [CommandOption("--no-crash-dump")]
         [Description("Do not auto-write a dump if a process crashes.")]
         public bool NoCrashDump { get; init; }
 
-        [CommandOption("--profile")]
-        [Description("Attach the Sherlock allocation profiler at startup (logs allocations).")]
-        public bool Profile { get; init; }
+        [CommandOption("--snapshot-on <EVENT>")]
+        [Description("Capture a snapshot when an event fires, e.g. throw:My.Namespace.Exception.")]
+        public string? SnapshotOn { get; init; }
     }
 
     protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellation)
     {
         IAnsiConsole console = AnsiConsole.Console;
 
-        // The target path may be the positional arg, or - in `run [opts] -- <bin> <args>`
-        // form - the first token after `--`. Remaining tokens are the target's args.
-        var childArgs = new List<string>(settings.Args);
-        childArgs.AddRange(context.Remaining.Raw);
-
-        string path = settings.Path;
-        if (string.IsNullOrEmpty(path))
+        // The target may be the positional arg or - in `run [opts] -- <bin> <args>` form - the
+        // tokens after `--`. Everything after the path is the target's own args.
+        var command = new List<string>();
+        if (!string.IsNullOrEmpty(settings.Path))
         {
-            if (childArgs.Count == 0)
-            {
-                console.MarkupLine("[red]error:[/] no executable given. Usage: [bold]run [[--profile]] -- <bin> [[args]][/]");
-                return 1;
-            }
-            path = childArgs[0];
-            childArgs.RemoveAt(0);
+            command.Add(settings.Path);
         }
+        command.AddRange(settings.Args);
+        command.AddRange(context.Remaining.Raw);
 
-        string? profilerPath = null;
-        if (settings.Profile)
+        if (command.Count == 0)
         {
-            profilerPath = ProfilerLibrary.Locate();
-            if (profilerPath is null)
-            {
-                console.MarkupLineInterpolated(
-                    $"[red]error:[/] profiler library ({ProfilerLibrary.FileName}) not found. Build it with [bold]src/native/build.sh[/], or set [bold]SHERLOCK_PROFILER_PATH[/].");
-                return 1;
-            }
-        }
-
-        using var supervisor = new ProcessSupervisor();
-
-        SupervisedProcess root;
-        try
-        {
-            root = supervisor.Start(path, childArgs, dumpOnCrash: !settings.NoCrashDump, profilerPath);
-        }
-        catch (DumpAnalysisException ex)
-        {
-            console.MarkupLineInterpolated($"[red]error:[/] {ex.Message}");
+            console.MarkupLineInterpolated($"[red]error:[/] no executable given. Usage: {RunLauncher.Usage}");
             return 1;
         }
 
-        console.MarkupLineInterpolated($"[bold]Sherlock[/] supervising [aqua]{System.IO.Path.GetFileName(path)}[/] (root pid {root.Pid}).");
-        if (profilerPath is not null)
+        var spec = new RunSpec(settings.Profile, settings.Correlate, settings.Children, !settings.NoCrashDump, settings.SnapshotOn, command);
+
+        using Workspace workspace = ReplHost.CreateWorkspace();
+        if (RunLauncher.Launch(workspace, console, spec) is not { } launched)
         {
-            console.MarkupLineInterpolated($"[grey]Allocation profiler attached; allocations logged to[/] {supervisor.LogPath}[grey].[/]");
+            return 1;
         }
 
-        console.MarkupLine("Commands: [bold]ps[/], [bold]snapshot [[pid]] [[--analyze]][/], [bold]kill[/], [bold]exit[/].");
+        (ProcessSupervisor supervisor, Session session) = launched;
         console.WriteLine();
 
-        return Loop(console, supervisor);
-    }
-
-    private static int Loop(IAnsiConsole console, ProcessSupervisor supervisor)
-    {
-        var history = new ReplHistory(null);
-        while (true)
+        // Stream the child's output and fire triggered snapshots while it runs.
+        long logPos = 0;
+        while (!supervisor.RootExited && !cancellation.IsCancellationRequested)
         {
-            string? line = LineEditor.ReadLine("sherlock(run)> ", history);
-            if (line is null)
-            {
-                return 0;
-            }
-
-            string[] tokens = line.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            if (tokens.Length == 0)
-            {
-                NoteIfRootExited(console, supervisor);
-                continue;
-            }
-
-            switch (tokens[0].ToLowerInvariant())
-            {
-                case "exit" or "quit" or "q":
-                    return 0;
-
-                case "ps" or "list":
-                    PrintProcesses(console, supervisor);
-                    break;
-
-                case "snapshot" or "snap":
-                    Snapshot(console, supervisor, tokens[1..]);
-                    break;
-
-                case "kill":
-                    supervisor.Kill();
-                    console.MarkupLine("[grey]Sent kill to the process tree.[/]");
-                    break;
-
-                case "help" or "?":
-                    console.MarkupLine("[bold]ps[/] list tracked processes · [bold]snapshot [[pid]] [[--analyze]][/] dump a process · [bold]kill[/] · [bold]exit[/]");
-                    break;
-
-                default:
-                    console.MarkupLineInterpolated($"[red]unknown:[/] {tokens[0]}. Try [bold]help[/].");
-                    break;
-            }
-        }
-    }
-
-    private static void Snapshot(IAnsiConsole console, ProcessSupervisor supervisor, string[] args)
-    {
-        bool analyze = args.Contains("--analyze") || args.Contains("-a");
-        string? pidArg = args.FirstOrDefault(a => !a.StartsWith('-'));
-
-        int pid = supervisor.RootPid;
-        if (pidArg is not null && !int.TryParse(pidArg, out pid))
-        {
-            console.MarkupLineInterpolated($"[red]error:[/] '{pidArg}' is not a pid.");
-            return;
+            logPos = StreamLog(supervisor, logPos);
+            PumpCaptures(workspace, console);
+            Thread.Sleep(120);
         }
 
-        string path;
+        if (cancellation.IsCancellationRequested)
+        {
+            supervisor.Kill();
+            console.MarkupLine("[grey](interrupted)[/]");
+        }
+
+        logPos = StreamLog(supervisor, logPos);
+
+        // Exit-time artifacts (crash dump, allocation profile) take a moment to flush after exit.
+        if (spec.NeedsProfiler || supervisor.RootExitCode is int c && c != 0)
+        {
+            for (int i = 0; i < 20 && !cancellation.IsCancellationRequested; i++)
+            {
+                PumpCaptures(workspace, console);
+                Thread.Sleep(150);
+            }
+        }
+        StreamLog(supervisor, logPos);
+
+        Summarize(console, workspace, session, supervisor);
+        return 0;
+    }
+
+    /// <summary>Drains the run-target pollers, announcing anything captured. Returns whether anything was.</summary>
+    private static bool PumpCaptures(Workspace workspace, IAnsiConsole console)
+    {
+        bool any = false;
+        foreach (SnapshotEntry entry in workspace.PollExitedCrashDumps())
+        {
+            any = true;
+            console.MarkupLineInterpolated($"[yellow]· crash dump[/] [bold]{entry.Id}[/] [grey]captured[/]");
+        }
+        foreach (Session session in workspace.PollExitedAllocationProfiles())
+        {
+            any = true;
+            console.MarkupLineInterpolated($"[yellow]· allocation profile captured for[/] [bold]{session.Id}[/]");
+        }
+        foreach ((SnapshotEntry entry, string probe) in workspace.PollProbeSnapshots())
+        {
+            any = true;
+            console.MarkupLineInterpolated($"[yellow]●[/] [bold]{probe}[/] [yellow]fired → snapshot[/] [bold]{entry.Id}[/]");
+        }
+        return any;
+    }
+
+    /// <summary>Writes any log content past <paramref name="pos"/> straight to stdout, returning the new position.</summary>
+    private static long StreamLog(ProcessSupervisor supervisor, long pos)
+    {
+        string? path = supervisor.LogPath;
+        if (path is null || !File.Exists(path))
+        {
+            return pos;
+        }
+
         try
         {
-            path = console.Status().Start($"Snapshotting pid {pid}…",
-                _ => DumpCollector.Collect(pid, DumpKind.Heap, outputPath: null));
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            if (stream.Length <= pos)
+            {
+                return pos;
+            }
+            stream.Seek(pos, SeekOrigin.Begin);
+            using var reader = new StreamReader(stream);
+            Console.Out.Write(reader.ReadToEnd());
+            Console.Out.Flush();
+            return stream.Length;
         }
-        catch (DumpAnalysisException ex)
+        catch
         {
-            console.MarkupLineInterpolated($"[red]error:[/] {ex.Message}");
-            return;
-        }
-
-        long size = new FileInfo(path).Length;
-        console.MarkupLineInterpolated($"[green]✓[/] {ByteSize.Format(size)} → [aqua]{path}[/]");
-
-        if (analyze)
-        {
-            console.WriteLine();
-            ReplHost.OpenAndRun(console, path);
+            return pos;
         }
     }
 
-    private static void PrintProcesses(IAnsiConsole console, ProcessSupervisor supervisor)
+    private static void Summarize(IAnsiConsole console, Workspace workspace, Session session, ProcessSupervisor supervisor)
     {
-        IReadOnlyList<SupervisedProcess> processes = supervisor.List();
-        if (processes.Count == 0)
+        console.WriteLine();
+        Session current = workspace.Store.GetSession(session.Id) ?? session;
+        List<SnapshotEntry> snapshots = current.Snapshots.ToList();
+        string exit = supervisor.RootExitCode is int code ? $"exit code {code}" : "still running";
+
+        console.MarkupLineInterpolated($"[bold]{current.Id}[/] [grey]({exit}) — {snapshots.Count} snapshot(s)[/]");
+        foreach (SnapshotEntry snapshot in snapshots)
         {
-            console.MarkupLine("[yellow]No live processes.[/]");
-            NoteIfRootExited(console, supervisor);
-            return;
+            console.MarkupLineInterpolated($"  [aqua]{snapshot.Id}[/] [grey]{snapshot.Reason ?? string.Empty}[/]");
         }
 
-        foreach (SupervisedProcess process in processes)
+        if (snapshots.Count > 0)
         {
-            string role = process.IsRoot ? "[bold]root [/]" : "child";
-            string net = process.IsDotnet ? "[green].NET   [/]" : "[grey]native[/]";
-            console.MarkupLine($"  [grey]{process.Pid,7}[/]  {role}  {net}  {Markup.Escape(process.Name)}");
+            console.MarkupLineInterpolated($"[grey]Analyze with[/] sl [grey](then[/] load {snapshots[0].Id}[grey]) or[/] sl mcp[grey].[/]");
         }
-
-        NoteIfRootExited(console, supervisor);
-    }
-
-    private static void NoteIfRootExited(IAnsiConsole console, ProcessSupervisor supervisor)
-    {
-        if (supervisor.RootExited)
+        else
         {
-            console.MarkupLineInterpolated($"[grey](root has exited{(supervisor.RootExitCode is int c ? $", code {c}" : "")})[/]");
+            console.MarkupLine("[grey]No snapshots captured. Try[/] --snapshot-on <event> [grey]or[/] --correlate[grey].[/]");
         }
     }
 }

@@ -26,6 +26,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Sherlock.Core\Sherlock.Core.csproj" />
+    <ProjectReference Include="..\Sherlock.Mcp\Sherlock.Mcp.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -2,6 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/Sherlock.CLI/Sherlock.CLI.csproj" />
     <Project Path="src/Sherlock.Core/Sherlock.Core.csproj" />
+    <Project Path="src/Sherlock.Mcp/Sherlock.Mcp.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Sherlock.Core.Tests/Sherlock.Core.Tests.csproj" />

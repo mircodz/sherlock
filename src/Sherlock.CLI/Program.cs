@@ -14,9 +14,11 @@ app.Configure(config =>
         .WithExample("collect", "--list")
         .WithExample("collect", "--pid", "1234", "--analyze");
     config.AddCommand<RunCommand>("run")
-        .WithDescription("Launch a process under supervision and snapshot it on demand.")
-        .WithExample("run", "./MyApp.dll")
-        .WithExample("run", "--profile", "--", "./MyApp.dll", "arg1");
+        .WithDescription("Run a process to completion, capturing snapshots and exit-time artifacts.")
+        .WithExample("run", "--", "./MyApp.dll", "arg1")
+        .WithExample("run", "--correlate", "--snapshot-on", "throw:My.App.FatalException", "--", "./MyApp.dll");
+    config.AddCommand<McpCommand>("mcp")
+        .WithDescription("Serve the analysis tools to AI agents over MCP (stdio).");
 });
 
 return app.Run(args);
