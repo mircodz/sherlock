@@ -43,7 +43,7 @@ public sealed class PrintReplCommand : IReplCommand
             return;
         }
 
-        var table = new Table().Border(TableBorder.Square);
+        var table = Theme.Table();
         table.AddColumn(new TableColumn("[bold]Offset[/]").RightAligned());
         table.AddColumn("[bold]Field[/]");
         table.AddColumn("[bold]Type[/]");

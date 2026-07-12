@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Sherlock.Core;
 using Sherlock.Core.Analysis;
+using Sherlock.Core.Profiling;
 using Sherlock.Core.Store;
 
 namespace Sherlock.Mcp;
@@ -91,7 +92,95 @@ public static class Dto
     {
         address = Hex(target),
         tracked = stack is not null,
-        // Innermost frame first, as recorded at allocation time.
+        // Root frame first; the allocating method is last.
         allocationStack = stack?.Split(';') ?? [],
     };
+
+    public static object Allocations(AllocationProfile? profile, int top, bool bySurvived)
+    {
+        if (profile is null)
+        {
+            return new { tracked = false };
+        }
+
+        IEnumerable<AllocationSite> ranked = bySurvived
+            ? profile.Sites.OrderByDescending(s => s.SurvivedBytes)
+            : profile.Sites.OrderByDescending(s => s.AllocBytes);
+
+        return new
+        {
+            tracked = true,
+            sites = profile.Sites.Count,
+            totalAllocBytes = profile.TotalAllocBytes,
+            totalSurvivedBytes = profile.TotalSurvivedBytes,
+            top = ranked.Take(top).Select(s => new
+            {
+                method = s.Method,
+                allocBytes = s.AllocBytes,
+                allocCount = s.AllocCount,
+                survivedBytes = s.SurvivedBytes,
+                survivedCount = s.SurvivedCount,
+                stack = s.Frames, // root -> leaf
+            }).ToList(),
+        };
+    }
+
+    public static object Instances(string type, InstanceListing listing) => new
+    {
+        type,
+        matched = listing.TotalMatched,
+        matchedBytes = listing.TotalMatchedSize,
+        instances = listing.Instances.Select(i => new
+        {
+            address = Hex(i.Address),
+            type = i.TypeName,
+            bytes = i.Size,
+            preview = i.Preview,
+        }).ToList(),
+    };
+
+    public static object Threads(IReadOnlyList<ThreadInfo> threads) => new
+    {
+        count = threads.Count,
+        threads = threads.Select(t => new
+        {
+            id = t.ManagedThreadId,
+            osId = t.OsThreadId,
+            t.IsAlive,
+            t.IsGcThread,
+            t.IsFinalizer,
+            t.State,
+            frames = t.StackTrace.Count,
+            stack = t.StackTrace.Take(16).Select(f => f.Description).ToList(),
+        }).ToList(),
+    };
+
+    public static object Exceptions(IReadOnlyList<ExceptionInfo> exceptions) => new
+    {
+        count = exceptions.Count,
+        exceptions = exceptions.Select(e => new
+        {
+            address = Hex(e.Address),
+            type = e.TypeName,
+            e.Message,
+            frames = e.StackFrameCount,
+            threadId = e.ThreadId,
+        }).ToList(),
+    };
+
+    public static object DuplicateStrings(IReadOnlyList<DuplicateString> duplicates) => new
+    {
+        count = duplicates.Count,
+        wastedBytes = duplicates.Sum(d => (long)d.WastedBytes),
+        strings = duplicates.Select(d => new
+        {
+            value = Truncate(d.Value, 120),
+            d.Count,
+            totalBytes = d.TotalSize,
+            wastedBytes = d.WastedBytes,
+        }).ToList(),
+    };
+
+    private static string Truncate(string value, int max) =>
+        value.Length <= max ? value : value[..max] + "...";
 }

@@ -67,7 +67,7 @@ public sealed class DiffReplCommand : IReplCommand
         context.Console.MarkupLineInterpolated(
             $"[grey]diff[/] [bold]{baseSnap.Id}[/] [grey]→[/] [bold]{targetSnap.Id}[/]  [grey](growth = leak candidates)[/]");
 
-        var table = new Table().Border(TableBorder.Square).Expand();
+        var table = Theme.Table(expand: true);
         table.AddColumn(new TableColumn("[bold]Δ bytes[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]Δ count[/]").RightAligned());
         table.AddColumn("[bold]Type[/]");

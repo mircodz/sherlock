@@ -62,7 +62,7 @@ public sealed class ListReplCommand : IReplCommand
                     string label = e.Label is { } l ? $"  [aqua]{Markup.Escape(l)}[/]" : "";
                     string missing = e.Exists ? "" : " [red](missing)[/]";
                     string etime = e.CreatedAt.LocalDateTime.ToString("HH:mm");
-                    string reason = e.Reason is { } r ? $"  [magenta]via {Markup.Escape(r)}[/]" : "";
+                    string reason = e.Reason is { } r ? $"  [grey]via {Markup.Escape(r)}[/]" : "";
                     context.Console.MarkupLine(
                         $"      {marker} [bold]{e.Id,-3}[/]  [green]{ByteSize.Format(e.SizeBytes),10}[/]  [grey]{etime}[/]  {Badges(e)}{reason}{label}{missing}");
                 }

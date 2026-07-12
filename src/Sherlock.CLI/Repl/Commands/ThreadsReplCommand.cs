@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using Spectre.Console;
 
@@ -40,7 +41,7 @@ public sealed class ThreadsReplCommand : IReplCommand
 
         IReadOnlyList<ThreadInfo> threads = context.Snapshot.Threads;
 
-        var table = new Table().Border(TableBorder.Square);
+        var table = Theme.Table();
         table.AddColumn(new TableColumn("[bold]Managed[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]OS[/]").RightAligned());
         table.AddColumn("[bold]Flags[/]");
@@ -64,12 +65,12 @@ public sealed class ThreadsReplCommand : IReplCommand
         var flags = new List<string>();
         if (thread.IsFinalizer)
         {
-            flags.Add("[blue]finalizer[/]");
+            flags.Add("[aqua]finalizer[/]");
         }
 
         if (thread.IsGcThread)
         {
-            flags.Add("[magenta]gc[/]");
+            flags.Add("[aqua]gc[/]");
         }
 
         if (!thread.IsAlive)

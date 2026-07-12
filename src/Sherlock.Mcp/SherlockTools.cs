@@ -69,6 +69,46 @@ public static class SherlockTools
         return snapshots.Query(snapshot, s => Dto.WhoAllocated(target, s.WhoAllocated(target)));
     }
 
+    [McpServerTool(Name = "allocations")]
+    [Description("Top allocation sites (call stacks) ranked by bytes allocated - the direct answer to 'where do allocations come from'. Requires a snapshot with provenance (see list_snapshots). Set bySurvived=true to rank by memory that outlived its first GC (leak hunting).")]
+    public static object Allocations(
+        OpenSnapshots snapshots,
+        [Description("snapshot id or label")] string snapshot,
+        [Description("how many top sites to return")] int top = 30,
+        [Description("rank by memory that survived its first GC instead of total allocated")] bool bySurvived = false) =>
+        snapshots.Query(snapshot, s => Dto.Allocations(s.Allocations, top, bySurvived));
+
+    [McpServerTool(Name = "instances")]
+    [Description("List individual object instances of a type, with addresses to pass to inspect / gcroot / whoalloc.")]
+    public static object Instances(
+        OpenSnapshots snapshots,
+        [Description("snapshot id or label")] string snapshot,
+        [Description("type name or substring, e.g. Order or System.String")] string type,
+        [Description("how many instances to return")] int limit = 20) =>
+        snapshots.Query(snapshot, s => Dto.Instances(type, s.Instances(type, limit)));
+
+    [McpServerTool(Name = "threads")]
+    [Description("Managed threads and their call stacks.")]
+    public static object Threads(
+        OpenSnapshots snapshots,
+        [Description("snapshot id or label")] string snapshot) =>
+        snapshots.Query(snapshot, s => Dto.Threads(s.Threads));
+
+    [McpServerTool(Name = "exceptions")]
+    [Description("Managed exception objects found on the heap, with their messages.")]
+    public static object Exceptions(
+        OpenSnapshots snapshots,
+        [Description("snapshot id or label")] string snapshot) =>
+        snapshots.Query(snapshot, s => Dto.Exceptions(s.Exceptions));
+
+    [McpServerTool(Name = "duplicate_strings")]
+    [Description("Identical string values wasting memory through duplication, worst first.")]
+    public static object DuplicateStrings(
+        OpenSnapshots snapshots,
+        [Description("snapshot id or label")] string snapshot,
+        [Description("how many duplicate groups to return")] int limit = 20) =>
+        snapshots.Query(snapshot, s => Dto.DuplicateStrings(s.DuplicateStrings(limit)));
+
     private static ulong ParseAddress(string address)
     {
         string text = address.Trim();

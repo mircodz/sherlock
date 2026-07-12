@@ -117,6 +117,36 @@ public sealed record DuplicateString(
     ulong TotalSize,
     ulong WastedBytes);
 
+/// <summary>Finalizable objects of one type still awaiting finalization.</summary>
+public sealed record FinalizableTypeStat(
+    string TypeName,
+    long Count,
+    ulong TotalBytes);
+
+/// <summary>
+/// Objects still registered for finalization: they have a finalizer that was never suppressed,
+/// usually because <c>Dispose()</c> wasn't called (a proper Dispose calls GC.SuppressFinalize).
+/// </summary>
+public sealed record FinalizerReport(
+    long TotalObjects,
+    ulong TotalBytes,
+    IReadOnlyList<FinalizableTypeStat> ByType);
+
+/// <summary>One subscriber type on a delegate's invocation list, and how many handlers it holds.</summary>
+public sealed record HandlerTarget(
+    string TypeName,
+    int Count);
+
+/// <summary>
+/// A delegate whose invocation list is large enough to suspect an event-handler leak - a
+/// long-lived event keeping many subscribers alive because they never unsubscribed (<c>-=</c>).
+/// </summary>
+public sealed record EventSubscription(
+    ulong DelegateAddress,
+    string DelegateType,
+    int SubscriberCount,
+    IReadOnlyList<HandlerTarget> Targets);
+
 /// <summary>One path from a GC root to a target object, found by <c>gcroot</c>.</summary>
 public sealed record GcRootPath(
     string RootDescription,

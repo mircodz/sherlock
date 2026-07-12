@@ -116,7 +116,7 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
             return 0;
         }
 
-        var table = new Table().Border(TableBorder.Square);
+        var table = Theme.Table();
         table.AddColumn(new TableColumn("[bold]PID[/]").RightAligned());
         table.AddColumn("[bold]Process[/]");
         foreach (DotnetProcess process in processes)

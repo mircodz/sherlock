@@ -45,7 +45,7 @@ public sealed class HelpReplCommand : IReplCommand
 
         foreach (IGrouping<string, IReplCommand> group in groups)
         {
-            context.Console.MarkupLineInterpolated($"[bold underline]{group.Key}[/]");
+            context.Console.Write(new Rule($"[bold]{group.Key}[/]") { Justification = Justify.Left, Style = new Style(Color.Grey) });
 
             var table = new Table().Border(TableBorder.None).HideHeaders();
             table.AddColumn("cmd");

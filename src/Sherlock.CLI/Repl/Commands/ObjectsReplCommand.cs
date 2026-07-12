@@ -31,7 +31,7 @@ public sealed class ObjectsReplCommand : IReplCommand
             return;
         }
 
-        var table = new Table().Border(TableBorder.Square).Expand();
+        var table = Theme.Table(expand: true);
         table.AddColumn(new TableColumn("[bold]Address[/]"));
         table.AddColumn(new TableColumn("[bold]Size[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]Type[/]"));

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Microsoft.Diagnostics.Runtime;
 using Sherlock.Core.Analysis;
+using Sherlock.Core.Diagnostics;
 using Sherlock.Core.Profiling;
 using Sherlock.Core.Storage;
 using Sherlock.Core.Store;
@@ -42,6 +43,14 @@ public sealed class Snapshot(DumpSession dump, SnapshotEntry? entry = null) : ID
     public IReadOnlyList<GcRootPath> Roots(ulong address, int maxPaths = 1) => new RootAnalyzer(dump).FindRoots(address, maxPaths);
     public InstanceListing Instances(string filter, int limit = 20) => new HeapAnalyzer(dump).ListInstances(filter, limit);
     public IReadOnlyList<DuplicateString> DuplicateStrings(int limit = 20) => new HeapAnalyzer(dump).FindDuplicateStrings(limit);
+
+    private FinalizerReport? _finalizers;
+    public FinalizerReport Finalizers() => _finalizers ??= new FinalizerAnalyzer(dump).Analyze();
+    public IReadOnlyList<EventSubscription> EventHandlerLeaks(int minSubscribers = 16) => new EventHandlerAnalyzer(dump).Analyze(minSubscribers);
+
+    private IReadOnlyList<Finding>? _diagnosis;
+    /// <summary>Sweeps every inspector and reports the obvious problems, ordered by severity.</summary>
+    public IReadOnlyList<Finding> Diagnose() => _diagnosis ??= new HeapDoctor(dump).Diagnose();
 
     // Allocation provenance from the bundled .slab, lazy + cached; the reader stays open for lookups.
     public bool HasProvenance => entry?.ProvenancePath is not null;

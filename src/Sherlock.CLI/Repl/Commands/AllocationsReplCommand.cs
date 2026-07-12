@@ -116,7 +116,7 @@ public sealed class AllocationsReplCommand : IReplCommand
         long total = root.AllocBytes == 0 ? 1 : root.AllocBytes;
         const double minFraction = 0.01; // hide branches under 1% of total
 
-        var tree = new Tree("[bold gold1]Allocation call tree[/] [grey](inclusive bytes · % of total · survived)[/]")
+        var tree = new Tree("[bold]Allocation call tree[/] [grey](inclusive bytes · % of total · survived)[/]")
         {
             Style = new Style(foreground: Color.Grey),
         };
@@ -140,7 +140,7 @@ public sealed class AllocationsReplCommand : IReplCommand
             }
         }
 
-        var table = new Table().Border(TableBorder.Square).Expand();
+        var table = Theme.Table(expand: true);
         table.AddColumn(new TableColumn("[bold]Self[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]Inclusive[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]Count[/]").RightAligned());
@@ -171,7 +171,7 @@ public sealed class AllocationsReplCommand : IReplCommand
 
         long total = root.AllocBytes;
         var tree = new Tree(
-            $"[bold gold1]{Markup.Escape(method)}[/] [grey]— callers ·[/] [bold green]{ByteSize.Format(total)}[/] [grey]allocated through it[/]")
+            $"[bold]{Markup.Escape(method)}[/] [grey]— callers ·[/] [bold green]{ByteSize.Format(total)}[/] [grey]allocated through it[/]")
         {
             Style = new Style(foreground: Color.Grey),
         };
