@@ -131,6 +131,10 @@ public sealed class AllocationsReplCommand : IReplCommand
         var inclusive = new Dictionary<string, long>();
         foreach (AllocationSite site in profile.Sites)
         {
+            if (site.Frames.Count == 0)
+            {
+                continue; // a stack with no managed frames (native/entry allocation)
+            }
             string leaf = site.Frames[^1];
             (long Bytes, long Count) cur = self.GetValueOrDefault(leaf);
             self[leaf] = (cur.Bytes + site.AllocBytes, cur.Count + site.AllocCount);

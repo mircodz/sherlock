@@ -7,9 +7,9 @@ using Sherlock.Core.Profiling;
 namespace Sherlock.CLI.Export;
 
 /// <summary>
-/// The allocation profile as a pprof-style call graph: methods are boxes sized/coloured by the bytes
-/// flowing through them (flat = allocated directly, cum = including callees), edges are caller->callee
-/// weighted by the bytes on that path. Same model as <c>go tool pprof -web</c>.
+/// The allocation profile as a pprof-style call graph: methods are boxes shaded by the bytes flowing
+/// through them (cum, including callees) and sized by the bytes allocated directly there (flat);
+/// edges are caller->callee, weighted by the bytes on that path. Same model as <c>go tool pprof -web</c>.
 /// </summary>
 public static class AllocationDot
 {
@@ -54,22 +54,14 @@ public static class AllocationDot
             .Select(kv => kv.Key)
             .ToHashSet(StringComparer.Ordinal);
 
+        double maxFlat = kept.Count > 0 ? Math.Max(1, kept.Max(m => flat.GetValueOrDefault(m))) : 1;
+
         var dot = new DotGraph("allocations");
         foreach (string method in kept.OrderByDescending(m => cum[m]))
         {
-            double weight = (double)cum[method] / total;
             long self = flat.GetValueOrDefault(method);
-            if (self > 0)
-            {
-                dot.AddNode(Id(method), weight, ShortMethod(method),
-                    $"cum {ByteSize.Format(cum[method])} ({100 * weight:0.0}%)",
-                    $"flat {ByteSize.Format(self)} ({100.0 * self / total:0.0}%)");
-            }
-            else
-            {
-                dot.AddNode(Id(method), weight, ShortMethod(method),
-                    $"cum {ByteSize.Format(cum[method])} ({100 * weight:0.0}%)");
-            }
+            long through = cum[method];
+            dot.AddNode(Id(method), heat: (double)through / total, size: self / maxFlat, Label(method, self, through, total));
         }
 
         foreach (((string from, string to), long bytes) in edges.OrderByDescending(e => e.Value))
@@ -81,6 +73,21 @@ public static class AllocationDot
         }
 
         return dot.Render();
+    }
+
+    /// <summary>pprof-style label: the method, its self (flat) bytes, and its cumulative bytes when they differ.</summary>
+    private static string[] Label(string method, long flat, long cum, long total)
+    {
+        string name = ShortMethod(method);
+        if (flat == cum)
+        {
+            return [name, $"{ByteSize.Format(cum)} ({100.0 * cum / total:0.0}%)"];
+        }
+        if (flat > 0)
+        {
+            return [name, $"flat {ByteSize.Format(flat)} ({100.0 * flat / total:0.0}%)", $"cum {ByteSize.Format(cum)} ({100.0 * cum / total:0.0}%)"];
+        }
+        return [name, $"cum {ByteSize.Format(cum)} ({100.0 * cum / total:0.0}%)"];
     }
 
     /// <summary>A stable, DOT-safe node id from a method name.</summary>

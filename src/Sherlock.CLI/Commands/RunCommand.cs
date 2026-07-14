@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
-using System.IO;
 using System.Linq;
 using System.Threading;
 using Sherlock.Core.Collection;
@@ -80,86 +79,10 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         (ProcessSupervisor supervisor, Session session) = launched;
         console.WriteLine();
 
-        // Stream the child's output and fire triggered snapshots while it runs.
-        long logPos = 0;
-        while (!supervisor.RootExited && !cancellation.IsCancellationRequested)
-        {
-            logPos = StreamLog(supervisor, logPos);
-            PumpCaptures(workspace, console);
-            Thread.Sleep(120);
-        }
-
-        if (cancellation.IsCancellationRequested)
-        {
-            supervisor.Kill();
-            console.MarkupLine("[grey](interrupted)[/]");
-        }
-
-        logPos = StreamLog(supervisor, logPos);
-
-        // Exit-time artifacts (crash dump, allocation profile) take a moment to flush after exit.
-        if (spec.NeedsProfiler || supervisor.RootExitCode is int c && c != 0)
-        {
-            for (int i = 0; i < 20 && !cancellation.IsCancellationRequested; i++)
-            {
-                PumpCaptures(workspace, console);
-                Thread.Sleep(150);
-            }
-        }
-        StreamLog(supervisor, logPos);
+        SupervisedRun.Drain(workspace, console, supervisor, cancellation, waitForArtifacts: spec.NeedsProfiler);
 
         Summarize(console, workspace, session, supervisor);
         return 0;
-    }
-
-    /// <summary>Drains the run-target pollers, announcing anything captured. Returns whether anything was.</summary>
-    private static bool PumpCaptures(Workspace workspace, IAnsiConsole console)
-    {
-        bool any = false;
-        foreach (SnapshotEntry entry in workspace.PollExitedCrashDumps())
-        {
-            any = true;
-            console.MarkupLineInterpolated($"[yellow]· crash dump[/] [bold]{entry.Id}[/] [grey]captured[/]");
-        }
-        foreach (Session session in workspace.PollExitedAllocationProfiles())
-        {
-            any = true;
-            console.MarkupLineInterpolated($"[yellow]· allocation profile captured for[/] [bold]{session.Id}[/]");
-        }
-        foreach ((SnapshotEntry entry, string probe) in workspace.PollProbeSnapshots())
-        {
-            any = true;
-            console.MarkupLineInterpolated($"[yellow]●[/] [bold]{probe}[/] [yellow]fired → snapshot[/] [bold]{entry.Id}[/]");
-        }
-        return any;
-    }
-
-    /// <summary>Writes any log content past <paramref name="pos"/> straight to stdout, returning the new position.</summary>
-    private static long StreamLog(ProcessSupervisor supervisor, long pos)
-    {
-        string? path = supervisor.LogPath;
-        if (path is null || !File.Exists(path))
-        {
-            return pos;
-        }
-
-        try
-        {
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            if (stream.Length <= pos)
-            {
-                return pos;
-            }
-            stream.Seek(pos, SeekOrigin.Begin);
-            using var reader = new StreamReader(stream);
-            Console.Out.Write(reader.ReadToEnd());
-            Console.Out.Flush();
-            return stream.Length;
-        }
-        catch
-        {
-            return pos;
-        }
     }
 
     private static void Summarize(IAnsiConsole console, Workspace workspace, Session session, ProcessSupervisor supervisor)

@@ -1,24 +1,26 @@
+using System.Linq;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core.Analysis;
 
 namespace Sherlock.CLI.Export;
 
-/// <summary>The dominator tree as a DOT retention graph: objects hanging off a synthetic GC-roots node, coloured and sized by the share of the heap they retain.</summary>
+/// <summary>The dominator tree as a DOT retention graph: objects hanging off a synthetic GC-roots node, shaded and sized by the share of the heap they retain.</summary>
 public static class DominatorDot
 {
     public static string Write(DominatorGraph graph)
     {
         double total = graph.TotalReachableBytes == 0 ? 1 : graph.TotalReachableBytes;
+        double maxRetained = graph.Nodes.Count > 0 ? graph.Nodes.Max(n => n.RetainedSize) : 1;
 
         var dot = new DotGraph("dominators");
-        dot.AddNode("roots", 0, "GC roots");
+        dot.AddNode("roots", heat: 0, size: 0, "GC roots");
 
         foreach (DominatorGraphNode node in graph.Nodes)
         {
-            double weight = node.RetainedSize / total;
-            dot.AddNode($"n{node.Id}", weight,
+            double share = node.RetainedSize / total;
+            dot.AddNode($"n{node.Id}", heat: share, size: node.RetainedSize / maxRetained,
                 TypeNames.Short(node.TypeName),
-                $"{ByteSize.Format((long)node.RetainedSize)} ({100 * weight:0.0}%)",
+                $"{ByteSize.Format((long)node.RetainedSize)} ({100 * share:0.0}%)",
                 $"0x{node.Address:x}");
         }
 
