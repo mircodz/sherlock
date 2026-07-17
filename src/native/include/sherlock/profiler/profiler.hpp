@@ -143,7 +143,10 @@ private:
 
     std::unique_ptr<ProbeManager> probes;      // call: triggers via ReJIT
     std::unique_ptr<SnapshotTriggers> triggers; // alloc:/gc:/throw: triggers via callbacks
-    int maxGenCollected = 0;                    // set in GarbageCollectionStarted
+    // Highest generation condemned by the in-flight GC. Written in GarbageCollectionStarted and read
+    // in GarbageCollectionFinished + the control thread's heap-size handler; under Server GC these run
+    // on different threads, so it must be atomic to avoid a torn/stale read.
+    std::atomic<int> maxGenCollected{0};        // set in GarbageCollectionStarted
     std::atomic<std::uint64_t> gcCount{0};      // GCs seen — for snapshot drift detection
 
     bool correlate = false;           // SHERLOCK_CORRELATE: track live objects for snapshot join

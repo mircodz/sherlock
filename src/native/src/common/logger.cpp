@@ -5,7 +5,7 @@
 namespace Sherlock {
 
 void Logger::log(LogLevel level, const std::string& message) {
-    if (level < min_level_) {
+    if (level < min_level_.load(std::memory_order_relaxed)) {
         return;
     }
 

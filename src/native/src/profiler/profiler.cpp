@@ -1,6 +1,3 @@
-// Copyright (c) .NET Foundation and contributors. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-
 #include "sherlock/profiler/profiler.hpp"
 
 #include "sherlock/control/protocol.hpp"
@@ -237,8 +234,14 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
     return S_OK;
 }
 
-HRESULT STDMETHODCALLTYPE Profiler::InitializeForAttach(IUnknown* pICorProfilerInfoUnk, void*, UINT) {
-    return Initialize(pICorProfilerInfoUnk);
+HRESULT STDMETHODCALLTYPE Profiler::InitializeForAttach(IUnknown*, void*, UINT) {
+    // Attach is unsupported: allocation tracking needs COR_PRF_MONITOR_OBJECT_ALLOCATED (and tracing
+    // needs COR_PRF_MONITOR_ENTERLEAVE), both of which are IMMUTABLE flags — SetEventMask rejects them
+    // on attach (CORPROF_E_IMMUTABLE_FLAGS_SET), so there is no useful degraded mode. Fail clearly at
+    // load time rather than half-initialize. Sherlock attaches at process start via CORECLR_PROFILER.
+    if (logger)
+        logger->logError("Sherlock must be set at startup (CORECLR_PROFILER); runtime attach is not supported.");
+    return E_NOTIMPL;
 }
 
 control::Reply Profiler::handleControl(std::string_view cmd, std::span<const std::string_view> args) {
@@ -363,38 +366,50 @@ HRESULT STDMETHODCALLTYPE Profiler::ObjectAllocated(ObjectID objectId, ClassID c
     if (!isInitialized.load() || isShuttingDown.load()) {
         return S_OK;
     }
-
-    // alloc: snapshot triggers - fire once when an instance of the armed type is allocated.
-    if (triggers && triggers->wantsAlloc()) {
-        if (auto display = triggers->onAlloc(aggregator->resolveTypeName(classId)))
-            fireTrigger(*display);
-    }
-
-    ULONG objectSize = 0;
-    corProfilerInfo->GetObjectSize(objectId, &objectSize);
-
-    totalAllocations.fetch_add(1, std::memory_order_relaxed);
-    totalBytes.fetch_add(objectSize, std::memory_order_relaxed);
-
-    // Sampling gate: when an interval is set, only every ~N bytes pays for the
-    // (expensive) stack walk; 0 means sample every allocation.
-    bool take = sampleInterval == 0;
-    if (!take) {
-        t_bytesSinceSample += objectSize;
-        if (t_bytesSinceSample >= sampleInterval) {
-            t_bytesSinceSample = 0;
-            take = true;
+    // The body allocates (record/resolveTypeName/std::string) and must never let an exception escape
+    // into the CLR across the COM boundary (UB). Contain it and always return S_OK.
+    try {
+        // Object size drives totals, the sampling gate, and the aggregator record. GetObjectSize2
+        // returns SIZE_T (64-bit) so it doesn't truncate >4 GB LOH objects; skip on failure rather
+        // than record a bogus 0.
+        SIZE_T objectSize = 0;
+        if (FAILED(corProfilerInfo->GetObjectSize2(objectId, &objectSize)) || objectSize == 0) {
+            return S_OK;
         }
+
+        totalAllocations.fetch_add(1, std::memory_order_relaxed);
+        totalBytes.fetch_add(objectSize, std::memory_order_relaxed);
+
+        // alloc: snapshot triggers - fire once when an instance of the armed type is allocated.
+        // resolveTypeName is a metadata lookup (cached, but still a map hit) — only pay it when an
+        // alloc trigger is actually armed.
+        if (triggers && triggers->wantsAlloc()) {
+            if (auto display = triggers->onAlloc(aggregator->resolveTypeName(classId)))
+                fireTrigger(*display);
+        }
+
+        // Sampling gate: when an interval is set, only every ~N bytes pays for the
+        // (expensive) stack walk; 0 means sample every allocation.
+        bool take = sampleInterval == 0;
+        if (!take) {
+            t_bytesSinceSample += objectSize;
+            if (t_bytesSinceSample >= sampleInterval) {
+                t_bytesSinceSample = 0;
+                take = true;
+            }
+        }
+        if (!take)
+            return S_OK;
+
+        // Capture the call stack (leaf -> root) and attribute the allocation to it.
+        t_frameCount = 0;
+        corProfilerInfo->DoStackSnapshot(0 /* current thread */, captureStack,
+                                         COR_PRF_SNAPSHOT_DEFAULT, this, nullptr, 0);
+
+        aggregator->record(std::span<const FunctionID>(t_frames, t_frameCount), objectSize, objectId, classId);
+    } catch (...) {
+        // Swallow — a throw crossing back into the runtime would be undefined behavior.
     }
-    if (!take)
-        return S_OK;
-
-    // Capture the call stack (leaf -> root) and attribute the allocation to it.
-    t_frameCount = 0;
-    corProfilerInfo->DoStackSnapshot(0 /* current thread */, captureStack,
-                                     COR_PRF_SNAPSHOT_DEFAULT, this, nullptr, 0);
-
-    aggregator->record(std::span<const FunctionID>(t_frames, t_frameCount), objectSize, objectId, classId);
     return S_OK;
 }
 
@@ -484,9 +499,43 @@ HRESULT STDMETHODCALLTYPE Profiler::GarbageCollectionStarted(int cGenerations, B
     gcCount.fetch_add(1, std::memory_order_relaxed); // for snapshot drift detection
     if (aggregator) aggregator->beginGc();
     // Remember the highest generation being collected, for gc: triggers.
-    maxGenCollected = 0;
+    int maxGen = 0;
     for (int g = 0; g < cGenerations; ++g)
-        if (generationCollected[g]) maxGenCollected = g;
+        if (generationCollected[g]) maxGen = g;
+    maxGenCollected.store(maxGen, std::memory_order_relaxed);
+
+    // Report the address spans of the condemned generation(s) to the aggregator. The GC only reports
+    // survivors for generations it actually collects; a tracked object in a higher, un-collected gen
+    // must be carried over, not dropped. GetGenerationBounds here reflects the pre-collection layout.
+    if (aggregator && corProfilerInfo) {
+        ULONG count = 0;
+        if (SUCCEEDED(corProfilerInfo->GetGenerationBounds(0, &count, nullptr)) && count > 0) {
+            std::vector<COR_PRF_GC_GENERATION_RANGE> ranges(count);
+            if (SUCCEEDED(corProfilerInfo->GetGenerationBounds(count, &count, ranges.data()))) {
+                for (ULONG i = 0; i < count; ++i) {
+                    const int g = static_cast<int>(ranges[i].generation);
+                    if (ranges[i].rangeLength == 0)
+                        continue;
+                    // A gen-N collection condemns gens 0..N. LOH (gen 3) / POH (gen 4) are collected
+                    // with a gen-2 (full) GC, so include them when the condemned gen is 2.
+                    const bool isCondemned = (g >= 0 && g <= maxGen) ||
+                                             (g >= 3 && maxGen >= 2);
+                    if (isCondemned) {
+                        aggregator->noteCondemnedRange(
+                            ranges[i].rangeStart, static_cast<std::uint64_t>(ranges[i].rangeLength));
+                    }
+                    // Separately report the LOH/POH spans (gen 3/4) regardless of condemnation: a
+                    // large object allocated between full GCs is never survivor-reported by an
+                    // ephemeral GC, so the aggregator admits it as alive when it's on the LOH/POH but
+                    // not condemned by this collection.
+                    if (g >= 3) {
+                        aggregator->noteLargeObjectRange(
+                            ranges[i].rangeStart, static_cast<std::uint64_t>(ranges[i].rangeLength));
+                    }
+                }
+            }
+        }
+    }
     return S_OK;
 }
 HRESULT STDMETHODCALLTYPE Profiler::SurvivingReferences(ULONG, ObjectID[], ULONG[]) { return S_OK; }
@@ -494,7 +543,7 @@ HRESULT STDMETHODCALLTYPE Profiler::GarbageCollectionFinished() {
     if (aggregator) aggregator->endGc();
     // gc: snapshot triggers - fire once after a collection of the armed generation.
     if (triggers && triggers->wantsGc()) {
-        if (auto display = triggers->onGc(maxGenCollected))
+        if (auto display = triggers->onGc(maxGenCollected.load(std::memory_order_relaxed)))
             fireTrigger(*display);
     }
     return S_OK;

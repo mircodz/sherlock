@@ -60,13 +60,13 @@ std::optional<std::string> ControlChannel::connect(const std::string& socketPath
         return "connect() failed: " + err;
     }
 
-    fd_ = fd;
+    fd_.store(fd, std::memory_order_release);
     return std::nullopt;
 #endif
 }
 
 void ControlChannel::start(std::string_view version, const std::vector<std::string>& features, Handler handler) {
-    if (fd_ < 0) {
+    if (fd_.load(std::memory_order_acquire) < 0) {
         return;
     }
     handler_ = std::move(handler);
@@ -85,7 +85,10 @@ void ControlChannel::start(std::string_view version, const std::vector<std::stri
 #endif
     std::vector<std::string> hello = {"HELLO", std::string(version), featureList, std::to_string(pid)};
     std::string framed = frame(joinFields(hello));
-    sendAll(framed);
+    if (!sendAll(framed)) {
+        if (logger_) logger_->logWarning("control channel: HELLO send failed; not serving");
+        return;
+    }
 
     running_.store(true);
     worker_ = std::thread([this] { serve(); });
@@ -93,10 +96,14 @@ void ControlChannel::start(std::string_view version, const std::vector<std::stri
 
 void ControlChannel::serve() {
 #ifndef _WIN32
+    const int fd = fd_.load(std::memory_order_acquire);
     std::string buffer;
     char chunk[4096];
     while (running_.load()) {
-        ssize_t n = ::recv(fd_, chunk, sizeof chunk, 0);
+        ssize_t n = ::recv(fd, chunk, sizeof chunk, 0);
+        if (n < 0 && errno == EINTR) {
+            continue; // interrupted by a signal — retry rather than drop the connection
+        }
         if (n <= 0) {
             break; // peer closed or error
         }
@@ -140,9 +147,16 @@ bool ControlChannel::sendAll(std::span<const char> bytes) {
     return false;
 #else
     std::lock_guard<std::mutex> lock(writeMutex_);
+    const int fd = fd_.load(std::memory_order_acquire);
+    if (fd < 0) {
+        return false;
+    }
     std::size_t sent = 0;
     while (sent < bytes.size()) {
-        ssize_t n = ::send(fd_, bytes.data() + sent, bytes.size() - sent, kSendFlags);
+        ssize_t n = ::send(fd, bytes.data() + sent, bytes.size() - sent, kSendFlags);
+        if (n < 0 && errno == EINTR) {
+            continue; // interrupted — retry
+        }
         if (n <= 0) {
             return false;
         }
@@ -155,17 +169,18 @@ bool ControlChannel::sendAll(std::span<const char> bytes) {
 void ControlChannel::stop() {
     running_.store(false);
 #ifndef _WIN32
-    if (fd_ >= 0) {
-        ::shutdown(fd_, SHUT_RDWR); // unblock recv() in serve()
+    const int fd = fd_.load(std::memory_order_acquire);
+    if (fd >= 0) {
+        ::shutdown(fd, SHUT_RDWR); // unblock recv() in serve()
     }
 #endif
     if (worker_.joinable()) {
         worker_.join();
     }
 #ifndef _WIN32
-    if (fd_ >= 0) {
-        ::close(fd_);
-        fd_ = -1;
+    const int toClose = fd_.exchange(-1, std::memory_order_acq_rel);
+    if (toClose >= 0) {
+        ::close(toClose);
     }
 #endif
 }

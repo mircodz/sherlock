@@ -45,8 +45,8 @@ public:
 
     ULONG STDMETHODCALLTYPE Release()
     {
-        int count = std::atomic_fetch_sub(&this->refCount, 1) - 1;
-        if (count <= 0)
+        ULONG count = static_cast<ULONG>(std::atomic_fetch_sub(&this->refCount, 1) - 1);
+        if (count == 0)
         {
             delete this;
         }

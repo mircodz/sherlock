@@ -13,7 +13,10 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 option(SHERLOCK_ASAN "Build with Address/UndefinedBehavior sanitizers (dev/test)" OFF)
-option(SHERLOCK_NATIVE_ARCH "Tune for the build machine's CPU (-march=native); turn OFF for portable/packaged builds" ON)
+# The .so is injected into an arbitrary customer .NET process — possibly on a different/older CPU than
+# the build machine — so -march=native (which emits e.g. AVX-512) would SIGILL there. Default OFF; the
+# packaged build gets a safe x86-64-v2 floor. Turn ON only for a local dev build on the same machine.
+option(SHERLOCK_NATIVE_ARCH "Tune for the build machine's CPU (-march=native); UNSAFE for shipped/portable builds" OFF)
 
 find_program(CCACHE_PROGRAM ccache)
 if(CCACHE_PROGRAM)
@@ -45,7 +48,20 @@ if(NOT WIN32)
     add_compile_options($<$<NOT:$<CONFIG:Debug>>:-funroll-loops>)
     if(SHERLOCK_NATIVE_ARCH)
         add_compile_options($<$<NOT:$<CONFIG:Debug>>:-march=native>)
+    else()
+        # Portable floor for a shipped plugin: SSE4.2/POPCNT-era baseline, safe on any x86-64-v2 CPU
+        # (~2010+). Avoids SIGILL from build-machine-specific ISA in a foreign process.
+        add_compile_options($<$<NOT:$<CONFIG:Debug>>:-march=x86-64-v2>)
     endif()
+
+    # Injected-plugin hygiene: hide all symbols by default so our internals can't interpose (or be
+    # interposed by) the host CLR / customer app; only the two DllGetClassObject/DllCanUnloadNow entry
+    # points are exported (marked in dllmain.cpp). initial-exec TLS is faster and loader-safe for a
+    # dlopen'd lib's thread_locals (the alloc hot path uses them). Ship our own C++ runtime statically
+    # so we don't fight whatever libstdc++ the target already loaded.
+    add_compile_options(-fvisibility=hidden -fvisibility-inlines-hidden -ftls-model=initial-exec)
+    # Strip build-machine paths from the binary for reproducibility.
+    add_compile_options("-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.")
 endif()
 
 # Link-time optimization for optimized builds — lets the hot path (Aggregator::record, hashFrames)
@@ -59,6 +75,12 @@ endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_link_options(-Wl,-z,relro,-z,now)
+    add_link_options(-Wl,--build-id)
+    # Carry our own libstdc++/libgcc so the injected .so can't clash with the target's C++ runtime.
+    # (Not under ASan — the sanitizer runtime needs the shared libs.)
+    if(NOT SHERLOCK_ASAN)
+        add_link_options(-static-libstdc++ -static-libgcc)
+    endif()
 endif()
 
 if(SHERLOCK_ASAN AND NOT WIN32)

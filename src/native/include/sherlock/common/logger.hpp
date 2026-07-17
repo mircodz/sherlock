@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <mutex>
 #include <string>
 
@@ -21,8 +22,10 @@ public:
     Logger(const Logger&) = delete;
     Logger& operator=(const Logger&) = delete;
 
-    void setLogLevel(LogLevel level) { min_level_ = level; }
-    LogLevel getLogLevel() const { return min_level_; }
+    // min_level_ is atomic so setLogLevel (any thread) races cleanly with the level check on the
+    // logging paths (called from many app threads); relaxed is fine — it only gates verbosity.
+    void setLogLevel(LogLevel level) { min_level_.store(level, std::memory_order_relaxed); }
+    LogLevel getLogLevel() const { return min_level_.load(std::memory_order_relaxed); }
 
     void logDebug(const std::string& message) { log(LogLevel::Debug, message); }
     void logInfo(const std::string& message) { log(LogLevel::Info, message); }
@@ -33,7 +36,7 @@ private:
     void log(LogLevel level, const std::string& message);
     static const char* levelName(LogLevel level);
 
-    LogLevel min_level_ = LogLevel::Info;
+    std::atomic<LogLevel> min_level_{LogLevel::Info};
     std::mutex mutex_;
 };
 

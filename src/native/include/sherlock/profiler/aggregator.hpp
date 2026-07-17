@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -69,7 +70,9 @@ public:
     void record(std::span<const FunctionID> frames, std::uint64_t bytes, ObjectID addr, ClassID classId);
 
     // --- GC integration. All called on the GC thread with the world stopped. ---
-    void beginGc();                                            // reset survivor ranges
+    void beginGc();                                            // reset survivor + condemned ranges
+    void noteCondemnedRange(ObjectID start, std::uint64_t length); // a collected generation's span
+    void noteLargeObjectRange(ObjectID start, std::uint64_t length); // an LOH/POH generation's span
     void noteSurvivorRange(ObjectID start, std::uint64_t length); // an old-address survivor span
     void noteMove(ObjectID oldStart, ObjectID newStart, std::uint64_t length); // compaction relocation
     void endGc();                                              // judge & clear pending
@@ -91,17 +94,35 @@ public:
     /// Resolves a ClassID to "Ns.Type" (cached). Used by allocation/exception triggers.
     const std::string& resolveTypeName(ClassID classId);
 
+    /// Test-only: the current live tracked set as (address, id) pairs, in live_ order (sorted by
+    /// address). Lets unit tests drive record()/GC callbacks and assert the resulting live set
+    /// without going through emitCorrelation's file I/O. Not used in production.
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> liveSetForTest() const {
+        std::vector<std::pair<std::uint64_t, std::uint64_t>> out;
+        out.reserve(live_.size());
+        for (const LiveEntry& e : live_) out.emplace_back(static_cast<std::uint64_t>(e.addr), e.id);
+        return out;
+    }
+
 private:
     static constexpr int kMaxShards = 1024;
 
-    // A tracked live object: a monotonic id plus the allocation site it came from.
-    struct Live {
+    // A tracked live object: its current address, a monotonic id, and the allocation site it came
+    // from. The live set is kept as a vector sorted by address (not a hash map): GC compaction is
+    // order-preserving, so remapping every survivor's address is a monotonic transform that keeps
+    // the set sorted, letting the per-GC update be a single allocation-free, hash-free linear
+    // sort-merge against the (already sorted) survivor/move ranges — and giving emitCorrelation a
+    // sorted address column for free (the .slab joins to the dump by a merge-join on address).
+    struct LiveEntry {
+        ObjectID addr;
         std::uint64_t id;
         Site* site;
     };
 
     Shard& localShard();
     bool survived(ObjectID addr) const;    // is addr in this GC's survivor spans?
+    bool condemned(ObjectID addr) const;   // is addr in a generation this GC collected?
+    bool inLargeObjectHeap(ObjectID addr) const; // is addr on the LOH/POH (gen 3/4)?
     ObjectID remap(ObjectID addr) const;   // follow addr through this GC's moves
 
     /// Serializes a built provenance writer to a .slab file. Returns false on I/O error.
@@ -129,13 +150,44 @@ private:
     // Survivor spans [start, end) by old address, gathered during one GC. GC thread only.
     std::vector<intervals::AddrRange> survivorRanges_;
 
+    // Guards the note*Range vectors below. Under Server GC the runtime delivers SurvivingReferences2 /
+    // MovedReferences2 CONCURRENTLY on multiple GC heap threads, so the emplace_back/push_back into
+    // survivorRanges_/moves_ must be serialized or two threads can reallocate the same vector at once
+    // (double free). beginGc/endGc run single-threaded (GarbageCollectionStarted/Finished are
+    // serialized), so they don't take this lock. The world is stopped and the critical sections are a
+    // single push_back, so contention is negligible.
+    std::mutex noteMutex_;
+
+    // Address spans of the generation(s) condemned by this GC (from GetGenerationBounds at GC start).
+    // Only objects INSIDE these spans are in scope for the survivor test: the GC reports survivors
+    // solely for condemned generations, so a tracked object OUTSIDE (a higher, un-collected gen) is
+    // still alive by definition and must be carried over untouched — not dropped as a false death.
+    std::vector<intervals::AddrRange> condemnedRanges_;
+
+    // Address spans of the LOH (gen 3) + POH (gen 4), from GetGenerationBounds at GC start. Large
+    // objects are never reported to SurvivingReferences2 during an ephemeral GC (the LOH isn't
+    // collected then), so a freshly-allocated large object would never pass the survivor admission
+    // test and would be dropped from `pending`. We admit a pending object that lies on the LOH/POH
+    // but is NOT in this GC's condemned set — it's alive by definition (the GC didn't examine it),
+    // and it's re-evaluated normally once a full GC condemns the LOH. Restricting to LOH/POH (rather
+    // than a generic "not condemned") avoids falsely admitting a young SOH object allocated past the
+    // gen-0 frontier reported at GC start.
+    std::vector<intervals::AddrRange> largeObjectRanges_;
+
     // Correlation state (opt-in via SHERLOCK_CORRELATE). GC thread + shutdown only.
-    // live_ maps a live object's current address to its identity+site; keyed by address
-    // for the O(1) point ops in the per-GC rebuild (remaps use the sorted moves_ vector).
+    // live_ is the current live tracked objects, sorted by address. Each GC updates only the
+    // contiguous address WINDOW it could have changed, splicing the merged window back in place so the
+    // (large, growing) untouched prefix is never copied — per-GC cost is O(window), not O(live).
+    // windowScratch_ holds the merged window between the sweep and the in-place splice; its capacity is
+    // retained across GCs so a steady-state update allocates nothing.
     bool correlate_ = false;
     std::atomic<std::uint64_t> nextObjectId_{1};
     std::vector<intervals::MoveRange> moves_;      // this GC's relocations, sorted by oldStart
-    std::unordered_map<ObjectID, Live> live_;      // current live tracked objects, keyed by address
+    std::vector<LiveEntry> live_;                  // current live tracked objects, sorted by address
+    std::vector<LiveEntry> windowScratch_;         // reusable merged-window buffer (capacity retained)
+    std::vector<LiveEntry> mergeOut_;              // reusable k-way merge output (capacity retained)
+    std::vector<std::size_t> runStarts_;           // start offsets of the monotone runs in windowScratch_
+    std::vector<LiveEntry> newSurvivors_;          // this GC's freshly-surviving sampled objects
 
     std::unordered_map<FunctionID, std::string> nameCache_;      // dump-time only
     std::unordered_map<ClassID, std::string> typeNameCache_;     // for triggers

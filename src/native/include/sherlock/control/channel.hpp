@@ -54,14 +54,16 @@ public:
 
     void stop();
 
-    [[nodiscard]] bool connected() const { return fd_ >= 0; }
+    [[nodiscard]] bool connected() const { return fd_.load(std::memory_order_acquire) >= 0; }
 
 private:
     void serve();
     bool sendAll(std::span<const char> bytes); // best-effort; callers ignore the result
 
     Logger* logger_;
-    int fd_ = -1;
+    // The socket fd is read on the worker thread (serve/sendAll) and by connected() from other
+    // threads, while stop() closes and resets it — make it atomic to avoid a torn/racy read.
+    std::atomic<int> fd_{-1};
     Handler handler_;
     std::atomic<bool> running_{false};
     std::thread worker_;
