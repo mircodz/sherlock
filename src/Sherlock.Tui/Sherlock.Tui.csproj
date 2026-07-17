@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+
+    <!-- Same analysis workload as the CLI (histogram, dominators over multi-GB dumps): Server GC for
+         throughput + Dynamic PGO to re-optimize the hot graph-walk methods in the interactive session. -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <TieredPGO>true</TieredPGO>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Sherlock.Core\Sherlock.Core.csproj" />
+    <!-- Quick-and-dirty local reference to the unpublished Tessera TUI framework in ../tessera.
+         When Tessera ships on NuGet this becomes a normal PackageReference. -->
+    <ProjectReference Include="..\..\..\tessera\src\Tessera\Tessera.csproj" />
+  </ItemGroup>
+
+</Project>

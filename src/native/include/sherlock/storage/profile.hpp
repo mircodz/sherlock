@@ -18,7 +18,7 @@ namespace Sherlock::storage {
 /// explicit pad so the record is a portable, naturally-aligned 40 bytes on both C++ and C#.
 struct AllocationRecord {
     std::uint32_t stackId;
-    std::uint32_t reserved;
+    std::uint32_t typeId;   // frameId (in the shared Frames/Strings table) of the allocated type name
     std::uint64_t allocBytes;
     std::uint64_t allocCount;
     std::uint64_t survivedBytes;
@@ -35,7 +35,9 @@ struct CorrelationRecord {
 };
 static_assert(sizeof(CorrelationRecord) == 16, "CorrelationRecord must be a packed 16-byte record");
 
-inline constexpr std::uint16_t kProfileVersion = 1;
+// v2 adds a real per-record type: `typeId` (was `reserved`) is the allocated type's id in the shared
+// Frames/Strings table. v1 slabs have no type and read back with typeId == 0 (guarded on the reader).
+inline constexpr std::uint16_t kProfileVersion = 2;
 
 /// Accumulates an interned stack table plus allocation records (and, in the next step, correlation
 /// records), then emits the whole container. Frames are given as names (root->leaf); the CLR-specific
@@ -52,9 +54,15 @@ public:
         return interner_.internStack(frameScratch_);
     }
 
-    void addAllocation(std::uint32_t stackId, std::uint64_t allocBytes, std::uint64_t allocCount,
-                       std::uint64_t survivedBytes, std::uint64_t survivedCount) {
-        allocs_.push_back({stackId, 0, allocBytes, allocCount, survivedBytes, survivedCount});
+    /// Interns a type name into the shared Frames/Strings table (types and method frames share one
+    /// string space) and returns its id, stored on each allocation record as `typeId`.
+    std::uint32_t internType(std::string_view name) {
+        return interner_.internFrame(name);
+    }
+
+    void addAllocation(std::uint32_t stackId, std::uint32_t typeId, std::uint64_t allocBytes,
+                       std::uint64_t allocCount, std::uint64_t survivedBytes, std::uint64_t survivedCount) {
+        allocs_.push_back({stackId, typeId, allocBytes, allocCount, survivedBytes, survivedCount});
     }
 
     /// Records that the live object at `address` was allocated by `stackId` (shared with the profile).

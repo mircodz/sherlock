@@ -10,7 +10,11 @@ namespace Sherlock.Core.Collection;
 
 /// <summary>A process in the supervised subtree.</summary>
 /// <param name="IsDotnet">Whether it exposes a diagnostics endpoint (and so can be dumped).</param>
-public sealed record SupervisedProcess(int Pid, string Name, bool IsRoot, bool IsDotnet);
+/// <param name="ParentPid">Its parent's pid within the tree (0 for the root).</param>
+public sealed record SupervisedProcess(int Pid, string Name, bool IsRoot, bool IsDotnet, int ParentPid = 0);
+
+/// <summary>A live managed-heap sample: total bytes and the per-generation breakdown.</summary>
+public sealed record HeapStats(long Total, long Gen0, long Gen1, long Gen2, long Loh, long Poh);
 
 /// <summary>
 /// Launches a target process and tracks its descendant tree. Children are discovered from the OS
@@ -129,6 +133,15 @@ public sealed class ProcessSupervisor : IDisposable
                 ? Path.Combine(captureDir, "allocations.slab")
                 : Path.Combine(Path.GetTempPath(), $"sherlock-alloc-{Guid.NewGuid():n}.slab");
             psi.Environment["SHERLOCK_PROFILE_OUT"] = _profileTemplate;
+
+            // Sampling: the profiler walks the stack on every sampled allocation, so sampling every
+            // ~N bytes (instead of every object) is the single biggest throughput lever. For plain
+            // profiling we sample; correlation needs per-object provenance, so it stays exact there.
+            // A user-set SHERLOCK_SAMPLE_BYTES (inherited) always wins.
+            if (!correlate && Environment.GetEnvironmentVariable("SHERLOCK_SAMPLE_BYTES") is null)
+            {
+                psi.Environment["SHERLOCK_SAMPLE_BYTES"] = "102400"; // 100 KB between stack walks
+            }
 
             // Triggers pre-armed at launch (call:/alloc:/gc:/throw:); a hit arrives as a control event.
             if (!string.IsNullOrWhiteSpace(snapshotOn))
@@ -336,6 +349,33 @@ public sealed class ProcessSupervisor : IDisposable
         return ok && fields.Length > 0 && long.TryParse(fields[0], out long g) ? g : -1;
     }
 
+    /// <summary>The live managed-heap size of a profiled process, or null if unavailable (no profiler,
+    /// dead pid, or the runtime didn't answer). Cheap enough to poll for the live monitor.</summary>
+    public HeapStats? HeapSize(int pid, TimeSpan timeout)
+    {
+        if (_control is null || !IsAlive(pid))
+        {
+            return null;
+        }
+
+        (bool ok, string[] fields) = _control.RequestAsync(pid, ControlCommands.HeapSize, timeout).GetAwaiter().GetResult();
+        if (!ok || fields.Length < 6)
+        {
+            return null;
+        }
+
+        // total \t gen0 \t gen1 \t gen2 \t loh \t poh (bytes)
+        var v = new long[6];
+        for (int i = 0; i < 6; i++)
+        {
+            if (!long.TryParse(fields[i], out v[i]))
+            {
+                return null;
+            }
+        }
+        return new HeapStats(v[0], v[1], v[2], v[3], v[4], v[5]);
+    }
+
     /// <summary>
     /// Arms a snapshot trigger at runtime over the control channel (call:/alloc:/gc:/throw:).
     /// Returns (ok, detail): ok=false with a reason if the profiler can't arm it.
@@ -366,7 +406,8 @@ public sealed class ProcessSupervisor : IDisposable
         return ok && File.Exists(path) ? path : null;
     }
 
-    /// <summary>The live supervised subtree (root + descendants), root first.</summary>
+    /// <summary>The live supervised subtree (root + descendants), root first, each carrying its
+    /// parent pid so callers can rebuild the tree.</summary>
     public IReadOnlyList<SupervisedProcess> List()
     {
         if (_root is null)
@@ -375,15 +416,31 @@ public sealed class ProcessSupervisor : IDisposable
         }
 
         HashSet<int> dotnet = DotnetPids();
+        Dictionary<int, List<int>> children = ChildrenByParent();
         var result = new List<SupervisedProcess>();
 
-        foreach (int pid in Descendants(_root.Id))
+        // BFS from the root, carrying each pid's parent (0 for the root).
+        var seen = new HashSet<int> { _root.Id };
+        var queue = new Queue<(int Pid, int Parent)>();
+        queue.Enqueue((_root.Id, 0));
+        while (queue.Count > 0)
         {
+            (int pid, int parent) = queue.Dequeue();
             if (IsAlive(pid))
             {
-                SupervisedProcess described = Describe(pid, pid == _root.Id, dotnet);
+                SupervisedProcess described = Describe(pid, pid == _root.Id, dotnet) with { ParentPid = parent };
                 _names[pid] = described.Name;
                 result.Add(described);
+            }
+            if (children.TryGetValue(pid, out List<int>? kids))
+            {
+                foreach (int child in kids)
+                {
+                    if (seen.Add(child))
+                    {
+                        queue.Enqueue((child, pid));
+                    }
+                }
             }
         }
 
@@ -409,33 +466,6 @@ public sealed class ProcessSupervisor : IDisposable
     {
         try { return DiagnosticsClient.GetPublishedProcesses().ToHashSet(); }
         catch { return []; }
-    }
-
-    /// <summary>The root pid plus every transitive child, from the OS process table.</summary>
-    private static IEnumerable<int> Descendants(int root)
-    {
-        Dictionary<int, List<int>> children = ChildrenByParent();
-
-        var seen = new HashSet<int> { root };
-        var queue = new Queue<int>();
-        queue.Enqueue(root);
-        while (queue.Count > 0)
-        {
-            int pid = queue.Dequeue();
-            yield return pid;
-            if (!children.TryGetValue(pid, out List<int>? kids))
-            {
-                continue;
-            }
-
-            foreach (int child in kids)
-            {
-                if (seen.Add(child))
-                {
-                    queue.Enqueue(child);
-                }
-            }
-        }
     }
 
     /// <summary>Parses <c>ps</c> into a parent-to-children map. Empty on unsupported platforms.</summary>

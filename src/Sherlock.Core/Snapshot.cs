@@ -36,7 +36,9 @@ public sealed class Snapshot(DumpSession dump, SnapshotEntry? entry = null) : ID
     public IReadOnlyList<ExceptionInfo> Exceptions => _exceptions ??= new ExceptionAnalyzer(dump).FindExceptions();
 
     public IReadOnlyList<HeapTypeStat> Histogram => dump.GetHistogram();
-    public DominatorTree Dominators => dump.GetDominatorTree();
+    // V2 pipeline: dominators over the persisted, DAC-bypassing heap graph (extracted once, cached on
+    // disk beside the dump). Same result as GetDominatorTree, much faster on reopen.
+    public DominatorTree Dominators => dump.GetDominatorTreeV2();
 
     // Parameterized queries.
     public ObjectDetail Inspect(ulong address) => new ObjectInspector(dump).Inspect(address);

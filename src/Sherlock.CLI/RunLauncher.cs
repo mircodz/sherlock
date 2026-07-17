@@ -15,7 +15,8 @@ public sealed record RunSpec(
     bool CollectChildren,
     bool DumpOnCrash,
     string? SnapshotOn,
-    IReadOnlyList<string> Command)
+    IReadOnlyList<string> Command,
+    bool Live = false)
 {
     /// <summary>Correlation, triggers, and child collection all ride the profiler, so it must be attached.</summary>
     public bool NeedsProfiler => Profile || Correlate || CollectChildren || SnapshotOn is not null;
@@ -24,12 +25,12 @@ public sealed record RunSpec(
 /// <summary>The one launch path shared by <c>sl run</c> and the REPL <c>run</c> command.</summary>
 public static class RunLauncher
 {
-    public const string Usage = "run [--profile] [--correlate] [--children] [--no-crash-dump] [--snapshot-on <event>] [--] <path> [args...]";
+    public const string Usage = "run [--profile] [--correlate] [--children] [--live] [--no-crash-dump] [--snapshot-on <event>] [--] <path> [args...]";
 
     /// <summary>Parses run flags from raw REPL tokens. Returns null (after printing the usage) if no command is given.</summary>
     public static RunSpec? Parse(IReadOnlyList<string> args, IAnsiConsole console)
     {
-        bool profile = false, correlate = false, children = false, dumpOnCrash = true;
+        bool profile = false, correlate = false, children = false, dumpOnCrash = true, live = false;
         string? snapshotOn = null;
         var rest = new List<string>();
 
@@ -44,6 +45,7 @@ public static class RunLauncher
                 case "--profile": profile = true; break;
                 case "--correlate": correlate = true; break;
                 case "--children": children = true; break;
+                case "--live": live = true; break;
                 case "--no-crash-dump": dumpOnCrash = false; break;
                 case "--snapshot-on" when i + 1 < args.Count: snapshotOn = args[++i]; break;
                 case "--": break;
@@ -56,7 +58,7 @@ public static class RunLauncher
             console.MarkupLineInterpolated($"[red]error:[/] usage: {Usage}");
             return null;
         }
-        return new RunSpec(profile, correlate, children, dumpOnCrash, snapshotOn, rest);
+        return new RunSpec(profile, correlate, children, dumpOnCrash, snapshotOn, rest, live);
     }
 
     /// <summary>

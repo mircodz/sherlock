@@ -21,6 +21,9 @@ public static class ControlCommands
 
     /// <summary>Return the number of GCs seen so far (for snapshot drift detection).</summary>
     public const string GcCount = "gc-count";
+
+    /// <summary>Return the live managed-heap size: total + per-generation bytes (for the live monitor).</summary>
+    public const string HeapSize = "heap-size";
 }
 
 /// <summary>Event names pushed by the profiler over the channel (in <c>EVENT</c> frames).</summary>

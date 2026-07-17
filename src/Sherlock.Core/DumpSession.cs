@@ -4,6 +4,7 @@ using System.IO;
 using System.Threading;
 using Microsoft.Diagnostics.Runtime;
 using Sherlock.Core.Analysis;
+using Sherlock.Core.HeapModel;
 
 namespace Sherlock.Core;
 
@@ -28,11 +29,23 @@ public sealed class DumpSession : IDisposable
     public ClrRuntime Runtime { get; }
 
     private DominatorTree? _dominatorTree;
+    private DominatorTree? _dominatorTreeV2;
+    private HeapGraphProvider? _heapGraph;
     private IReadOnlyList<HeapTypeStat>? _histogram;
 
     /// <summary>The heap's dominator tree - built once, cached.</summary>
     public DominatorTree GetDominatorTree(CancellationToken cancellationToken = default) =>
         _dominatorTree ??= new DominatorAnalyzer(this).Build(cancellationToken);
+
+    /// <summary>The compact object graph (V2): extracted once by bypassing ClrMD's DAC and persisted
+    /// beside the dump, so reopening the snapshot skips extraction. Backs the V2 analyses.</summary>
+    public HeapModel.HeapGraph GetHeapGraph(CancellationToken cancellationToken = default) =>
+        (_heapGraph ??= new HeapGraphProvider(this)).Get(cancellationToken);
+
+    /// <summary>The heap's dominator tree via the V2 graph pipeline - built once, cached. Same result
+    /// as <see cref="GetDominatorTree"/>; kept separate while V2 is opt-in.</summary>
+    public DominatorTree GetDominatorTreeV2(CancellationToken cancellationToken = default) =>
+        _dominatorTreeV2 ??= new DominatorAnalyzerV2(this).Build(cancellationToken);
 
     /// <summary>The full per-type heap histogram - built once, cached. Filter in-memory.</summary>
     public IReadOnlyList<HeapTypeStat> GetHistogram() =>

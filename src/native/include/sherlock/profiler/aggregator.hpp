@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -33,11 +34,13 @@ public:
         std::uint64_t bytes = 0;
     };
 
-    // A unique allocation stack and what it has allocated. `frames` is stored
-    // leaf -> root (the order DoStackSnapshot yields).
+    // A unique (allocation stack, allocated type) pair and what it has allocated. The same call
+    // site can allocate more than one type, so sites are keyed by both - this gives per-type
+    // attribution for free. `frames` is stored leaf -> root (the order DoStackSnapshot yields).
     struct Site {
         std::vector<FunctionID> frames;
-        Stats alloc;      // everything sampled at this stack
+        ClassID classId = 0;  // the allocated type; resolved to a name at dump time
+        Stats alloc;      // everything sampled at this stack+type
         Stats survived;   // the subset that survived its first GC
     };
 
@@ -60,9 +63,10 @@ public:
     Aggregator(ICorProfilerInfo10* info, Logger* logger);
     ~Aggregator();
 
-    /// Hot path. `frames` is the captured stack (leaf -> root); `addr` is the
-    /// object's address. Lock-free: touches only the calling thread's shard.
-    void record(const std::vector<FunctionID>& frames, std::uint64_t bytes, ObjectID addr);
+    /// Hot path. `frames` is the captured stack (leaf -> root), a view over the caller's fixed
+    /// capture buffer (no allocation); `addr` is the object's address; `classId` is its type (stored,
+    /// resolved to a name only at dump time). Lock-free: touches only the calling thread's shard.
+    void record(std::span<const FunctionID> frames, std::uint64_t bytes, ObjectID addr, ClassID classId);
 
     // --- GC integration. All called on the GC thread with the world stopped. ---
     void beginGc();                                            // reset survivor ranges

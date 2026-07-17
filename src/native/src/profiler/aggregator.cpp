@@ -7,6 +7,7 @@
 #include <fstream>
 #include <string_view>
 #include <unordered_map>
+#include <span>
 #include <vector>
 
 namespace Sherlock {
@@ -19,7 +20,7 @@ namespace {
 thread_local Aggregator::Shard* t_shard = nullptr;
 
 // FNV-1a over the frame ids - cheap and good enough to key distinct stacks.
-std::uint64_t hashFrames(const std::vector<FunctionID>& frames) {
+std::uint64_t hashFrames(std::span<const FunctionID> frames) {
     std::uint64_t h = 1469598103934665603ull;
     for (FunctionID f : frames) {
         h ^= static_cast<std::uint64_t>(f);
@@ -73,15 +74,19 @@ Aggregator::Shard& Aggregator::localShard() {
     return *t_shard;
 }
 
-void Aggregator::record(const std::vector<FunctionID>& frames, std::uint64_t bytes, ObjectID addr) {
+void Aggregator::record(std::span<const FunctionID> frames, std::uint64_t bytes, ObjectID addr, ClassID classId) {
+    // Key by (stack, type): mix the classId into the stack hash so the same call site allocating
+    // two types lands in two sites. A key collision across distinct pairs would only merge counts.
     std::uint64_t key = hashFrames(frames);
+    key = (key ^ static_cast<std::uint64_t>(classId)) * 1099511628211ull;
     Shard& shard = localShard();
 
     auto it = shard.sites.find(key);
     Site* site;
     if (it == shard.sites.end()) {
         Site fresh;
-        fresh.frames = frames;
+        fresh.frames.assign(frames.begin(), frames.end()); // copy the view into the stored site
+        fresh.classId = classId;
         site = &shard.sites.emplace(key, std::move(fresh)).first->second;
     } else {
         site = &it->second;
@@ -211,7 +216,8 @@ std::uint32_t Aggregator::internSiteStack(storage::ProvenanceWriter& pw, const S
 void Aggregator::writeProfile(storage::ProvenanceWriter& pw, const std::unordered_map<std::uint64_t, Site>& sites) {
     for (const auto& [key, site] : sites) {
         const std::uint32_t stackId = internSiteStack(pw, site);
-        pw.addAllocation(stackId, site.alloc.bytes, site.alloc.count, site.survived.bytes, site.survived.count);
+        const std::uint32_t typeId = pw.internType(resolveTypeName(site.classId));
+        pw.addAllocation(stackId, typeId, site.alloc.bytes, site.alloc.count, site.survived.bytes, site.survived.count);
     }
 }
 

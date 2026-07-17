@@ -6,6 +6,7 @@
 #include "sherlock/control/protocol.hpp"
 
 #include <cstdint>
+#include <span>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -43,10 +44,11 @@ std::string withPid(const std::string& path) {
     return path.substr(0, dot) + suffix + path.substr(dot);
 }
 
-// Filled by captureStack during a walk (leaf -> root), read right after. Thread-
-// local so concurrent allocating threads don't clobber each other; capacity is
-// retained between allocations to avoid reallocation.
-thread_local std::vector<FunctionID> t_frames;
+// Filled by captureStack during a walk (leaf -> root), read right after. A fixed inline array in
+// thread-local storage (no heap buffer, no allocation, cache-hot) — thread-local so concurrent
+// allocating threads don't clobber each other. `t_frameCount` is the number of frames captured.
+thread_local FunctionID t_frames[kMaxFrames];
+thread_local std::uint32_t t_frameCount = 0;
 
 // Bytes allocated on this thread since the last sample was taken.
 thread_local std::uint64_t t_bytesSinceSample = 0;
@@ -55,8 +57,8 @@ thread_local std::uint64_t t_bytesSinceSample = 0;
 // runtime frames, which we skip) up to kMaxFrames.
 HRESULT __stdcall captureStack(FunctionID funcId, UINT_PTR, COR_PRF_FRAME_INFO, ULONG32, BYTE[], void*) {
     if (funcId != 0) {
-        t_frames.push_back(funcId);
-        if (t_frames.size() >= kMaxFrames)
+        t_frames[t_frameCount++] = funcId;
+        if (t_frameCount >= kMaxFrames)
             return E_ABORT; // got enough depth; any non-S_OK ends the walk
     }
     return S_OK;
@@ -258,6 +260,34 @@ control::Reply Profiler::handleControl(std::string_view cmd, std::span<const std
     if (cmd == control::commands::kGcCount) {
         return control::Reply::success(std::to_string(gcCount.load()));
     }
+    if (cmd == control::commands::kHeapSize) {
+        // Live managed-heap size, from the current generation bounds (sum of each gen's live range).
+        // Reply is tab-separated: total \t gen0 \t gen1 \t gen2 \t loh \t poh (bytes).
+        if (corProfilerInfo == nullptr) {
+            return control::Reply::error("no profiler info");
+        }
+        ULONG count = 0;
+        if (FAILED(corProfilerInfo->GetGenerationBounds(0, &count, nullptr)) || count == 0) {
+            return control::Reply::error("generation bounds unavailable");
+        }
+        std::vector<COR_PRF_GC_GENERATION_RANGE> ranges(count);
+        if (FAILED(corProfilerInfo->GetGenerationBounds(count, &count, ranges.data()))) {
+            return control::Reply::error("generation bounds query failed");
+        }
+        std::uint64_t gen[5] = {0, 0, 0, 0, 0};
+        std::uint64_t total = 0;
+        for (ULONG i = 0; i < count; ++i) {
+            const auto len = static_cast<std::uint64_t>(ranges[i].rangeLength);
+            const int g = static_cast<int>(ranges[i].generation);
+            if (g >= 0 && g <= 4) {
+                gen[g] += len;
+            }
+            total += len;
+        }
+        return control::Reply::success(
+            std::to_string(total) + "\t" + std::to_string(gen[0]) + "\t" + std::to_string(gen[1]) + "\t" +
+            std::to_string(gen[2]) + "\t" + std::to_string(gen[3]) + "\t" + std::to_string(gen[4]));
+    }
     if (cmd == control::commands::kFlushAllocations) {
         if (!aggregator) {
             return control::Reply::error("no aggregator");
@@ -360,11 +390,11 @@ HRESULT STDMETHODCALLTYPE Profiler::ObjectAllocated(ObjectID objectId, ClassID c
         return S_OK;
 
     // Capture the call stack (leaf -> root) and attribute the allocation to it.
-    t_frames.clear();
+    t_frameCount = 0;
     corProfilerInfo->DoStackSnapshot(0 /* current thread */, captureStack,
                                      COR_PRF_SNAPSHOT_DEFAULT, this, nullptr, 0);
 
-    aggregator->record(t_frames, objectSize, objectId);
+    aggregator->record(std::span<const FunctionID>(t_frames, t_frameCount), objectSize, objectId, classId);
     return S_OK;
 }
 

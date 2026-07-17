@@ -25,8 +25,10 @@ TEST(Profile, RoundTripsRecordsAndStacks) {
     ProvenanceWriter w;
     const std::uint32_t s1 = w.internStack(frames({"Program.Main", "Registry.Add"}));
     const std::uint32_t s2 = w.internStack(frames({"Program.Main", "List.Resize"}));
-    w.addAllocation(s1, /*allocBytes*/ 2000, /*allocCount*/ 50, /*survivedBytes*/ 1600, /*survivedCount*/ 40);
-    w.addAllocation(s2, 512, 8, 0, 0);
+    const std::uint32_t t1 = w.internType("Sherlock.Demo.Customer");
+    const std::uint32_t t2 = w.internType("System.Byte[]");
+    w.addAllocation(s1, t1, /*allocBytes*/ 2000, /*allocCount*/ 50, /*survivedBytes*/ 1600, /*survivedCount*/ 40);
+    w.addAllocation(s2, t2, 512, 8, 0, 0);
     ASSERT_EQ(w.allocationCount(), 2u);
 
     ContainerWriter cw;
@@ -40,13 +42,19 @@ TEST(Profile, RoundTripsRecordsAndStacks) {
     ASSERT_EQ(recs.size(), 2u);
 
     EXPECT_EQ(recs[0].stackId, s1);
+    EXPECT_EQ(recs[0].typeId, t1);
     EXPECT_EQ(recs[0].allocBytes, 2000u);
     EXPECT_EQ(recs[0].allocCount, 50u);
     EXPECT_EQ(recs[0].survivedBytes, 1600u);
     EXPECT_EQ(recs[0].survivedCount, 40u);
 
     EXPECT_EQ(recs[1].stackId, s2);
+    EXPECT_EQ(recs[1].typeId, t2);
     EXPECT_EQ(recs[1].allocBytes, 512u);
+
+    // The typeId resolves back through the same shared table as frames.
+    EXPECT_EQ(r.stacks().frame(recs[0].typeId), "Sherlock.Demo.Customer");
+    EXPECT_EQ(r.stacks().frame(recs[1].typeId), "System.Byte[]");
 
     // The record's stackId resolves back through the shared table to the original frames.
     std::span<const std::uint32_t> f1 = r.stacks().stackFrames(recs[0].stackId);
@@ -101,7 +109,7 @@ TEST(Profile, CorrelationIsSortedAndBinarySearchable) {
 TEST(Profile, NoCorrelationSectionWhenAggregateOnly) {
     // The exit-time aggregate has allocations but no per-object correlation.
     ProvenanceWriter w;
-    w.addAllocation(w.internStack(frames({"A"})), 100, 1, 100, 1);
+    w.addAllocation(w.internStack(frames({"A"})), w.internType("T"), 100, 1, 100, 1);
     ContainerWriter cw;
     w.writeTo(cw);
     const std::string bytes = cw.finish();

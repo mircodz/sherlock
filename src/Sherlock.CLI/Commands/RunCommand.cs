@@ -39,6 +39,10 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         [Description("Also capture allocation profiles for child processes, not just the root.")]
         public bool Children { get; init; }
 
+        [CommandOption("--live")]
+        [Description("Open a live TUI: heap usage + process tree; snapshot a process on demand.")]
+        public bool Live { get; init; }
+
         [CommandOption("--no-crash-dump")]
         [Description("Do not auto-write a dump if a process crashes.")]
         public bool NoCrashDump { get; init; }
@@ -68,7 +72,13 @@ public sealed class RunCommand : Command<RunCommand.Settings>
             return 1;
         }
 
-        var spec = new RunSpec(settings.Profile, settings.Correlate, settings.Children, !settings.NoCrashDump, settings.SnapshotOn, command);
+        var spec = new RunSpec(settings.Profile, settings.Correlate, settings.Children, !settings.NoCrashDump, settings.SnapshotOn, command, settings.Live);
+
+        if (spec.Live && !spec.NeedsProfiler)
+        {
+            console.MarkupLine("[yellow]--live needs the profiler for the heap graph[/] — add [bold]--profile[/] (or [bold]--correlate[/]).");
+            return 1;
+        }
 
         using Workspace workspace = ReplHost.CreateWorkspace();
         if (RunLauncher.Launch(workspace, console, spec) is not { } launched)
@@ -79,7 +89,14 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         (ProcessSupervisor supervisor, Session session) = launched;
         console.WriteLine();
 
-        SupervisedRun.Drain(workspace, console, supervisor, cancellation, waitForArtifacts: spec.NeedsProfiler);
+        if (spec.Live)
+        {
+            Live.LiveDashboard.Run(workspace, supervisor, spec, cancellation);
+        }
+        else
+        {
+            SupervisedRun.Drain(workspace, console, supervisor, cancellation, waitForArtifacts: spec.NeedsProfiler);
+        }
 
         Summarize(console, workspace, session, supervisor);
         return 0;

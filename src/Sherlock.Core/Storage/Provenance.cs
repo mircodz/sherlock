@@ -9,7 +9,7 @@ namespace Sherlock.Core.Storage;
 public struct AllocationRecord
 {
     public uint StackId;
-    public uint Reserved;
+    public uint TypeId;   // v2+: frameId of the allocated type name in the shared Frames table; 0 in v1 slabs
     public ulong AllocBytes;
     public ulong AllocCount;
     public ulong SurvivedBytes;
@@ -93,10 +93,17 @@ public sealed class ProvenanceReader
 
     public StackTable Stacks { get; }
 
+    /// <summary>Version of the Allocations section; >= 2 means each record carries a real <c>TypeId</c>.</summary>
+    public ushort AllocationsVersion { get; }
+
     public ProvenanceReader(ContainerReader container)
     {
         Stacks = StackTable.Read(container);
-        _allocs = container.TryGetSection(SectionType.Allocations, out Section a) ? a.Data : default;
+        if (container.TryGetSection(SectionType.Allocations, out Section a))
+        {
+            _allocs = a.Data;
+            AllocationsVersion = a.Version;
+        }
         _corr = container.TryGetSection(SectionType.Correlation, out Section c) ? c.Data : default;
     }
 

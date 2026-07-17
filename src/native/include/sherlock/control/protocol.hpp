@@ -26,6 +26,7 @@ inline constexpr std::string_view kEmitCorrelation = "emit-correlation";
 inline constexpr std::string_view kFlushAllocations = "flush-allocations";
 inline constexpr std::string_view kArmTrigger = "arm-trigger";
 inline constexpr std::string_view kGcCount = "gc-count";
+inline constexpr std::string_view kHeapSize = "heap-size";
 } // namespace commands
 
 /// Event names pushed in an EVENT frame. Mirrored on the C# side in ControlEvents.

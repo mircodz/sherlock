@@ -6,7 +6,14 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# The allocation callback (ObjectAllocated -> Aggregator::record) runs on every sampled allocation in
+# the target, so this library is genuinely hot — default to a fully optimized build; Debug is opt-in.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
 option(SHERLOCK_ASAN "Build with Address/UndefinedBehavior sanitizers (dev/test)" OFF)
+option(SHERLOCK_NATIVE_ARCH "Tune for the build machine's CPU (-march=native); turn OFF for portable/packaged builds" ON)
 
 find_program(CCACHE_PROGRAM ccache)
 if(CCACHE_PROGRAM)
@@ -32,6 +39,22 @@ if(NOT WIN32)
     add_compile_options($<$<NOT:$<CONFIG:Debug>>:-D_FORTIFY_SOURCE=2>)
     add_link_options(-pthread)
     include_directories(SYSTEM common/unix)
+
+    # Optimized (non-Debug) builds: aggressive optimization for the allocation hot path.
+    add_compile_options($<$<NOT:$<CONFIG:Debug>>:-O3>)
+    add_compile_options($<$<NOT:$<CONFIG:Debug>>:-funroll-loops>)
+    if(SHERLOCK_NATIVE_ARCH)
+        add_compile_options($<$<NOT:$<CONFIG:Debug>>:-march=native>)
+    endif()
+endif()
+
+# Link-time optimization for optimized builds — lets the hot path (Aggregator::record, hashFrames)
+# inline across the profiler/aggregator translation units.
+include(CheckIPOSupported)
+check_ipo_supported(RESULT SHERLOCK_IPO_OK OUTPUT SHERLOCK_IPO_MSG)
+if(SHERLOCK_IPO_OK)
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO ON)
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
