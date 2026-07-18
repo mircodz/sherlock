@@ -5,6 +5,8 @@
 
 #include <gtest/gtest.h>
 
+#include <sstream>
+
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -118,4 +120,35 @@ TEST(Profile, NoCorrelationSectionWhenAggregateOnly) {
     ProvenanceReader r(c);
     EXPECT_TRUE(r.correlation().empty());
     EXPECT_FALSE(r.stackForAddress(0x1000).has_value());
+}
+
+// With a forced tiny chunk budget, the Correlation column is emitted as several sections. The reader
+// must reassemble them in order and keep the address-sorted binary search working across boundaries.
+TEST(Profile, ChunkedCorrelationBinarySearchesAcrossChunks) {
+    ProvenanceWriter w;
+    const std::uint32_t s1 = w.internStack(frames({"A.M", "B.N"}));
+    const std::uint32_t s2 = w.internStack(frames({"A.M", "C.O"}));
+    // 12 objects, inserted out of order; sorted then chunked.
+    for (std::uint64_t i = 12; i >= 1; --i) w.addObject(i * 0x1000, (i % 2 == 0) ? s1 : s2);
+    ASSERT_EQ(w.objectCount(), 12u);
+
+    ContainerWriter cw;
+    w.writeTo(cw, /*chunkBytes*/ 48); // 3 records/chunk → 4 chunks
+    ContainerReader c(asBytes(cw.finish()));
+    ASSERT_TRUE(c.valid());
+    ASSERT_GE(c.findAll(SectionType::Correlation).size(), 2u); // actually chunked
+
+    ProvenanceReader r(c);
+    std::span<const CorrelationRecord> corr = r.correlation();
+    ASSERT_EQ(corr.size(), 12u);
+    for (std::size_t i = 1; i < corr.size(); ++i)
+        EXPECT_LT(corr[i - 1].address, corr[i].address); // globally sorted across chunk boundaries
+
+    // Binary search resolves every address, including ones in non-first chunks.
+    for (std::uint64_t i = 1; i <= 12; ++i) {
+        auto sid = r.stackForAddress(i * 0x1000);
+        ASSERT_TRUE(sid.has_value()) << "missing 0x" << std::hex << (i * 0x1000);
+        EXPECT_EQ(*sid, (i % 2 == 0) ? s1 : s2);
+    }
+    EXPECT_FALSE(r.stackForAddress(0x1500).has_value());
 }

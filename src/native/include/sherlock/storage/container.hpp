@@ -1,9 +1,11 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <optional>
+#include <ostream>
 #include <span>
 #include <string>
 #include <type_traits>
@@ -22,6 +24,11 @@ inline constexpr std::uint16_t kFlagLittleEndian = 0x1;
 inline constexpr std::size_t kHeaderSize = 16;
 inline constexpr std::size_t kSectionEntrySize = 32;
 inline constexpr std::size_t kAlignment = 8;
+
+// Default max bytes per chunk when splitting a large fixed-width column (addChunkedRecords). Stays
+// well under the C# reader's ~2 GB single-section cap; a multiple of 8 so no 8/4/2-byte record
+// straddles a chunk boundary.
+inline constexpr std::size_t kDefaultChunkBytes = 256u << 20; // 256 MiB
 
 /// Section kinds. The container layer treats these as opaque; the payload meaning is defined
 /// by the Layer-2 codecs. Kept in sync with the C# SectionType enum.
@@ -101,50 +108,57 @@ public:
         addSection(type, version, static_cast<std::uint16_t>(sizeof(T)), std::as_bytes(records), records.size());
     }
 
-    /// Serializes the whole container to a byte buffer (returned as a std::string of bytes).
+    /// Adds a fixed-width column as one or more same-typed sections, each at most `chunkBytes` bytes.
+    /// The C# reader caps a single section at ~2 GB (int-length span), so a large column (e.g. one
+    /// CorrelationRecord per live object) must be split. Every chunk but the last holds exactly
+    /// `chunkBytes / sizeof(T)` records — a uniform count the reader relies on to index element `i`
+    /// arithmetically (chunk = i / elemsPerChunk), so no chunk-start table is needed. The sort (if any)
+    /// must already be applied: chunking is a pure post-sort partition preserving global order.
+    template <typename T>
+    void addChunkedRecords(SectionType type, std::uint16_t version, std::span<const T> records,
+                           std::size_t chunkBytes = kDefaultChunkBytes) {
+        static_assert(std::is_trivially_copyable_v<T>, "record type must be trivially copyable");
+        const std::size_t elemsPerChunk = std::max<std::size_t>(1, chunkBytes / sizeof(T));
+        for (std::size_t i = 0; i < records.size(); i += elemsPerChunk) {
+            std::size_t n = std::min(elemsPerChunk, records.size() - i);
+            addSection(type, version, static_cast<std::uint16_t>(sizeof(T)),
+                       std::as_bytes(records.subspan(i, n)), n);
+        }
+    }
+
+    /// Serializes the whole container into a byte buffer. For small/in-memory containers and tests;
+    /// large containers should use writeTo(ostream) to avoid a second full copy in RAM.
     [[nodiscard]] std::string finish() const {
-        const std::size_t tableEnd = kHeaderSize + kSectionEntrySize * sections_.size();
-
-        std::vector<std::uint64_t> offsets(sections_.size());
-        std::size_t cursor = detail::alignUp(tableEnd, kAlignment);
-        for (std::size_t i = 0; i < sections_.size(); ++i) {
-            offsets[i] = cursor;
-            cursor += sections_[i].data.size();
-            if (i + 1 < sections_.size()) {
-                cursor = detail::alignUp(cursor, kAlignment);
-            }
-        }
-        const std::size_t total = sections_.empty() ? tableEnd : cursor;
-
         std::string out;
-        out.reserve(total);
-
-        // Header.
-        out.append(kMagic, 4);
-        detail::putU16(out, kFormatVersion);
-        detail::putU16(out, kFlagLittleEndian);
-        detail::putU32(out, static_cast<std::uint32_t>(sections_.size()));
-        detail::putU32(out, 0); // reserved
-
-        // Section table.
+        out.reserve(computeLayout());
+        appendHeaderAndTable([&out](const char* p, std::size_t n) { out.append(p, n); });
         for (std::size_t i = 0; i < sections_.size(); ++i) {
-            const Section& s = sections_[i];
-            detail::putU32(out, static_cast<std::uint32_t>(s.type));
-            detail::putU16(out, s.version);
-            detail::putU16(out, s.recordSize);
-            detail::putU64(out, offsets[i]);
-            detail::putU64(out, s.data.size());
-            detail::putU64(out, s.count);
-        }
-
-        // Section data, each padded to its aligned offset.
-        for (std::size_t i = 0; i < sections_.size(); ++i) {
-            while (out.size() < offsets[i]) {
-                out.push_back('\0');
-            }
+            while (out.size() < offsetOf(i)) out.push_back('\0');
             out.append(sections_[i].data);
         }
         return out;
+    }
+
+    /// Streams the container to `os` without materializing the whole file — peak RAM is the largest
+    /// single section, not the sum. Byte-identical to finish(). Returns os.good().
+    bool writeTo(std::ostream& os) const {
+        std::string head;
+        head.reserve(kHeaderSize + kSectionEntrySize * sections_.size());
+        appendHeaderAndTable([&head](const char* p, std::size_t n) { head.append(p, n); });
+        os.write(head.data(), static_cast<std::streamsize>(head.size()));
+
+        static constexpr char kPad[kAlignment] = {};
+        std::size_t pos = head.size();
+        for (std::size_t i = 0; i < sections_.size(); ++i) {
+            std::size_t off = offsetOf(i);
+            if (pos < off) {
+                os.write(kPad, static_cast<std::streamsize>(off - pos));
+                pos = off;
+            }
+            os.write(sections_[i].data.data(), static_cast<std::streamsize>(sections_[i].data.size()));
+            pos += sections_[i].data.size();
+        }
+        return static_cast<bool>(os);
     }
 
 private:
@@ -156,6 +170,42 @@ private:
         std::string data;
     };
     std::vector<Section> sections_;
+
+    // Aligned byte offset of section i's data. O(i), but the section count is tiny (≤~10).
+    std::size_t offsetOf(std::size_t i) const {
+        std::size_t cursor = detail::alignUp(kHeaderSize + kSectionEntrySize * sections_.size(), kAlignment);
+        for (std::size_t k = 0; k < i; ++k) {
+            cursor = detail::alignUp(cursor + sections_[k].data.size(), kAlignment);
+        }
+        return cursor;
+    }
+
+    // Total container size in bytes.
+    std::size_t computeLayout() const {
+        if (sections_.empty()) return kHeaderSize;
+        return offsetOf(sections_.size() - 1) + sections_.back().data.size();
+    }
+
+    // Header + section table, emitted via sink(ptr, len). Shared by finish() and writeTo().
+    template <typename Sink>
+    void appendHeaderAndTable(Sink sink) const {
+        std::string hdr;
+        hdr.append(kMagic, 4);
+        detail::putU16(hdr, kFormatVersion);
+        detail::putU16(hdr, kFlagLittleEndian);
+        detail::putU32(hdr, static_cast<std::uint32_t>(sections_.size()));
+        detail::putU32(hdr, 0); // reserved
+        for (std::size_t i = 0; i < sections_.size(); ++i) {
+            const Section& s = sections_[i];
+            detail::putU32(hdr, static_cast<std::uint32_t>(s.type));
+            detail::putU16(hdr, s.version);
+            detail::putU16(hdr, s.recordSize);
+            detail::putU64(hdr, offsetOf(i));
+            detail::putU64(hdr, s.data.size());
+            detail::putU64(hdr, s.count);
+        }
+        sink(hdr.data(), hdr.size());
+    }
 };
 
 /// A parsed view of one section (borrows the container's bytes).
@@ -195,6 +245,18 @@ public:
             }
         }
         return std::nullopt;
+    }
+
+    /// All sections of `type`, in table (add) order — for a column split across chunks by
+    /// addChunkedRecords. The real consumer is the C# reader; this exists for round-trip tests.
+    [[nodiscard]] std::vector<SectionView> findAll(SectionType type) const {
+        std::vector<SectionView> out;
+        for (const SectionView& s : sections_) {
+            if (s.type == type) {
+                out.push_back(s);
+            }
+        }
+        return out;
     }
 
 private:

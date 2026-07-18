@@ -166,13 +166,10 @@ void Aggregator::endGc() {
         std::sort(moves_.begin(), moves_.end(),
                   [](const intervals::MoveRange& a, const intervals::MoveRange& b) { return a.oldStart < b.oldStart; });
 
-    // Gather the sampled objects that were allocated since the last GC and survived this one. This
-    // also folds the per-site survived-stats (needed whether or not correlation is on). An object
-    // "survives" if it appears in this GC's survivor spans, OR if it lives on the LOH/POH but this
-    // GC did not condemn it: an ephemeral GC never reports large-object survivors (the LOH isn't
-    // collected then), yet the object is plainly still alive — the collection simply didn't examine
-    // it. Without this, every large object would be dropped from `pending` at the first ephemeral GC
-    // and never tracked. condemned()/inLargeObjectHeap() are binary searches (pending is unsorted).
+    // Fold per-site survived-stats and collect this GC's fresh survivors. An object survives if it's
+    // in a survivor span, OR it's on the LOH/POH but uncondemned — an ephemeral GC never reports
+    // large-object survivors, yet they're alive (not examined). Without this, large objects would be
+    // dropped from `pending` at the first ephemeral GC. (Binary searches: `pending` is unsorted.)
     if (correlate_)
         newSurvivors_.clear();
     int n = shardCount_.load(std::memory_order_acquire);
@@ -193,19 +190,14 @@ void Aggregator::endGc() {
     }
 
     if (correlate_) {
-        // Rebuild the live set. `live_` is sorted by address and grows monotonically for a leaky /
-        // accumulating process, so touching all of it every GC makes each (frequent) gen-0 GC
-        // progressively slower. Instead we sweep only the contiguous ADDRESS WINDOW that this GC could
-        // have changed: an object outside every condemned range is carried verbatim, so only entries
-        // inside the condemned span — plus where this GC's survivors/moves relocate, plus where fresh
-        // survivors land — can move. Everything below the window (prefix) and above it (suffix) stays
-        // in place. Work becomes O(touched), not O(total live). A full gen-2 GC condemns the whole
-        // heap, so the window spans the whole vector and this degenerates to the classic full rebuild.
+        // `live_` is sorted by address and grows monotonically, so touching all of it every GC makes
+        // frequent gen-0 GCs progressively slower. Instead sweep only the contiguous address window
+        // this GC could have changed — everything outside is carried verbatim and left in place, so
+        // work is O(touched). A full GC condemns the whole heap → window = whole vector.
         auto byAddr = [](const LiveEntry& a, const LiveEntry& b) { return a.addr < b.addr; };
         std::sort(newSurvivors_.begin(), newSurvivors_.end(), byAddr);
 
-        // Compute the window [windowStart, windowEnd). Empty condemnedRanges_ means "whole heap
-        // condemned" (a full GC that reported no bounds) → sweep everything, matching prior behavior.
+        // Window [windowStart, windowEnd). Empty condemnedRanges_ = whole heap condemned (full GC).
         std::uint64_t windowStart, windowEnd;
         if (condemnedRanges_.empty()) {
             windowStart = 0;
@@ -213,20 +205,19 @@ void Aggregator::endGc() {
         } else {
             windowStart = condemnedRanges_.front().first;
             windowEnd = condemnedRanges_.back().second;
-            // Fold in where survivors are relocated: a move target may land outside the condemned
-            // span, and a relocated entry must fall inside the window or the splice would misorder it.
+            // A relocated entry (move target) or fresh survivor must fall inside the window, else the
+            // splice would misorder it — fold both into the bounds.
             for (const intervals::MoveRange& m : moves_) {
                 windowStart = std::min(windowStart, m.newStart);
                 windowEnd = std::max(windowEnd, m.newStart + m.length);
             }
-            // Fold in fresh survivors (their remapped addresses), so the merge stays inside the window.
             if (!newSurvivors_.empty()) {
                 windowStart = std::min(windowStart, newSurvivors_.front().addr);
                 windowEnd = std::max(windowEnd, newSurvivors_.back().addr + 1);
             }
         }
 
-        // Locate the window in the sorted live_: [lo, hi) are the only entries that can change.
+        // [lo, hi) are the only live_ entries that can change.
         std::size_t lo = static_cast<std::size_t>(
             std::lower_bound(live_.begin(), live_.end(), windowStart,
                              [](const LiveEntry& e, std::uint64_t v) { return e.addr < v; }) - live_.begin());
@@ -234,13 +225,10 @@ void Aggregator::endGc() {
             std::upper_bound(live_.begin(), live_.end(), windowEnd,
                              [](std::uint64_t v, const LiveEntry& e) { return v < e.addr; }) - live_.begin());
 
-        // (a) Sweep only the window live_[lo, hi): keep survivors (carried verbatim if uncondemned,
-        // remapped if they survived a condemning collection), drop the dead — into windowScratch_.
-        // Compaction is order-preserving WITHIN a GC heap, so the swept survivors form K ascending
-        // runs (K = number of GC heaps whose remaps interleave; K==1 for Workstation GC). We detect a
-        // run boundary for free whenever an emitted address drops below the previous one — same cost as
-        // the old is_sorted scan, but it records the run structure so we can k-way MERGE the runs
-        // (O(N·K) / O(N log K)) instead of re-SORTING them from scratch (O(N log N)).
+        // (a) Sweep live_[lo, hi) into windowScratch_: carry uncondemned survivors verbatim, remap
+        // collected survivors, drop the dead. Compaction preserves order within a heap, so the output
+        // is K ascending runs (K = interleaving GC heaps; 1 for Workstation GC). A run boundary is
+        // where an emitted address drops — recorded free, so we k-way merge instead of re-sorting.
         intervals::ForwardCursor cursor(survivorRanges_, moves_, condemnedRanges_);
         windowScratch_.clear();
         windowScratch_.reserve((hi - lo) + newSurvivors_.size());
@@ -251,30 +239,27 @@ void Aggregator::endGc() {
             const LiveEntry& e = live_[i];
             std::uint64_t out;
             if (!cursor.condemned(e.addr)) {
-                out = e.addr;                       // not collected → alive, untouched
+                out = e.addr;
             } else if (cursor.survived(e.addr)) {
-                out = cursor.remap(e.addr);         // survived (maybe moved)
+                out = cursor.remap(e.addr);
             } else {
-                continue;                           // condemned and not a survivor → dead, drop
+                continue; // dead
             }
             if (!havePrev || out < prevAddr) {
-                runStarts_.push_back(windowScratch_.size()); // new ascending run begins here
+                runStarts_.push_back(windowScratch_.size()); // new ascending run
             }
             windowScratch_.push_back({static_cast<ObjectID>(out), e.id, e.site});
             prevAddr = out;
             havePrev = true;
         }
 
-        // (b) Produce the merged, sorted window into mergeOut_ from: the K swept runs plus, when it has
-        // fresh survivors this GC, newSurvivors_ as one more sorted run. Fast paths:
-        //   - a single run and no new survivors → windowScratch_ is already sorted, use it directly;
-        //   - a single run + new survivors → one 2-way merge (the common Server-GC-free case).
+        // (b) Merge the K swept runs (plus newSurvivors_) into sorted order. One run and no fresh
+        // survivors → already sorted, skip the merge (the Workstation-GC fast path).
         std::vector<LiveEntry>* merged;
         std::size_t nRuns = runStarts_.size();
         if (nRuns <= 1 && newSurvivors_.empty()) {
-            merged = &windowScratch_;               // already sorted, nothing to merge
+            merged = &windowScratch_;
         } else {
-            // Build the run cursor list: each swept run [start, nextStart), then newSurvivors_.
             struct Run { const LiveEntry* cur; const LiveEntry* end; };
             static thread_local std::vector<Run> runs; // GC thread only; capacity retained
             runs.clear();
@@ -314,9 +299,8 @@ void Aggregator::endGc() {
                         [](const LiveEntry& a, const LiveEntry& b) { return a.addr == b.addr; }),
             merged->end());
 
-        // (c) Splice: erase the old window [lo,hi) and insert the merged run at lo. erase/insert shift
-        // only the suffix live_[hi,end) — the large, growing prefix live_[0,lo) is never touched, so
-        // per-GC cost is O(window + suffix), independent of the total live-set size.
+        // (c) Splice the merged window back at lo. erase/insert shift only the suffix live_[hi,end);
+        // the large, growing prefix live_[0,lo) is untouched, so per-GC cost is O(window + suffix).
         live_.erase(live_.begin() + lo, live_.begin() + hi);
         live_.insert(live_.begin() + lo, merged->begin(), merged->end());
 
@@ -441,18 +425,18 @@ void Aggregator::dump(const std::string& path) {
         logger_->logInfo("wrote " + std::to_string(merged.size()) + " stacks to " + path);
 }
 
-bool Aggregator::writeSlab(const std::string& path, const storage::ProvenanceWriter& pw) {
+bool Aggregator::writeSlab(const std::string& path, storage::ProvenanceWriter& pw) {
     storage::ContainerWriter cw;
     pw.writeTo(cw);
-    const std::string bytes = cw.finish();
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     if (!out) {
         if (logger_)
             logger_->logError("could not open profile output: " + path);
         return false;
     }
-    out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-    return static_cast<bool>(out);
+    // Stream straight to the file — never materialize the whole container in RAM (the correlation
+    // column alone can be gigabytes on a large heap).
+    return cw.writeTo(out);
 }
 
 const std::string& Aggregator::resolveMethodName(FunctionID method) {

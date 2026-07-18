@@ -126,7 +126,7 @@ private:
     ObjectID remap(ObjectID addr) const;   // follow addr through this GC's moves
 
     /// Serializes a built provenance writer to a .slab file. Returns false on I/O error.
-    bool writeSlab(const std::string& path, const storage::ProvenanceWriter& pw);
+    bool writeSlab(const std::string& path, storage::ProvenanceWriter& pw);
 
     /// Merges every thread's shard into one map keyed by stack hash. Best-effort on a live
     /// process (races concurrent record()); exact at shutdown when allocations have stopped.

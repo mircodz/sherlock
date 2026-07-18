@@ -11,7 +11,7 @@ namespace Sherlock.Core.HeapModel;
 /// snapshot — it loads that file and skips extraction entirely. Callers just ask for a graph and never
 /// see whether it was built or reloaded.
 /// </summary>
-public sealed class HeapGraphProvider(DumpSession session)
+public sealed class HeapGraphProvider(DumpSession session) : IDisposable
 {
     private HeapGraph? _cached;
 
@@ -41,6 +41,18 @@ public sealed class HeapGraphProvider(DumpSession session)
     /// <summary>The sidecar path for a dump: <c>&lt;dump&gt;.heapgraph.slab</c>, next to the dump.</summary>
     public static string SidecarPath(string dumpPath) => dumpPath + ".heapgraph.slab";
 
+    /// <summary>Returns the graph only if it is already available — cached in this session or loadable
+    /// from the sidecar — without triggering a (potentially slow) fresh extraction. Lets a cheap
+    /// analysis (e.g. histogram) ride an already-built graph but not pay for building one.</summary>
+    public HeapGraph? TryGetCachedOrOnDisk()
+    {
+        if (_cached is not null)
+        {
+            return _cached;
+        }
+        return _cached = TryLoad(SidecarPath(session.DumpPath));
+    }
+
     private static HeapGraph? TryLoad(string path)
     {
         if (!File.Exists(path))
@@ -68,4 +80,7 @@ public sealed class HeapGraphProvider(DumpSession session)
             // Best-effort persistence: a read-only dump directory just means we rebuild next time.
         }
     }
+
+    /// <summary>Releases the cached graph and, when it's mmap-backed, the underlying file mapping.</summary>
+    public void Dispose() => _cached?.Dispose();
 }

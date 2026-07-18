@@ -92,6 +92,66 @@ public static class SnapshotExplorer
                 .Add("Retention", () => Lens(() => RetentionTab(snap)))
                 .Add("Allocations", () => Lens(() => AllocationsTab(snap)));
 
+        // The Health lens's "what looks wrong" — computed inline from the two cheap, already-loaded
+        // analyses (the V2 dominator tree + the graph histogram). Deliberately does NOT run the full
+        // `doctor` sweep: the two exhaustive ClrMD walks it adds (duplicate strings, event-handler
+        // leaks) cost seconds and belong to the on-demand `doctor` command, not a glance screen.
+        List<Finding> QuickFindings(Snapshot snap)
+        {
+            var result = new List<Finding>();
+
+            // Biggest retained graph — where a leak concentrates.
+            DominatorTree tree = snap.Dominators;
+            ulong reachable = tree.TotalReachableBytes;
+            if (reachable > 0 && tree.TopDominators(1).FirstOrDefault() is { } top)
+            {
+                double pct = 100.0 * top.RetainedSize / reachable;
+                if (pct >= 10)
+                {
+                    bool coll = top.TypeName.Contains("List<") || top.TypeName.Contains("Dictionary<") ||
+                                top.TypeName.Contains("HashSet<") || top.TypeName.Contains("[]");
+                    result.Add(new Finding(
+                        pct >= 50 ? FindingSeverity.High : FindingSeverity.Warning, "retention",
+                        $"{Short(top.TypeName)} {(coll ? "collection " : "")}retains {ByteFormat.Human((long)top.RetainedSize)} ({pct:0}% of the reachable heap)",
+                        "The biggest retained graph — where a leak concentrates.")
+                    {
+                        Address = top.Address,
+                        Type = top.TypeName,
+                        NextCommand = $"gcroot 0x{top.Address:x}",
+                    });
+                }
+            }
+
+            List<HeapTypeStat> byType = snap.Histogram.OrderByDescending(s => s.TotalSize).ToList();
+            long heapBytes = byType.Sum(s => (long)s.TotalSize);
+
+            // Fragmentation — a high free-space ratio.
+            HeapTypeStat? free = byType.FirstOrDefault(s => s.TypeName == "Free");
+            if (free is not null && heapBytes > 0 && 100.0 * free.TotalSize / heapBytes is var fpct && fpct >= 25)
+            {
+                result.Add(new Finding(FindingSeverity.Warning, "fragmentation",
+                    $"Heap fragmentation: {ByteFormat.Human((long)free.TotalSize)} free ({fpct:0}% of heap)",
+                    "A high free-space ratio means fragmentation (or a large collection just ran)."));
+            }
+
+            // Unbounded growth — a user type with a huge instance count.
+            HeapTypeStat? grow = byType.FirstOrDefault(s => s.Count >= 10_000 && s.TypeName != "Free"
+                && !s.TypeName.StartsWith("System.", StringComparison.Ordinal)
+                && !s.TypeName.StartsWith("Microsoft.", StringComparison.Ordinal));
+            if (grow is not null)
+            {
+                result.Add(new Finding(FindingSeverity.Info, "growth",
+                    $"{grow.Count:N0} instances of {Short(grow.TypeName)} ({ByteFormat.Human((long)grow.TotalSize)})",
+                    "A large population — check for unbounded growth (a cache or list that never shrinks).")
+                {
+                    Type = grow.TypeName,
+                    NextCommand = $"objects {Short(grow.TypeName)}",
+                });
+            }
+
+            return result.OrderBy(f => f.Severity).ToList();
+        }
+
         // Health: heap composition (proportion bar + legend) and the doctor's findings — each finding's
         // `→ command` is a link that jumps to the object / type it's about.
         Widget HealthTab(Snapshot snap, string id)
@@ -117,7 +177,7 @@ public static class SnapshotExplorer
             }
 
             var findings = new Stack(Direction.Vertical);
-            foreach (Finding f in snap.Diagnose())
+            foreach (Finding f in QuickFindings(snap))
             {
                 (string glyph, Color color) = f.Severity switch
                 {

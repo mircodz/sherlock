@@ -47,9 +47,29 @@ public sealed class DumpSession : IDisposable
     public DominatorTree GetDominatorTreeV2(CancellationToken cancellationToken = default) =>
         _dominatorTreeV2 ??= new DominatorAnalyzerV2(this).Build(cancellationToken);
 
-    /// <summary>The full per-type heap histogram - built once, cached. Filter in-memory.</summary>
+    /// <summary>The full per-type heap histogram - built once, cached. Filter in-memory. Prefers the
+    /// V2 heap graph's type column (no ClrMD walk) when it's available; falls back to a ClrMD heap walk.</summary>
     public IReadOnlyList<HeapTypeStat> GetHistogram() =>
-        _histogram ??= new HeapAnalyzer(this).GetStatistics();
+        _histogram ??= BuildHistogram();
+
+    private IReadOnlyList<HeapTypeStat> BuildHistogram()
+    {
+        // If a heap graph already exists (built by dominators, or cached on disk beside the dump), its
+        // type column gives the histogram for free — no extra heap walk. Otherwise use ClrMD directly
+        // rather than pay the full graph extraction just for a histogram.
+        HeapModel.HeapGraphProvider provider = _heapGraph ??= new HeapGraphProvider(this);
+        if (provider.TryGetCachedOrOnDisk() is { } graph && graph.Histogram() is { } rows)
+        {
+            var stats = new List<HeapTypeStat>(rows.Length);
+            foreach ((string typeName, long count, ulong totalSize) in rows)
+            {
+                if (count > 0) stats.Add(new HeapTypeStat(typeName, count, totalSize));
+            }
+            stats.Sort((a, b) => b.TotalSize.CompareTo(a.TotalSize));
+            return stats;
+        }
+        return new HeapAnalyzer(this).GetStatistics();
+    }
 
     /// <summary>
     /// Opens a dump file and attaches to the first CLR runtime it contains.
@@ -88,6 +108,7 @@ public sealed class DumpSession : IDisposable
 
     public void Dispose()
     {
+        _heapGraph?.Dispose();
         Runtime.Dispose();
         DataTarget.Dispose();
     }

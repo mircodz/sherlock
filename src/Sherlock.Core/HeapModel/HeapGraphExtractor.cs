@@ -26,6 +26,10 @@ public sealed class HeapGraphExtractor(DumpSession session)
 {
     private const int MaxWorkers = 16;
 
+    // Edges per on-disk/in-memory chunk. 1<<27 ints = 512 MB — comfortably under the int.MaxValue
+    // element / ~2 GB byte cap on a single array and slab section, so a chunk always fits both.
+    private const long MaxEdgesPerChunk = 1L << 27;
+
     public HeapGraph Extract(CancellationToken cancellationToken = default)
     {
         ClrHeap heap = session.Runtime.Heap;
@@ -48,6 +52,8 @@ public sealed class HeapGraphExtractor(DumpSession session)
         var addressList = new List<ulong>();
         var sizeList = new List<uint>();
         var typeList = new List<int>();
+        ulong freeBytes = 0;
+        long freeCount = 0;
         foreach (ClrSegment seg in segments)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -77,17 +83,25 @@ public sealed class HeapGraphExtractor(DumpSession session)
                     if (t.IsString) count++;
                     size = (ulong)count * (ulong)t.ComponentSize + (ulong)t.BaseSize;
                 }
-                size = Align(size);
                 if (size < minObjSize) size = minObjSize;
+
+                // The object's *reported* size (matches ClrMD's GetObjectSize: clamped, NOT aligned).
+                // Alignment is applied only to advance the walk to the next object, not stored as size.
+                ulong reportedSize = size;
 
                 if (!t.IsFree)
                 {
                     addressList.Add(obj);
-                    sizeList.Add((uint)Math.Min(size, uint.MaxValue));
+                    sizeList.Add((uint)Math.Min(reportedSize, uint.MaxValue));
                     typeList.Add(typeIndex);
                 }
+                else
+                {
+                    freeBytes += reportedSize; // free-space total (fragmentation), not a real object
+                    freeCount++;
+                }
 
-                obj += size;
+                obj += Align(size);
                 if (skipContexts)
                 {
                     while (allocContexts.TryGetValue(obj, out ulong end))
@@ -159,12 +173,11 @@ public sealed class HeapGraphExtractor(DumpSession session)
         long objectEdges = 0;
         foreach (int[] e in blockEdges) objectEdges += e.Length;
 
-        var offsets = new int[n + 2];
-        var allEdges = new int[objectEdges + roots.Count];
-        int node = 0, edge = 0;
+        var offsets = new long[n + 2];
+        long edge = 0;
+        int node = 0;
         for (int w = 0; w < workers; w++)
         {
-            Array.Copy(blockEdges[w], 0, allEdges, edge, blockEdges[w].Length);
             foreach (int degree in blockDegrees[w])
             {
                 offsets[node++] = edge;
@@ -172,16 +185,21 @@ public sealed class HeapGraphExtractor(DumpSession session)
             }
         }
         offsets[n] = edge; // synthetic root's edges start here
-        roots.CopyTo(allEdges, edge);
-        edge += roots.Count;
-        offsets[n + 1] = edge;
+        offsets[n + 1] = edge + roots.Count;
 
-        return new HeapGraph(addresses, sizes, offsets, allEdges);
+        // The edge column, node-aligned into ≤~1 GB chunks so it can exceed the 2.1B single-array ceiling.
+        // Segments are the per-worker edge blocks in id order, then the synthetic root's GC-root edges.
+        var edgeSegments = new List<ReadOnlyMemory<int>>(workers + 1);
+        foreach (int[] e in blockEdges) edgeSegments.Add(e);
+        edgeSegments.Add(roots.ToArray());
+        var edges = EdgeColumn.Build(edgeSegments, offsets, MaxEdgesPerChunk);
+
+        return new HeapGraph(addresses, sizes, offsets, edges, (ReadOnlyMemory<int>)typeOf, types.Names(), freeBytes, freeCount);
     }
 
-    /// <summary>Cached per-type layout keyed by method table: the size formula inputs plus the GC
-    /// descriptor used to find reference fields. Resolved from ClrMD once per distinct type.</summary>
-    private readonly struct TypeInfo(int baseSize, int componentSize, bool isString, bool isFree, GCDesc gcDesc, bool hasPointers)
+    /// <summary>Cached per-type layout keyed by method table: the size formula inputs, the type name,
+    /// and the GC descriptor used to find reference fields. Resolved from ClrMD once per distinct type.</summary>
+    private readonly struct TypeInfo(int baseSize, int componentSize, bool isString, bool isFree, GCDesc gcDesc, bool hasPointers, string name)
     {
         public readonly int BaseSize = baseSize;
         public readonly int ComponentSize = componentSize;
@@ -189,6 +207,7 @@ public sealed class HeapGraphExtractor(DumpSession session)
         public readonly bool IsFree = isFree;
         public readonly GCDesc GCDesc = gcDesc;
         public readonly bool HasPointers = hasPointers;
+        public readonly string Name = name;
     }
 
     private sealed class TypeTable(ClrHeap heap)
@@ -197,6 +216,14 @@ public sealed class HeapGraphExtractor(DumpSession session)
         private readonly List<TypeInfo> _types = new();
 
         public ref readonly TypeInfo this[int index] => ref System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_types)[index];
+
+        /// <summary>The distinct type names, indexed the same as the per-object type ids (<see cref="IndexOf"/>).</summary>
+        public string[] Names()
+        {
+            var names = new string[_types.Count];
+            for (int i = 0; i < _types.Count; i++) names[i] = _types[i].Name;
+            return names;
+        }
 
         public int IndexOf(ulong methodTable)
         {
@@ -209,13 +236,13 @@ public sealed class HeapGraphExtractor(DumpSession session)
             ClrType? type = heap.GetTypeByMethodTable(methodTable);
             if (type is null)
             {
-                _types.Add(new TypeInfo(0, 0, false, true, default, false));
+                _types.Add(new TypeInfo(0, 0, false, true, default, false, "<unknown>"));
             }
             else
             {
                 bool hasPointers = type.ContainsPointers && !type.GCDesc.IsEmpty;
                 _types.Add(new TypeInfo(type.StaticSize, type.ComponentSize, type.IsString, type.IsFree,
-                    hasPointers ? type.GCDesc : default, hasPointers));
+                    hasPointers ? type.GCDesc : default, hasPointers, type.Name ?? "<unknown>"));
             }
             _indexOfMt[methodTable] = i;
             return i;

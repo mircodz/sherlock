@@ -35,7 +35,7 @@
     <ProjectReference Include="..\Sherlock.Core\Sherlock.Core.csproj" />
     <ProjectReference Include="..\Sherlock.Mcp\Sherlock.Mcp.csproj" />
     <!-- The live run dashboard is a Tessera TUI hosted in-process. -->
-    <ProjectReference Include="..\..\..\tessera\src\Tessera\Tessera.csproj" />
+    <ProjectReference Include="..\..\..\Tessera\src\Tessera\Tessera.csproj" />
   </ItemGroup>
 
   <ItemGroup>

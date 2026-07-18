@@ -44,7 +44,7 @@ public sealed class HeapDoctor(DumpSession session)
     /// <summary>The single biggest retained graph - where memory concentrates and a leak hides.</summary>
     private void Retention(List<Finding> findings, CancellationToken cancellation)
     {
-        DominatorTree tree = session.GetDominatorTree(cancellation);
+        DominatorTree tree = session.GetDominatorTreeV2(cancellation);
         ulong total = tree.TotalReachableBytes;
         if (total == 0 || tree.TopDominators(1).FirstOrDefault() is not { } node)
         {

@@ -73,18 +73,21 @@ public:
     [[nodiscard]] std::size_t allocationCount() const { return allocs_.size(); }
     [[nodiscard]] std::size_t objectCount() const { return corr_.size(); }
 
-    void writeTo(ContainerWriter& w) const {
+    // Non-const: sorts corr_ in place (terminal operation). Avoids copying the (potentially
+    // multi-GB) correlation column just to sort it. `chunkBytes` bounds each Correlation chunk section
+    // (default 256 MiB; tests pass a tiny value to force the multi-chunk path).
+    void writeTo(ContainerWriter& w, std::size_t chunkBytes = kDefaultChunkBytes) {
         interner_.writeTo(w);
         if (!allocs_.empty()) {
             w.addRecords<AllocationRecord>(SectionType::Allocations, kProfileVersion, allocs_);
         }
         if (!corr_.empty()) {
             // Sort by address so the reader can binary-search; a Correlation section is emitted only
-            // when there's provenance (the exit-time aggregate has none). (Parallel-sort at scale.)
-            std::vector<CorrelationRecord> sorted(corr_);
-            std::sort(sorted.begin(), sorted.end(),
+            // when there's provenance (the exit-time aggregate has none). Chunked: one 16-byte record
+            // per live object overflows a single section past ~134M objects.
+            std::sort(corr_.begin(), corr_.end(),
                       [](const CorrelationRecord& a, const CorrelationRecord& b) { return a.address < b.address; });
-            w.addRecords<CorrelationRecord>(SectionType::Correlation, kProfileVersion, sorted);
+            w.addChunkedRecords<CorrelationRecord>(SectionType::Correlation, kProfileVersion, corr_, chunkBytes);
         }
     }
 
@@ -103,8 +106,12 @@ public:
         if (auto a = c.find(SectionType::Allocations)) {
             allocs_ = a->records<AllocationRecord>();
         }
-        if (auto co = c.find(SectionType::Correlation)) {
-            corr_ = co->records<CorrelationRecord>();
+        // Correlation may be split across chunk sections (addChunkedRecords). Concatenate them in
+        // table order — the writer emits chunks in ascending global order, so the result stays
+        // address-sorted. (C++ reader is test-only; the C# reader maps the chunks in place.)
+        for (const SectionView& s : c.findAll(SectionType::Correlation)) {
+            std::span<const CorrelationRecord> chunk = s.records<CorrelationRecord>();
+            corr_.insert(corr_.end(), chunk.begin(), chunk.end());
         }
     }
 
@@ -126,7 +133,7 @@ public:
 private:
     StackTable stacks_;
     std::span<const AllocationRecord> allocs_;
-    std::span<const CorrelationRecord> corr_;
+    std::vector<CorrelationRecord> corr_;
 };
 
 } // namespace Sherlock::storage

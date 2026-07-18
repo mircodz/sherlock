@@ -14,11 +14,6 @@ BOOL STDMETHODCALLTYPE DllMain(HMODULE, DWORD, LPVOID)
     return TRUE;
 }
 
-void PrintGuid(REFGUID guid)
-{
-    printf("{%8.8u-%4.4u-%4.4u-%2.2u%2.2u-%2.2u%2.2u%2.2u%2.2u%2.2u%2.2u}", guid.Data1, guid.Data2, guid.Data3, guid.Data4[0], guid.Data4[1], guid.Data4[2], guid.Data4[3], guid.Data4[4], guid.Data4[5], guid.Data4[6], guid.Data4[7]);
-}
-
 extern "C" SHERLOCK_EXPORT HRESULT STDMETHODCALLTYPE DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID* ppv)
 {
     // {cf0d821e-299b-5307-a3d8-b283c03916dd}

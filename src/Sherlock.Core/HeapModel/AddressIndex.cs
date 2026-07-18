@@ -10,30 +10,31 @@ namespace Sherlock.Core.HeapModel;
 /// </summary>
 public sealed class AddressIndex
 {
-    private readonly ulong[] _addresses;
+    private readonly ReadOnlyMemory<ulong> _addresses;
     private readonly int[] _bucketStart;
     private readonly ulong _min;
     private readonly int _shift;
 
-    public AddressIndex(ulong[] sortedAddresses)
+    public AddressIndex(ReadOnlyMemory<ulong> sortedAddresses)
     {
         _addresses = sortedAddresses;
-        int n = sortedAddresses.Length;
+        ReadOnlySpan<ulong> a = sortedAddresses.Span;
+        int n = a.Length;
         if (n == 0)
         {
             _bucketStart = [0, 0];
             return;
         }
 
-        _min = sortedAddresses[0];
-        ulong span = sortedAddresses[^1] - _min;
+        _min = a[0];
+        ulong span = a[^1] - _min;
         while ((span >> _shift) > (ulong)n && _shift < 63) _shift++;
         int buckets = (int)((span >> _shift) + 2);
         _bucketStart = new int[buckets + 1];
         int bi = 0;
         for (int i = 0; i < n; i++)
         {
-            int b = (int)((sortedAddresses[i] - _min) >> _shift);
+            int b = (int)((a[i] - _min) >> _shift);
             while (bi <= b) _bucketStart[bi++] = i;
         }
         while (bi <= buckets) _bucketStart[bi++] = n;
@@ -42,8 +43,9 @@ public sealed class AddressIndex
     /// <summary>The dense id of <paramref name="address"/>, or -1 if absent.</summary>
     public int IndexOf(ulong address)
     {
-        int n = _addresses.Length;
-        if (n == 0 || address < _addresses[0] || address > _addresses[n - 1])
+        ReadOnlySpan<ulong> addresses = _addresses.Span;
+        int n = addresses.Length;
+        if (n == 0 || address < addresses[0] || address > addresses[n - 1])
         {
             return -1;
         }
@@ -53,7 +55,7 @@ public sealed class AddressIndex
         while (lo < hi)
         {
             int mid = (int)(((uint)lo + (uint)hi) >> 1);
-            ulong v = _addresses[mid];
+            ulong v = addresses[mid];
             if (v == address) return mid;
             if (v < address) lo = mid + 1; else hi = mid;
         }
