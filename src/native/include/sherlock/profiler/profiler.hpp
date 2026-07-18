@@ -11,6 +11,7 @@
 #include "sherlock/control/channel.hpp"
 #include "sherlock/profiler/aggregator.hpp"
 #include "sherlock/profiler/probe.hpp"
+#include "sherlock/profiler/shadowstack.hpp"
 #include "sherlock/profiler/trace.hpp"
 #include "sherlock/profiler/triggers.hpp"
 
@@ -151,6 +152,11 @@ private:
 
     bool correlate = false;           // SHERLOCK_CORRELATE: track live objects for snapshot join
     std::string correlationPath;
+
+    // SHERLOCK_SHADOW_STACK: maintain a per-thread shadow stack via IL instrumentation and
+    // read it in ObjectAllocated instead of calling DoStackSnapshot (O(1) vs O(depth)).
+    bool shadowStack = false;
+    std::unique_ptr<ShadowStackInstrumenter> shadowInstr;
 
     // sl <-> profiler control channel (SHERLOCK_CONTROL_SOCKET). Handles on-demand
     // requests (emit-correlation, flush-allocations, arm-trigger) and pushes events.

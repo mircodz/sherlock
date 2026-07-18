@@ -94,6 +94,7 @@ set(SOURCES
     src/common/logger.cpp
     src/profiler/profiler.cpp
     src/profiler/aggregator.cpp
+    src/profiler/shadowstack.cpp
     src/profiler/trace.cpp
     src/profiler/probe.cpp
     src/profiler/triggers.cpp
