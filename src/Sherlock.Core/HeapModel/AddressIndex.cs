@@ -3,10 +3,9 @@ using System;
 namespace Sherlock.Core.HeapModel;
 
 /// <summary>
-/// Resolves an object address to its dense id over a sorted address array, in roughly O(1): a
-/// two-level index that buckets the address range, then does a tiny binary search inside a bucket.
-/// This replaces a plain ~log2(N) binary search, which dominates when resolving tens of millions of
-/// reference targets during graph extraction.
+/// Resolves an object address to its dense id over a sorted address array in roughly O(1): buckets the
+/// address range, then binary-searches inside a bucket. Replaces a plain log2(N) search, which dominates
+/// when resolving tens of millions of reference targets during extraction.
 /// </summary>
 public sealed class AddressIndex
 {

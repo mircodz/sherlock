@@ -7,10 +7,10 @@ namespace Sherlock.CLI.Export;
 
 /// <summary>
 /// A weighted directed graph rendered to Graphviz DOT, styled after Go's pprof: nodes are boxes with
-/// a light pastel fill and strong-coloured text, both shaded grey->red by their share of the whole;
+/// a light pastel fill and strong-coloured text, both shaded grey to red by their share of the whole;
 /// the font grows with a node's own (self) weight; edges are shaded and thickened by the flow along
-/// them. The colour ramp mirrors pprof's <c>dotColor</c>. Both the dominator tree and the allocation
-/// call graph build through this, so they read identically. Render with <c>dot -Tsvg g.dot -o g.svg</c>.
+/// them. Both the dominator tree and the allocation call graph build through this, so they read
+/// identically. Render with <c>dot -Tsvg g.dot -o g.svg</c>.
 /// </summary>
 public sealed class DotGraph(string name)
 {
@@ -20,11 +20,11 @@ public sealed class DotGraph(string name)
     private readonly record struct Node(string Id, double Heat, double Size, string[] Lines);
     private readonly record struct Edge(string From, string To, double Heat, string? Label);
 
-    /// <param name="heat">0..1 share of the whole -> colour (grey to red).</param>
-    /// <param name="size">0..1 relative self weight -> font size.</param>
+    /// <param name="heat">0..1 share of the whole, colour (grey to red).</param>
+    /// <param name="size">0..1 relative self weight, font size.</param>
     public void AddNode(string id, double heat, double size, params string[] lines) => _nodes.Add(new(id, heat, size, lines));
 
-    /// <param name="heat">0..1 share of the whole -> edge colour and thickness.</param>
+    /// <param name="heat">0..1 share of the whole, edge colour and thickness.</param>
     public void AddEdge(string from, string to, double heat, string? label = null) => _edges.Add(new(from, to, heat, label));
 
     public string Render()
@@ -58,8 +58,8 @@ public sealed class DotGraph(string name)
     }
 
     /// <summary>
-    /// pprof's heat colour: grey at 0, red as the share approaches 1. Foreground (text/border/edge) is
-    /// strong and dark; background (fill) is a light pastel of the same hue.
+    /// pprof's heat colour: grey at 0, red as the share approaches 1. Foreground (text/border/edge)
+    /// is strong and dark; background (fill) is a light pastel of the same hue.
     /// </summary>
     private static string Heat(double score, bool foreground)
     {

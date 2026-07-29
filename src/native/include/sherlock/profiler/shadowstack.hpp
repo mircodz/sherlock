@@ -15,20 +15,17 @@ class Logger;
 // ---------------------------------------------------------------------------
 // Thread-local shadow stack. Maintained by IL injected into every managed method
 // (push on entry, pop in a finally). ObjectAllocated reads the top instead of
-// calling DoStackSnapshot — O(1) per allocation vs O(stack depth).
-//
-// Exposed here so the profiler's ObjectAllocated can read it directly (no call
-// through a vtable on the hot path).
+// calling DoStackSnapshot (O(1) per allocation vs O(stack depth)). Exposed here so
+// ObjectAllocated can read it directly (no vtable call on the hot path).
 // ---------------------------------------------------------------------------
 namespace shadow {
 
 constexpr std::size_t kMaxShadow = 1024; // frames retained; deeper is counted but not stored
 
-// Per-thread shadow stack. The frame buffer is heap-allocated on first use and only a
-// POINTER is kept in thread_local storage — a large in-TLS array would blow the dlopen
-// static-TLS surplus and make the .so fail to load ("cannot allocate memory in static TLS
-// block"). (The whole library is built -ftls-model=initial-exec, so this pointer is read
-// via a direct thread-pointer offset on the hot push/pop path — see CMakeLists.txt.)
+// Per-thread shadow stack. The frame buffer is heap-allocated on first use and only a POINTER is kept
+// in thread_local storage: a large in-TLS array would blow the dlopen static-TLS surplus and fail to
+// load ("cannot allocate memory in static TLS block"). The library is built -ftls-model=initial-exec,
+// so this pointer is read via a direct thread-pointer offset on the hot push/pop path (see CMakeLists.txt).
 struct ThreadStack {
     FunctionID frames[kMaxShadow];
     std::uint32_t depth = 0; // may exceed kMaxShadow; readers clamp
@@ -48,19 +45,18 @@ inline const FunctionID* frames() {
 
 } // namespace shadow
 
-// The two trampolines the injected IL calls (unmanaged C calling convention, via
-// calli). Global — no client data — mirroring probe.cpp's Sherlock_ProbeEnter.
+// The two trampolines the injected IL calls (unmanaged C calling convention, via calli). Global,
+// no client data, mirroring probe.cpp's Sherlock_ProbeEnter.
 extern "C" void Sherlock_ShadowPush(std::int64_t funcId);
 extern "C" void Sherlock_ShadowPop();
 
 // ---------------------------------------------------------------------------
-// ShadowStackInstrumenter: rewrites a method's IL at JIT time to push its
-// FunctionID on entry and pop it in a finally that wraps the whole body.
+// ShadowStackInstrumenter: rewrites a method's IL at JIT time to push its FunctionID
+// on entry and pop it in a finally that wraps the whole body.
 //
-// Standalone (does NOT share code with ProbeManager — the IL plumbing was copied
-// so the two can evolve independently). Degrades safely: any method it can't
-// confidently rewrite is left with its original IL (returns without setting new
-// body), so we never hand the runtime invalid IL.
+// Standalone (does NOT share code with ProbeManager). Degrades safely: any method it
+// can't confidently rewrite is left with its original IL, so we never hand the runtime
+// invalid IL.
 // ---------------------------------------------------------------------------
 class ShadowStackInstrumenter {
 public:

@@ -5,18 +5,17 @@ using System.Threading;
 namespace Sherlock.Core.HeapModel;
 
 /// <summary>
-/// Supplies the <see cref="HeapGraph"/> for a dump, hiding the whole extract → persist → reload
-/// lifecycle behind one call. On first request it extracts the graph (raw, DAC-bypassing) and writes
-/// it to a <c>.slab</c> beside the dump; on later requests — including a fresh process opening the same
-/// snapshot — it loads that file and skips extraction entirely. Callers just ask for a graph and never
-/// see whether it was built or reloaded.
+/// Supplies the <see cref="HeapGraph"/> for a dump, hiding the extract → persist → reload lifecycle
+/// behind one call. First request extracts the graph (raw, DAC-bypassing) and writes it to a
+/// <c>.slab</c> beside the dump; later requests (including a fresh process opening the same snapshot)
+/// load that file and skip extraction.
 /// </summary>
 public sealed class HeapGraphProvider(DumpSession session) : IDisposable
 {
     private HeapGraph? _cached;
 
-    /// <summary>The dump's heap graph. Cached for the session; backed on disk by a sidecar so reopening
-    /// the snapshot is instant. Set <paramref name="persist"/> false to skip writing the sidecar.</summary>
+    /// <summary>The dump's heap graph. Cached for the session and backed on disk by a sidecar so
+    /// reopening is instant. Set <paramref name="persist"/> false to skip writing the sidecar.</summary>
     public HeapGraph Get(CancellationToken cancellationToken = default, bool persist = true)
     {
         if (_cached is not null)
@@ -41,9 +40,9 @@ public sealed class HeapGraphProvider(DumpSession session) : IDisposable
     /// <summary>The sidecar path for a dump: <c>&lt;dump&gt;.heapgraph.slab</c>, next to the dump.</summary>
     public static string SidecarPath(string dumpPath) => dumpPath + ".heapgraph.slab";
 
-    /// <summary>Returns the graph only if it is already available — cached in this session or loadable
-    /// from the sidecar — without triggering a (potentially slow) fresh extraction. Lets a cheap
-    /// analysis (e.g. histogram) ride an already-built graph but not pay for building one.</summary>
+    /// <summary>Returns the graph only if already available (cached this session or loadable from the
+    /// sidecar), without triggering a fresh extraction. Lets a cheap analysis (e.g. histogram) ride an
+    /// already-built graph without paying to build one.</summary>
     public HeapGraph? TryGetCachedOrOnDisk()
     {
         if (_cached is not null)
@@ -65,7 +64,7 @@ public sealed class HeapGraphProvider(DumpSession session) : IDisposable
         }
         catch
         {
-            return null; // corrupt / partial sidecar — fall back to rebuilding
+            return null; // corrupt / partial sidecar; rebuild
         }
     }
 

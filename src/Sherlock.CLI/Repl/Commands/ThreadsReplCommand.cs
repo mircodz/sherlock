@@ -6,10 +6,7 @@ using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
 
-/// <summary>
-/// Lists managed threads, or prints the managed call stack of one thread when
-/// given a managed thread id.
-/// </summary>
+/// <summary>Lists managed threads, or prints one thread's managed call stack given its id.</summary>
 public sealed class ThreadsReplCommand : IReplCommand
 {
     public string Name => "threads";

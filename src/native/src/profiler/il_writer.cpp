@@ -79,7 +79,7 @@ bool isSwitch(BYTE op) { return op == 0x45; }
 // Short single-byte branches 0x2B..0x37 and leave.s 0xDE; long 0x38..0x44 and leave 0xDD.
 bool isShortBranch(BYTE op) { return (op >= 0x2B && op <= 0x37) || op == 0xDE; }
 bool isLongBranch(BYTE op) { return (op >= 0x38 && op <= 0x44) || op == 0xDD; }
-// Map a short branch opcode to its long equivalent (so all branches become 4-byte and we avoid iterative
+// Map a short branch opcode to its long equivalent (all branches become 4-byte, avoiding iterative
 // offset convergence).
 BYTE shortToLong(BYTE op) {
     if (op == 0xDE) return 0xDD;         // leave.s -> leave
@@ -120,7 +120,7 @@ bool parseMethodHeader(const BYTE* p, MethodHeader& h) {
         h.code = p + hdrDwords * 4;
         return true;
     }
-    return false; // unknown format — don't touch it
+    return false; // unknown format, don't touch it
 }
 
 bool decodeBody(const BYTE* code, std::uint32_t codeSize, std::vector<Insn>& insns, bool& unsafeToWrap) {

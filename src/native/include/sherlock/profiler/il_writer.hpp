@@ -2,10 +2,9 @@
 
 // Shared IL-emit / IL-parse primitives used by both the trigger probe (probe.cpp) and the shadow-stack
 // instrumenter (shadowstack.cpp). Both rewrite method bodies via ReJIT; the little-endian byte plumbing,
-// the EH-clause representation, and the method's exception-section scanner are identical between them.
-// The two differ only in HOW they transform the body (probe splices a prologue and shifts EH offsets by a
-// constant; shadow wraps the whole body in try/finally and remaps every offset), so that transform stays
-// in each caller — only the shared substrate lives here.
+// the EH-clause representation, and the exception-section scanner are identical. They differ only in HOW
+// they transform the body (probe splices a prologue and shifts EH offsets by a constant; shadow wraps the
+// whole body in try/finally and remaps every offset), so that transform stays in each caller.
 
 #include <cstdint>
 #include <vector>
@@ -32,8 +31,8 @@ inline std::uint32_t rd32(const BYTE* p) {
     return p[0] | (p[1] << 8) | (p[2] << 16) | (static_cast<std::uint32_t>(p[3]) << 24);
 }
 
-// A normalized exception-handling clause. Offsets are absolute into the method's code, exactly as read
-// from the metadata section — callers relocate them into their rewritten body.
+// A normalized exception-handling clause. Offsets are absolute into the method's code, as read from
+// the metadata section; callers relocate them into their rewritten body.
 struct EHClause {
     std::uint32_t flags;
     std::uint32_t tryOffset;
@@ -46,11 +45,10 @@ struct EHClause {
 constexpr std::uint32_t kClauseFilter = 0x0001;  // COR_ILEXCEPTION_CLAUSE_FILTER
 constexpr std::uint32_t kClauseFinally = 0x0002; // COR_ILEXCEPTION_CLAUSE_FINALLY
 
-// A growable IL byte stream with named emitters for the handful of opcodes the two instrumenters splice
-// in. This keeps the injected prologue/finally readable as the IL it is (`s.ldc_i8(fn); s.calli(sig)`)
-// instead of scattered magic bytes, and centralizes the opcode constants. It is a thin wrapper over a
-// byte vector — `bytes()` exposes the buffer for the parts still emitted by hand (raw instruction copies,
-// branch fixups computed against absolute offsets).
+// A growable IL byte stream with named emitters for the opcodes the two instrumenters splice in. Keeps
+// the injected prologue/finally readable as IL (`s.ldc_i8(fn); s.calli(sig)`) and centralizes the opcode
+// constants. A thin wrapper over a byte vector; `bytes()` exposes the buffer for the parts still emitted
+// by hand (raw instruction copies, branch fixups computed against absolute offsets).
 class ILStream {
 public:
     std::vector<BYTE>& bytes() { return b_; }
@@ -81,10 +79,10 @@ private:
     std::vector<BYTE> b_;
 };
 
-// Parse the method's exception-handling section(s) into `out`, appending one EHClause per clause with its
-// original (absolute) offsets. `header` is the method body start, `code`/`codeSize` locate the IL; `moreSects`
-// is the fat header's MoreSects flag (no sections when false). Stops at the first non-EH section kind, which
-// keeps an unrecognized section from being misread. Both fat and thin (small) clause formats are handled.
+// Parse the method's exception-handling section(s) into `out`, one EHClause per clause with its
+// original (absolute) offsets. `header` is the method body start, `code`/`codeSize` locate the IL;
+// `moreSects` is the fat header's MoreSects flag (no sections when false). Stops at the first non-EH
+// section kind. Both fat and thin (small) clause formats are handled.
 inline void parseEHClauses(const BYTE* header, const BYTE* code, std::uint32_t codeSize,
                            bool moreSects, std::vector<EHClause>& out) {
     if (!moreSects)
@@ -100,7 +98,7 @@ inline void parseEHClauses(const BYTE* header, const BYTE* code, std::uint32_t c
         bool fatSect = (kind & CorILMethod_Sect_FatFormat) != 0;
         more = (kind & CorILMethod_Sect_MoreSects) != 0;
         if ((kind & CorILMethod_Sect_KindMask) != CorILMethod_Sect_EHTable)
-            break; // unknown section kind — stop (keeps us safe)
+            break; // unknown section kind, stop
 
         std::size_t sectLen;
         if (fatSect) {

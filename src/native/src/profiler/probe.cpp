@@ -15,8 +15,8 @@ namespace {
 // trampoline with no client data, so it reaches the manager through this.
 ProbeManager* g_probes = nullptr;
 
-// Narrow ASCII std::string -> null-terminated WCHAR buffer (metadata names are
-// effectively ASCII; this sidesteps the L"" wchar_t-width mismatch on the PAL).
+// Narrow ASCII std::string -> null-terminated WCHAR buffer (metadata names are ASCII; this
+// sidesteps the L"" wchar_t-width mismatch on the PAL).
 std::vector<WCHAR> widen(const std::string& s) {
     std::vector<WCHAR> w;
     w.reserve(s.size() + 1);
@@ -165,7 +165,7 @@ HRESULT ProbeManager::getReJITParameters(ModuleID moduleId, mdMethodDef methodId
 
     mdSignature sigTok = ensureProbeSig(moduleId);
     if (sigTok == mdSignatureNil)
-        return S_OK; // couldn't mint the calli signature — fall back to original
+        return S_OK; // couldn't mint the calli signature; fall back to original
 
     LPCBYTE header = nullptr;
     ULONG headerSize = 0;
@@ -196,7 +196,7 @@ HRESULT ProbeManager::getReJITParameters(ModuleID moduleId, mdMethodDef methodId
         localSig = il::rd32(p + 8);
         code = p + hdrDwords * 4;
     } else {
-        return S_OK; // unknown format — don't touch it
+        return S_OK; // unknown format, don't touch it
     }
 
     // The prologue we splice in: ldc.i4 <probeId>; ldc.i8 <&trampoline>; conv.i; calli <sig>.
@@ -258,7 +258,7 @@ bool ProbeManager::isArmed(ModuleID moduleId, mdMethodDef token) const {
 }
 
 void ProbeManager::onProbeHit(std::int32_t probeId) {
-    // Pure trigger: fire sl once, the first time this probe is hit. No recording - all
+    // Pure trigger: fire sl once, the first time this probe is hit. Records nothing; all
     // provenance comes from the heap snapshot sl takes in response.
     if (probeId >= 0 && static_cast<std::size_t>(probeId) < armed_.size() &&
         onHit_ && !fired_[probeId].exchange(true)) {

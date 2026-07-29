@@ -8,8 +8,7 @@ using Sherlock.Core.Store;
 namespace Sherlock.Mcp;
 
 /// <summary>
-/// Wire shapes for tool results. Kept small and LLM-friendly: addresses are hex strings, sizes are
-/// raw byte counts (the model can format), and lists are always top-N so one call can't flood context.
+/// Wire shapes for tool results: hex-string addresses, raw byte counts, always top-N so one call can't flood context.
 /// </summary>
 public static class Dto
 {
@@ -92,7 +91,7 @@ public static class Dto
     {
         address = Hex(target),
         tracked = stack is not null,
-        // Root frame first; the allocating method is last.
+        // Root frame first; allocating method last.
         allocationStack = stack?.Split(';') ?? [],
     };
 

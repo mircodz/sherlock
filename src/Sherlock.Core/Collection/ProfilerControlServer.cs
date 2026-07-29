@@ -12,9 +12,9 @@ namespace Sherlock.Core.Collection;
 
 /// <summary>
 /// The sl side of the control channel: a Unix-domain-socket server the in-process profilers connect
-/// back to. A whole supervised subtree shares one socket, so it's multi-client - each connection
-/// identifies itself by pid in its HELLO and requests route to a specific process. Handles the HELLO
-/// handshake, request/response, and unsolicited events (probe hits, tagged with the firing pid).
+/// back to. A whole supervised subtree shares one socket, so it's multi-client, each connection
+/// identifies itself by pid in its HELLO. Handles the HELLO handshake, request/response, and
+/// unsolicited events (probe hits, tagged with the firing pid).
 /// </summary>
 public sealed class ProfilerControlServer : IDisposable
 {
@@ -60,7 +60,7 @@ public sealed class ProfilerControlServer : IDisposable
 
         _listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         _listener.Bind(new UnixDomainSocketEndPoint(path));
-        _listener.Listen(backlog: 16); // a process subtree can bring several profilers at once
+        _listener.Listen(backlog: 16); // a subtree can bring several profilers at once
         _ = Task.Run(AcceptLoopAsync);
     }
 

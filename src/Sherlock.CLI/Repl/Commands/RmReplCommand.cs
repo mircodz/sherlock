@@ -15,7 +15,7 @@ public sealed class RmReplCommand : IReplCommand
         Args.Require(args, 1, Usage);
         string id = args[0];
 
-        // If we're deleting the loaded snapshot (or the session that owns it), unload first.
+        // Deleting the loaded snapshot (or its owning session): unload first.
         if (context.Workspace.CurrentEntry?.Id == id || context.Workspace.CurrentSession?.Id == id)
         {
             context.Workspace.Unload();

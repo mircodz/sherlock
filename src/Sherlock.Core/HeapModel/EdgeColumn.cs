@@ -10,13 +10,12 @@ namespace Sherlock.Core.HeapModel;
 /// The heap graph's outbound-edge column, stored as one or more <c>int</c> chunks so it can exceed the
 /// ~2.1&nbsp;billion-element ceiling of a single CLR array / <see cref="ReadOnlyMemory{T}"/>. A 30&nbsp;GB
 /// dump can carry 1-3&nbsp;billion references; splitting them across node-aligned chunks (each cut only
-/// at an object boundary) lets any single node's successor run stay inside one chunk, so
-/// <see cref="Slice"/> still returns a contiguous <see cref="ReadOnlySpan{Int32}"/>.
+/// at an object boundary) keeps any single node's successor run inside one chunk, so <see cref="Slice"/>
+/// still returns a contiguous <see cref="ReadOnlySpan{Int32}"/>.
 ///
 /// Positions are global <c>long</c> edge indices; <see cref="_chunkStartEdge"/> maps a chunk to its
-/// first global index (ascending, with a terminating total at the end), so locating the chunk for a
-/// position is a tiny binary search. For an in-memory graph (freshly extracted, or a small slab) there
-/// is a single chunk and the search degenerates to a bounds check.
+/// first global index (ascending, with a terminating total), so locating a position's chunk is a tiny
+/// binary search. An in-memory graph has a single chunk and the search degenerates to a bounds check.
 /// </summary>
 public sealed class EdgeColumn
 {
@@ -29,7 +28,7 @@ public sealed class EdgeColumn
     /// <summary>Number of physical chunks (1 for an in-memory graph).</summary>
     public int ChunkCount => _chunks.Length;
 
-    /// <summary>Materializes the whole column as one array. Only for small columns (tests, tooling) — a
+    /// <summary>Materializes the whole column as one array. Only for small columns (tests, tooling): a
     /// real graph's edges may exceed <see cref="int.MaxValue"/> and must be consumed via <see cref="Slice"/>.</summary>
     public int[] ToArray()
     {
@@ -43,7 +42,7 @@ public sealed class EdgeColumn
     public ReadOnlyMemory<int> Chunk(int i) => _chunks[i];
 
     /// <summary>The chunk-start table (first global edge index of each chunk, length <see cref="ChunkCount"/>
-    /// + 1 with the total last) — persisted so a reload rebuilds the column without re-deriving it.</summary>
+    /// + 1 with the total last), persisted so a reload rebuilds the column without re-deriving it.</summary>
     public long[] ChunkStarts => _chunkStartEdge;
 
     /// <summary>Each chunk reinterpreted as raw little-endian bytes, for the container writer (which
@@ -70,7 +69,7 @@ public sealed class EdgeColumn
     /// <summary>A multi-chunk column: <paramref name="chunks"/> concatenated logically, with
     /// <paramref name="chunkStartEdge"/> giving each chunk's first global edge index (length chunks+1,
     /// last entry the total). Every chunk boundary must fall on a node boundary so no successor run is
-    /// split — the writer guarantees this.</summary>
+    /// split; the writer guarantees this.</summary>
     public EdgeColumn(ReadOnlyMemory<int>[] chunks, long[] chunkStartEdge)
     {
         if (chunkStartEdge.Length != chunks.Length + 1)
@@ -97,18 +96,17 @@ public sealed class EdgeColumn
 
     /// <summary>Assembles a node-aligned chunked column from ordered edge segments (the extractor's
     /// per-worker blocks, then the synthetic root's edges). <paramref name="offsets"/> is the CSR row
-    /// table (length nodeCount + 1 == objectCount + 2); chunk boundaries are placed only at node
-    /// boundaries so no successor run is split, and a new chunk is started whenever adding the next node's
-    /// edges would push the current chunk past <paramref name="maxEdgesPerChunk"/>. A single node's
-    /// degree may itself exceed the budget — then that node gets its own (over-budget-but-under-2.1B)
-    /// chunk, which the caller's chunk budget must stay comfortably below <see cref="int.MaxValue"/> to
-    /// allow.</summary>
+    /// table (length nodeCount + 1 == objectCount + 2); chunk boundaries fall only at node boundaries so
+    /// no successor run is split, and a new chunk starts whenever adding the next node's edges would push
+    /// the current chunk past <paramref name="maxEdgesPerChunk"/>. A single node's degree may itself
+    /// exceed the budget, then that node gets its own (over-budget-but-under-2.1B) chunk, which the
+    /// caller's budget must stay comfortably below <see cref="int.MaxValue"/> to allow.</summary>
     public static EdgeColumn Build(IReadOnlyList<ReadOnlyMemory<int>> segments, ReadOnlyMemory<long> offsets, long maxEdgesPerChunk)
     {
         long total = offsets.Span[^1];
         if (total <= maxEdgesPerChunk)
         {
-            // Fits one chunk: concatenate (total < 2.1B by the budget) — the common path.
+            // Fits one chunk: concatenate (total < 2.1B by the budget). The common path.
             var single = new int[total];
             int p = 0;
             foreach (ReadOnlyMemory<int> seg in segments) { seg.Span.CopyTo(single.AsSpan(p)); p += seg.Length; }
@@ -181,8 +179,8 @@ public sealed class EdgeColumn
     }
 
     /// <summary>Feeds ~<paramref name="approxPoints"/> strided edge values to <paramref name="mix"/>,
-    /// spread across all chunks — a cheap structural sample for the graph's content hash (a full pass
-    /// over billions of edges would defeat the purpose).</summary>
+    /// spread across all chunks, a cheap structural sample for the graph's content hash (a full pass over
+    /// billions of edges would defeat the purpose).</summary>
     public void Sample(int approxPoints, Action<int> mix)
     {
         long total = Count;
@@ -199,7 +197,7 @@ public sealed class EdgeColumn
     }
 }
 
-/// <summary>Reinterprets a <c>ReadOnlyMemory&lt;int&gt;</c> as raw little-endian bytes, zero-copy — the
+/// <summary>Reinterprets a <c>ReadOnlyMemory&lt;int&gt;</c> as raw little-endian bytes, zero-copy: the
 /// inverse of <see cref="Storage.Section.AsMemory{T}"/>, used to hand an edge chunk to the container
 /// writer without copying. The source ints own the storage; this only re-types the view.</summary>
 internal sealed unsafe class IntByteMemory(ReadOnlyMemory<int> ints) : MemoryManager<byte>

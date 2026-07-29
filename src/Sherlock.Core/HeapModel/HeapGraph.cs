@@ -6,14 +6,14 @@ namespace Sherlock.Core.HeapModel;
 
 /// <summary>
 /// The managed heap as a compact, DAC-free object graph: dense object ids (0..N-1), a sorted address
-/// column, shallow sizes, and the outbound reference edges in CSR form (a row-offset array plus a flat
-/// edge array). A synthetic <see cref="Root"/> node (id N) points at every GC root, so root membership
-/// needs no separate structure and reachability is "reachable from Root".
+/// column, shallow sizes, and outbound reference edges in CSR form (a row-offset array plus a flat edge
+/// array). A synthetic <see cref="Root"/> node (id N) points at every GC root, so root membership needs
+/// no separate structure and reachability is "reachable from Root".
 ///
-/// This is the intermediate representation the V2 analysis stack computes over. It is deliberately
-/// source-agnostic: <see cref="HeapGraphExtractor"/> builds it from a dump, and <see cref="HeapGraphStore"/>
-/// round-trips it to a <c>.slab</c> — so once built it can be reloaded (memory-mapped) without touching
-/// ClrMD again. Everything downstream (dominators, retained sizes, gcroot) is then pure int-array math.
+/// The intermediate representation the V2 analysis stack computes over. Source-agnostic:
+/// <see cref="HeapGraphExtractor"/> builds it from a dump, and <see cref="HeapGraphStore"/> round-trips
+/// it to a <c>.slab</c>, so once built it reloads (memory-mapped) without touching ClrMD again.
+/// Everything downstream (dominators, retained sizes, gcroot) is pure int-array math.
 /// </summary>
 public sealed class HeapGraph : IDisposable
 {
@@ -28,12 +28,12 @@ public sealed class HeapGraph : IDisposable
     /// edges <c>[Offsets[i], Offsets[i+1])</c>, and the synthetic root is node <see cref="Root"/>.</summary>
     public ReadOnlyMemory<long> Offsets { get; }
 
-    /// <summary>CSR successor ids, sliced by <see cref="Offsets"/> — chunked so it can exceed the ~2.1B
+    /// <summary>CSR successor ids, sliced by <see cref="Offsets"/>, chunked so it can exceed the ~2.1B
     /// single-array ceiling (see <see cref="EdgeColumn"/>).</summary>
     public EdgeColumn Edges { get; }
 
     /// <summary>Per-object type index into <see cref="TypeNames"/>, or null if the graph carries no type
-    /// column (an older slab, or one built without types) — callers then fall back to ClrMD.</summary>
+    /// column (an older slab, or one built without types); callers then fall back to ClrMD.</summary>
     public ReadOnlyMemory<int>? TypeIds { get; }
 
     /// <summary>The distinct type names, indexed by <see cref="TypeIds"/>. Null iff <see cref="TypeIds"/>
@@ -46,14 +46,14 @@ public sealed class HeapGraph : IDisposable
 
     /// <summary>Total free-space bytes on the heap (fragmentation). Free objects aren't real objects so
     /// they're excluded from the graph, but their total is kept so the histogram can report a "Free" row
-    /// exactly like a ClrMD walk (the doctor's fragmentation check relies on it).</summary>
+    /// like a ClrMD walk (the doctor's fragmentation check relies on it).</summary>
     public ulong FreeBytes { get; }
 
     /// <summary>Number of free-space blocks (the count for the synthetic "Free" histogram row).</summary>
     public long FreeCount { get; }
 
     // When the columns are zero-copy views into a memory-mapped slab, this is the mapping that owns those
-    // bytes; the graph keeps it alive and disposes it. Null for an in-memory graph (freshly extracted).
+    // bytes; the graph keeps it alive and disposes it. Null for a freshly extracted in-memory graph.
     private readonly IDisposable? _backing;
 
     private AddressIndex? _index; // lazy address→id acceleration
@@ -87,7 +87,7 @@ public sealed class HeapGraph : IDisposable
 
     /// <summary>Array-friendly overload for an in-memory graph (fresh extract, hand-built test graphs):
     /// widens the <c>int</c> offsets to <c>long</c> and wraps the flat edge array in a single-chunk
-    /// <see cref="EdgeColumn"/>. Under the ceiling by construction — a graph large enough to overflow is
+    /// <see cref="EdgeColumn"/>. Under the ceiling by construction; a graph large enough to overflow is
     /// built via the chunked path.</summary>
     public HeapGraph(ReadOnlyMemory<ulong> addresses, ReadOnlyMemory<uint> sizes, int[] offsets, int[] edges,
         ReadOnlyMemory<int>? typeIds = null, string[]? typeNames = null, ulong freeBytes = 0, long freeCount = 0)
@@ -132,14 +132,12 @@ public sealed class HeapGraph : IDisposable
     private ulong _contentHash;
     private bool _hashed;
 
-    /// <summary>A stable structural fingerprint of the graph, used only to detect "this is a different
-    /// graph" so a derived cache (the dominator tree) can be invalidated. NOT a cryptographic hash and
-    /// not a full-content hash — a full pass over 400M edges every reopen would defeat the point. It
-    /// mixes the object/edge counts, the address endpoints, and a strided sample of the address and edge
-    /// columns. Deterministic across processes (FNV-1a; never <see cref="System.HashCode"/>, which is
-    /// per-process randomized), so it can be persisted and compared on reopen. Collisions would only
-    /// matter if two genuinely different graphs of the same dump shared counts+endpoints+samples, which
-    /// the graph slab's own integrity already makes vanishingly unlikely. Computed once, lazily.</summary>
+    /// <summary>A stable structural fingerprint used only to detect "this is a different graph" so a
+    /// derived cache (the dominator tree) can be invalidated. NOT cryptographic and not a full-content
+    /// hash (a full pass over 400M edges every reopen would defeat the point): it mixes object/edge
+    /// counts, address endpoints, and a strided sample of the address and edge columns. Deterministic
+    /// across processes (FNV-1a, never <see cref="System.HashCode"/>, which is per-process randomized), so
+    /// it can be persisted and compared on reopen. Computed once, lazily.</summary>
     public ulong ContentHash
     {
         get
@@ -157,7 +155,7 @@ public sealed class HeapGraph : IDisposable
             Mix(FreeBytes);
             if (addr.Length > 0) { Mix(addr[0]); Mix(addr[^1]); }
 
-            // Strided samples (~4096 points each) — enough to catch any structural change cheaply.
+            // Strided samples (~4096 points each), enough to catch any structural change cheaply.
             SampleU64(addr, Mix);
             Edges.Sample(4096, v => Mix((ulong)(uint)v));
 
@@ -174,7 +172,7 @@ public sealed class HeapGraph : IDisposable
     }
 
     /// <summary>Per-type (count, total shallow bytes), or null if the graph carries no type column.
-    /// This is the histogram computed directly off the graph — no ClrMD heap walk.</summary>
+    /// Computed directly off the graph, no ClrMD heap walk.</summary>
     public (string TypeName, long Count, ulong TotalSize)[]? Histogram()
     {
         if (TypeIds is not { } idsMem || TypeNames is not { } names)

@@ -5,17 +5,13 @@ using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
 
-/// <summary>
-/// Lists the available commands, or prints usage detail for a single command
-/// with <c>help &lt;command&gt;</c>.
-/// </summary>
+/// <summary>Lists commands, or prints usage detail for one with <c>help &lt;command&gt;</c>.</summary>
 public sealed class HelpReplCommand : IReplCommand
 {
     private readonly Func<IEnumerable<IReplCommand>> _commands;
 
     /// <param name="commands">
-    /// Provider for the full command set. A delegate (rather than a list) so the
-    /// registry can include this command in the very set it describes.
+    /// Provider for the full command set. A delegate (not a list) so the registry can include this command in the set it describes.
     /// </param>
     public HelpReplCommand(Func<IEnumerable<IReplCommand>> commands) => _commands = commands;
 

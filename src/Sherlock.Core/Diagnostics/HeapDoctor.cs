@@ -7,9 +7,9 @@ using Sherlock.Core.Analysis;
 namespace Sherlock.Core.Diagnostics;
 
 /// <summary>
-/// Sweeps a snapshot through every inspector and reports the obvious problems - the engine behind
-/// the <c>doctor</c> command. Each inspector is independent and failure-isolated, and each finding
-/// carries the next command to run so you can drill in by hand.
+/// Sweeps a snapshot through every inspector and reports the obvious problems (the <c>doctor</c>
+/// command). Each inspector is independent and failure-isolated, and each finding carries the next
+/// command to run.
 /// </summary>
 public sealed class HeapDoctor(DumpSession session)
 {
@@ -41,10 +41,10 @@ public sealed class HeapDoctor(DumpSession session)
         }
     }
 
-    /// <summary>The single biggest retained graph - where memory concentrates and a leak hides.</summary>
+    /// <summary>The single biggest retained graph, where memory concentrates and a leak hides.</summary>
     private void Retention(List<Finding> findings, CancellationToken cancellation)
     {
-        DominatorTree tree = session.GetDominatorTreeV2(cancellation);
+        DominatorTree tree = session.GetDominatorTree(cancellation);
         ulong total = tree.TotalReachableBytes;
         if (total == 0 || tree.TopDominators(1).FirstOrDefault() is not { } node)
         {
@@ -61,7 +61,7 @@ public sealed class HeapDoctor(DumpSession session)
         findings.Add(new Finding(
             pct >= 50 ? FindingSeverity.High : FindingSeverity.Warning, "retention",
             $"{ShortType(node.TypeName)} {kind}retains {Bytes(node.RetainedSize)} ({pct:0}% of the reachable heap)",
-            "The biggest retained graph - where a leak concentrates. See what holds it and what it holds.")
+            "The biggest retained graph. See what holds it and what it holds.")
         {
             Address = node.Address,
             Type = node.TypeName,
@@ -70,7 +70,7 @@ public sealed class HeapDoctor(DumpSession session)
         });
     }
 
-    /// <summary>A delegate with a large invocation list - the classic event-handler leak.</summary>
+    /// <summary>A delegate with a large invocation list, the classic event-handler leak.</summary>
     private void EventHandlers(List<Finding> findings, CancellationToken cancellation)
     {
         if (new EventHandlerAnalyzer(session).Analyze(minSubscribers: 32, limit: 1, cancellation: cancellation).FirstOrDefault() is not { } worst)
@@ -92,7 +92,7 @@ public sealed class HeapDoctor(DumpSession session)
         });
     }
 
-    /// <summary>Objects still registered for finalization - a finalizer that wasn't suppressed (missed Dispose).</summary>
+    /// <summary>Objects still registered for finalization: a finalizer that wasn't suppressed (missed Dispose).</summary>
     private void Finalizers(List<Finding> findings, CancellationToken cancellation)
     {
         FinalizerReport report = new FinalizerAnalyzer(session).Analyze(cancellation);
@@ -154,7 +154,7 @@ public sealed class HeapDoctor(DumpSession session)
         });
     }
 
-    /// <summary>A user type with a very large instance count - a candidate for unbounded growth.</summary>
+    /// <summary>A user type with a very large instance count, a candidate for unbounded growth.</summary>
     private static void Growth(List<Finding> findings, IReadOnlyList<HeapTypeStat> histogram)
     {
         HeapTypeStat? suspect = histogram
@@ -168,8 +168,7 @@ public sealed class HeapDoctor(DumpSession session)
 
         findings.Add(new Finding(FindingSeverity.Info, "growth",
             $"{suspect.Count:N0} instances of {ShortType(suspect.TypeName)} ({Bytes(suspect.TotalSize)})",
-            "A large population - check for unbounded growth (a cache or list that never shrinks).")
-        {
+            "A large population - check for unbounded growth (a cache or list that never shrinks).")        {
             Type = suspect.TypeName,
             Bytes = (long)suspect.TotalSize,
             Count = suspect.Count,
@@ -187,7 +186,7 @@ public sealed class HeapDoctor(DumpSession session)
     private static string Bytes(ulong bytes) => ByteFormat.Human(bytes);
     private static string Bytes(long bytes) => ByteFormat.Human(bytes);
 
-    /// <summary>Strips the namespace (and generic argument noise) for a compact type name.</summary>
+    /// <summary>Strips the namespace and generic noise for a compact type name.</summary>
     private static string ShortType(string type)
     {
         int generic = type.IndexOf('<');

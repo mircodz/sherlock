@@ -9,32 +9,28 @@ using Sherlock.Core.Analysis;
 using Sherlock.Core.Diagnostics;
 using Sherlock.Core.Profiling;
 using Sherlock.Core.Store;
-using Tessera.Widgets.Charts;
-using Tessera.Layout;
-using Tessera.Primitives;
-using Tessera.Terminal;
-using Tessera.Text;
-using Tessera.Theming;
-using Tessera.Widgets;
-using Tessera.Widgets.Charts.Trees;
+using Cellar.Widgets.Charts;
+using Cellar.Layout;
+using Cellar.Primitives;
+using Cellar.Terminal;
+using Cellar.Text;
+using Cellar.Theming;
+using Cellar.Widgets;
+using Cellar.Widgets.Charts.Trees;
 
 namespace Sherlock.CLI.Tui;
 
-// A Sherlock heap explorer on Tessera, hosted in the CLI as `sl tui`. A Navigator drill-down
+// A Sherlock heap explorer on Cellar, hosted in the CLI as `sl tui`. A Navigator drill-down
 // (Snapshots -> Snapshot workspace -> Instances -> Instance detail); the workspace is a Tabs "lens"
 // bar: Health · Types · Retention · Allocations. See docs/design/tui.md.
 //
 // Links make the heap a walkable graph. Any address / type / method rendered in a tree carries a
 // navigation intent (ObjTarget / TypeTarget / MethodTarget) as its link payload; clicking routes
-// through Follow, which nests a focused page onto the Navigator and opens the most relevant panel:
+// through Follow, which opens the most relevant panel:
 //   address -> the object's detail (Inspect, or GC roots when the context is "why is this alive")
 //   type    -> that type's instances
 //   method  -> that method's allocation callers
-// Keyboard parity: a row's Enter (OnActivate) hits the same router as a mouse click on its link.
-//
-// NOTE: this is a copy of the standalone src/Sherlock.Tui/Program.cs explorer, adapted into a method.
-// The standalone project is kept as reference; this is where the explorer evolves (and what the live
-// dashboard will jump into).
+// A row's Enter (OnActivate) hits the same router as a mouse click on its link.
 public static class SnapshotExplorer
 {
     public static async Task<int> Run()
@@ -76,13 +72,9 @@ public static class SnapshotExplorer
 
         // ---- the snapshot workspace (the lens tabs) ----
 
-        // Lazy tabs: each lens runs its analysis (histogram / dominators / allocation profile) only
-        // when its tab is first shown, not all at once on open. Health (the default) builds up front;
-        // the expensive ones (Retention's dominator tree especially) wait for a click.
-        // Each lens is expensive to build (histogram, doctor, dominators, allocation folding), so wrap
-        // it in AsyncContent: the tab paints a spinner instantly and swaps in the real widget when the
-        // background factory completes — the UI never blocks on analysis. Tabs stay lazy, so a lens that
-        // is never opened never does the work.
+        // Lazy, async lenses: each tab runs its analysis (histogram / dominators / allocation profile)
+        // only when first shown, wrapped in AsyncContent so the tab paints a spinner instantly and swaps
+        // in the real widget when the background factory completes. A lens never opened never runs.
         Widget Lens(Func<Widget> build) => new AsyncContent(_ => build());
         // Token-aware variant: threads AsyncContent's cancellation (fired when the user navigates away)
         // into the analysis, so an expensive query like gcroot stops instead of running to completion.
@@ -95,15 +87,14 @@ public static class SnapshotExplorer
                 .Add("Retention", () => Lens(() => RetentionTab(snap)))
                 .Add("Allocations", () => Lens(() => AllocationsTab(snap)));
 
-        // The Health lens's "what looks wrong" — computed inline from the two cheap, already-loaded
-        // analyses (the V2 dominator tree + the graph histogram). Deliberately does NOT run the full
-        // `doctor` sweep: the two exhaustive ClrMD walks it adds (duplicate strings, event-handler
-        // leaks) cost seconds and belong to the on-demand `doctor` command, not a glance screen.
+        // The Health lens's "what looks wrong", computed inline from the two cheap, already-loaded
+        // analyses (dominator tree + graph histogram). Deliberately skips the full `doctor` sweep,
+        // whose extra ClrMD walks (duplicate strings, event-handler leaks) cost seconds.
         List<Finding> QuickFindings(Snapshot snap)
         {
             var result = new List<Finding>();
 
-            // Biggest retained graph — where a leak concentrates.
+            // Biggest retained graph, where a leak concentrates.
             DominatorTree tree = snap.Dominators;
             ulong reachable = tree.TotalReachableBytes;
             if (reachable > 0 && tree.TopDominators(1).FirstOrDefault() is { } top)
@@ -128,7 +119,7 @@ public static class SnapshotExplorer
             List<HeapTypeStat> byType = snap.Histogram.OrderByDescending(s => s.TotalSize).ToList();
             long heapBytes = byType.Sum(s => (long)s.TotalSize);
 
-            // Fragmentation — a high free-space ratio.
+            // Fragmentation: a high free-space ratio.
             HeapTypeStat? free = byType.FirstOrDefault(s => s.TypeName == "Free");
             if (free is not null && heapBytes > 0 && 100.0 * free.TotalSize / heapBytes is var fpct && fpct >= 25)
             {
@@ -137,7 +128,7 @@ public static class SnapshotExplorer
                     "A high free-space ratio means fragmentation (or a large collection just ran)."));
             }
 
-            // Unbounded growth — a user type with a huge instance count.
+            // Unbounded growth: a user type with a huge instance count.
             HeapTypeStat? grow = byType.FirstOrDefault(s => s.Count >= 10_000 && s.TypeName != "Free"
                 && !s.TypeName.StartsWith("System.", StringComparison.Ordinal)
                 && !s.TypeName.StartsWith("Microsoft.", StringComparison.Ordinal));
@@ -155,7 +146,7 @@ public static class SnapshotExplorer
             return result.OrderBy(f => f.Severity).ToList();
         }
 
-        // Health: heap composition (proportion bar + legend) and the doctor's findings — each finding's
+        // Health: heap composition (proportion bar + legend) and the doctor's findings; each finding's
         // `→ command` is a link that jumps to the object / type it's about.
         Widget HealthTab(Snapshot snap, string id)
         {
@@ -251,7 +242,7 @@ public static class SnapshotExplorer
         }
 
         // Retention: the dominator tree. Roots ARE the top dominator objects; children come lazily from
-        // the dominator tree. The type and the address are both links (type → instances, address → inspect).
+        // the dominator tree. Type and address are both links (type → instances, address → inspect).
         Widget RetentionTab(Snapshot snap)
         {
             DominatorTree dom = snap.Dominators;
@@ -286,8 +277,8 @@ public static class SnapshotExplorer
                 "→/← expand   ·   click a type or address   ·   Enter inspect   ·   Backspace back");
         }
 
-        // Allocations: two axes over the same profile. `By type` (what was allocated — needs a v2 profile)
-        // leads; `Call tree` is the flow flamegraph; `Hot methods` the flat companion.
+        // Allocations: two axes over the same profile. `By type` (needs a v2 profile) leads;
+        // `Call tree` is the flow flamegraph; `Hot methods` the flat companion.
         Widget AllocationsTab(Snapshot snap)
         {
             if (snap.Allocations is not { } profile)
@@ -297,7 +288,7 @@ public static class SnapshotExplorer
                     " Allocations ") { BorderStyle = BorderStyle.Rounded };
             }
 
-            // Inner tabs are lazy too: the call-tree flamegraph and the hot-methods table each fold the
+            // Inner tabs are lazy too: the call-tree flamegraph and hot-methods table each fold the
             // whole profile, so they build only when their subtab is shown.
             var tabs = new Tabs();
             if (profile.HasTypes)
@@ -316,15 +307,14 @@ public static class SnapshotExplorer
             return tabs;
         }
 
-        // By type: what was allocated, largest churn first, with the survived share and how concentrated
-        // the origin is. At the top level, Enter → that type's call tree (where it came from).
+        // By type: what was allocated, largest churn first, with survived share and origin concentration.
+        // At the top level, Enter → that type's call tree (where it came from).
         Widget ByTypeTab(Snapshot snap, AllocationProfile profile) =>
             Hinted(new Panel(TypeTable(snap, profile, name => new TypeTarget(name, "Call tree")), " Allocations by type — what the program allocated ") { BorderStyle = BorderStyle.Rounded },
                 "Enter → where this type came from  ·  s sort  ·  Backspace back");
 
-        // A type-breakdown table over a profile (the whole profile, or one method's inclusive slice):
-        // allocated / survived / count / #sites / share. `onType` decides where a row drills — the origin
-        // call tree at the top level, or the live instances once you're already inside a method's breakdown.
+        // A type-breakdown table over a profile: allocated / survived / count / #sites / share. `onType`
+        // decides where a row drills: the origin call tree at the top level, or live instances inside a method.
         Table TypeTable(Snapshot snap, AllocationProfile profile, Func<string, object> onType)
         {
             long total = Math.Max(1, profile.TotalAllocBytes);
@@ -343,8 +333,8 @@ public static class SnapshotExplorer
             return t;
         }
 
-        // A type's detail page: its live Instances and the Call tree of where it was allocated —
-        // dotMemory's two-panel type view, as lazy tabs. `tab` picks which one a link wanted to land on.
+        // A type's detail page: its live Instances and the Call tree of where it was allocated,
+        // as lazy tabs. `tab` picks which one a link wanted to land on.
         Widget TypeDetailPage(Snapshot snap, string typeName, string tab = "Instances")
         {
             var tabs = new Tabs()
@@ -368,8 +358,8 @@ public static class SnapshotExplorer
                 "→/← expand · collapse   ·   click a frame → its callers   ·   Backspace back");
         }
 
-        // A call-tree tree-table over allocation nodes: per-frame allocated / % / survived / count, roots =
-        // the given top frames (the actual nodes, not a synthetic title), children lazy + expanded.
+        // A call-tree tree-table over allocation nodes: per-frame allocated / % / survived / count,
+        // roots = the given top frames, children lazy + expanded.
         Widget AllocTreeTable(Snapshot snap, IEnumerable<AllocationTreeNode> roots, long total)
         {
             long denom = Math.Max(1, total);
@@ -401,8 +391,8 @@ public static class SnapshotExplorer
             return tree;
         }
 
-        // A flamegraph with a live info bar above it: zoom breadcrumb + the selected frame's bytes, share
-        // of total, and object count. Updated on select/zoom (mirrors the Tessera demo).
+        // A flamegraph with a live info bar above it: zoom breadcrumb + the selected frame's bytes,
+        // share of total, and object count. Updated on select/zoom.
         Widget FlamePanel(FlameGraph<AllocationTreeNode> flame, long total, string title, string hint)
         {
             var info = new Label(StyledText.Empty());
@@ -446,14 +436,14 @@ public static class SnapshotExplorer
                 "Enter inspect  ·  Backspace back");
         }
 
-        // Level 4: one instance — Inspect (fields, with clickable object references), GC roots (walk the
-        // holders), whoalloc. `tab` picks the panel a link wanted to land on.
+        // Level 4: one instance — Inspect (fields, with clickable object references), GC roots, whoalloc.
+        // `tab` picks the panel a link wanted to land on.
         Widget InstancePage(Snapshot snap, ulong address, string tab = "Inspect")
         {
             ObjectDetail detail = snap.Inspect(address);
 
-            // Inspect (fields) is cheap and the default — build it up front. GC roots (a graph search
-            // for holder paths) and whoalloc build lazily when their tab is shown.
+            // Inspect (fields) is cheap and the default, built up front. GC roots (a graph search for
+            // holder paths) and whoalloc build lazily when their tab is shown.
             Widget BuildInspect()
             {
                 var inspect = new TreeView<string> { RenderLabel = FieldLabel, ShowGuides = true };
@@ -490,9 +480,9 @@ public static class SnapshotExplorer
 
             if (snap.HasCorrelation && snap.WhoAllocated(address) is { } stack)
             {
-                // A single object's allocation stack is one path, not a graph — a flat list reads like the
-                // stack trace it is. Site on top (leaf), callers below. Enter a frame → everything allocated
-                // through it (that aggregate is where the branching lives).
+                // A single object's allocation stack is one path, not a graph, so a flat list reads like
+                // the stack trace it is. Site on top (leaf), callers below. Enter a frame → everything
+                // allocated through it (that aggregate is where the branching lives).
                 tabs.Add("whoalloc", () =>
                 {
                     string[] frames = stack.Split(';'); // root -> leaf
@@ -521,8 +511,8 @@ public static class SnapshotExplorer
             return Hinted(tabs, "Tab / ←→ switch view  ·  click a link to drill  ·  Backspace back");
         }
 
-        // Clicking a method lands here: what it allocates (by type — the concrete answer), then who calls
-        // it (back-traces). Lead with the type breakdown the type dimension now makes possible.
+        // Clicking a method lands here: what it allocates (by type), then who calls it (back-traces).
+        // Lead with the type breakdown.
         Widget MethodPage(Snapshot snap, string method)
         {
             if (snap.Allocations is not { } profile)
@@ -552,7 +542,7 @@ public static class SnapshotExplorer
                 tabs.Add("Allocated types", () => Hinted(new Panel(TypeTable(snap, through, name => new TypeTarget(name)), " What this method allocates, by type ") { BorderStyle = BorderStyle.Rounded },
                     "Enter → live instances of this type  ·  s sort  ·  Backspace back"));
             }
-            // A back-trace is a focused drill → tree-table with numbers, not a flamegraph. Built lazily
+            // A back-trace is a focused drill, a tree-table with numbers, not a flamegraph. Built lazily
             // (BuildCallers folds the whole profile) only when the Callers tab is shown.
             tabs.Add("Callers", () =>
             {
@@ -686,7 +676,7 @@ public static class SnapshotExplorer
                 : st.Append(value).Fg(theme.Foreground);
         }
 
-        // A GC-root path node: the root handle (plain), or a held object rendered `Type @0xADDR` with the
+        // A GC-root path node: the root handle (plain), or a held object `Type @0xADDR` with the
         // address linked so you can walk up the chain of holders.
         static StyledText RootLabel(TreeNode<RootRow> node)
         {
@@ -735,21 +725,20 @@ file sealed record MethodTarget(string Method);
 file sealed record RootRow(string Text, ulong? Address);
 
 // A filter prompt above a table: `/` focuses the input, Esc returns focus to the table. The table
-// is focused by default so ↑/↓/Enter drive the list without a detour through the prompt. Both the
-// input and the table render through an inner Stack; this wrapper only steers focus and keys.
-file sealed class FilterStack : Tessera.Widgets.Widget
+// is focused by default so ↑/↓/Enter drive the list without a detour through the prompt.
+file sealed class FilterStack : Cellar.Widgets.Widget
 {
-    private readonly Tessera.Widgets.Input _input;
-    private readonly Tessera.Widgets.Widget _body;
-    private readonly Tessera.Widgets.Stack _stack;
+    private readonly Cellar.Widgets.Input _input;
+    private readonly Cellar.Widgets.Widget _body;
+    private readonly Cellar.Widgets.Stack _stack;
 
-    public FilterStack(Tessera.Widgets.Input input, Tessera.Widgets.Widget body)
+    public FilterStack(Cellar.Widgets.Input input, Cellar.Widgets.Widget body)
     {
         _input = input;
         _body = body;
-        _stack = new Tessera.Widgets.Stack(Tessera.Layout.Direction.Vertical)
-            .Add(input, Tessera.Layout.Constraint.Length(1))
-            .Add(body, Tessera.Layout.Constraint.Fill());
+        _stack = new Cellar.Widgets.Stack(Cellar.Layout.Direction.Vertical)
+            .Add(input, Cellar.Layout.Constraint.Length(1))
+            .Add(body, Cellar.Layout.Constraint.Fill());
     }
 
     public override bool IsFocusable => true;
@@ -764,15 +753,15 @@ file sealed class FilterStack : Tessera.Widgets.Widget
         }
     }
 
-    protected override void VisitChildren(System.Action<Tessera.Widgets.Widget> visit) => visit(_stack);
+    protected override void VisitChildren(System.Action<Cellar.Widgets.Widget> visit) => visit(_stack);
 
-    public override Tessera.Primitives.Size Measure(Tessera.Primitives.Size available) => _stack.Measure(available);
+    public override Cellar.Primitives.Size Measure(Cellar.Primitives.Size available) => _stack.Measure(available);
 
-    public override void Render(Tessera.Rendering.Surface surface, Tessera.Primitives.Rect area) => _stack.Render(surface, area);
+    public override void Render(Cellar.Rendering.Surface surface, Cellar.Primitives.Rect area) => _stack.Render(surface, area);
 
-    public override bool OnEvent(Tessera.Terminal.InputEvent e)
+    public override bool OnEvent(Cellar.Terminal.InputEvent e)
     {
-        if (e is Tessera.Terminal.KeyEvent key)
+        if (e is Cellar.Terminal.KeyEvent key)
         {
             // `/` opens the filter (unless the input already has it, so you can type a literal slash).
             if (!_input.HasFocus && key.IsChar && key.Rune.Value == '/')
@@ -782,7 +771,7 @@ file sealed class FilterStack : Tessera.Widgets.Widget
                 return true;
             }
             // Esc leaves the filter and hands the arrows/Enter back to the table.
-            if (_input.HasFocus && key.Key == Tessera.Terminal.Key.Escape)
+            if (_input.HasFocus && key.Key == Cellar.Terminal.Key.Escape)
             {
                 _input.HasFocus = false;
                 _body.HasFocus = true;

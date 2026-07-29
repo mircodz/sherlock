@@ -10,10 +10,7 @@ using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
 
-/// <summary>
-/// Exports a view to a file for external tooling: the dominator tree as Graphviz DOT, or the
-/// allocation profile as folded stacks (a flamegraph for Speedscope / flamegraph.pl).
-/// </summary>
+/// <summary>Exports a view to a file: the dominator tree as Graphviz DOT, or the allocation profile as folded stacks.</summary>
 public sealed class ExportReplCommand : IReplCommand
 {
     private const int DefaultDominatorNodes = 40;
@@ -57,7 +54,7 @@ public sealed class ExportReplCommand : IReplCommand
         AllocationProfile profile = context.Snapshot.Allocations
             ?? throw new DumpAnalysisException("this snapshot has no allocation profile (capture with `run --profile`/`--correlate`).");
 
-        // .dot -> a pprof-style call graph (render with graphviz); anything else -> folded flamegraph.
+        // .dot -> pprof-style call graph (graphviz); anything else -> folded flamegraph.
         if (file.EndsWith(".dot", StringComparison.OrdinalIgnoreCase))
         {
             Write(context, file, AllocationDot.Write(profile));

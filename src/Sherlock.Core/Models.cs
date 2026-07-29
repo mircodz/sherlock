@@ -33,10 +33,7 @@ public sealed record ObjectInstance(
     ulong Size,
     string? Preview);
 
-/// <summary>
-/// Result of an instance query: the top instances returned plus totals over
-/// every matching object (so callers can show "top K of N").
-/// </summary>
+/// <summary>Top instances returned, plus totals over all matching objects (for "top K of N").</summary>
 public sealed record InstanceListing(
     IReadOnlyList<ObjectInstance> Instances,
     long TotalMatched,
@@ -49,10 +46,8 @@ public sealed record FieldValue(
     string Value,
     int Offset);
 
-/// <summary>
-/// Full detail of a single object. Exactly one shape is populated depending on
-/// the object: a string value, an enumerable's elements, or instance fields.
-/// </summary>
+/// <summary>Full detail of one object. Exactly one shape is populated: a string value,
+/// an enumerable's elements, or instance fields.</summary>
 public sealed record ObjectDetail(
     ulong Address,
     string TypeName,
@@ -63,10 +58,7 @@ public sealed record ObjectDetail(
     IReadOnlyList<string> Elements,
     IReadOnlyList<FieldValue> Fields);
 
-/// <summary>
-/// A node in the dominator tree: an object plus its retained size - the total
-/// memory that becomes collectable if this object is freed.
-/// </summary>
+/// <summary>A dominator-tree node: an object plus its retained size (memory freed if it's collected).</summary>
 public sealed record DominatorNode(
     ulong Address,
     string TypeName,
@@ -123,10 +115,8 @@ public sealed record FinalizableTypeStat(
     long Count,
     ulong TotalBytes);
 
-/// <summary>
-/// Objects still registered for finalization: they have a finalizer that was never suppressed,
-/// usually because <c>Dispose()</c> wasn't called (a proper Dispose calls GC.SuppressFinalize).
-/// </summary>
+/// <summary>Objects still registered for finalization: a finalizer that was never suppressed,
+/// usually a missing <c>Dispose()</c> (which would call GC.SuppressFinalize).</summary>
 public sealed record FinalizerReport(
     long TotalObjects,
     ulong TotalBytes,
@@ -137,10 +127,8 @@ public sealed record HandlerTarget(
     string TypeName,
     int Count);
 
-/// <summary>
-/// A delegate whose invocation list is large enough to suspect an event-handler leak - a
-/// long-lived event keeping many subscribers alive because they never unsubscribed (<c>-=</c>).
-/// </summary>
+/// <summary>A delegate with an invocation list large enough to suspect an event-handler leak:
+/// a long-lived event pinning subscribers that never unsubscribed (<c>-=</c>).</summary>
 public sealed record EventSubscription(
     ulong DelegateAddress,
     string DelegateType,

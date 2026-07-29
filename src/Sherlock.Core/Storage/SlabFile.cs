@@ -10,12 +10,12 @@ namespace Sherlock.Core.Storage;
 /// <summary>
 /// Reads a <c>.slab</c> container: open a file, ask for a section as a long-indexed
 /// <see cref="Column{T}"/>. Hides memory-mapping, chunk boundaries, and the multi-section layout of
-/// large columns — there is no ~2&nbsp;GB per-section ceiling. Owns one <see cref="ChunkedMmap"/>; every
+/// large columns; there is no ~2&nbsp;GB per-section ceiling. Owns one <see cref="ChunkedMmap"/>; every
 /// column and blob it hands out is a zero-copy view valid until this <see cref="SlabFile"/> is disposed.
 /// </summary>
 public sealed class SlabFile : IDisposable
 {
-    // Descriptor only — columns resolve bytes lazily through the mmap, so a >2 GB section is fine.
+    // Descriptor only; columns resolve bytes lazily through the mmap, so a >2 GB section is fine.
     private readonly record struct SectionInfo(SectionType Type, ushort Version, ushort RecordSize, long ByteOffset, long ByteLength, long Count);
 
     private readonly ChunkedMmap _mmap;
@@ -123,7 +123,7 @@ public sealed class SlabFile : IDisposable
             : new Column<T>(_mmap, CollectionsMarshal.AsSpan(segs));
     }
 
-    /// <summary>Each same-typed section as its own column, in table order — unlike
+    /// <summary>Each same-typed section as its own column, in table order; unlike
     /// <see cref="GetColumn{T}"/>, kept separate (the heap-graph edge chunks feeding <c>EdgeColumn</c>).</summary>
     public IReadOnlyList<Column<T>> SectionColumns<T>(SectionType type) where T : unmanaged
     {

@@ -56,7 +56,7 @@ public sealed class AllocationsReplCommand : IReplCommand
             }
         }
 
-        // Resolve the profile: explicit path arg > loaded snapshot's bundle > run session > run target.
+        // Profile source, in priority order: explicit path > snapshot bundle > run session > run target.
         ProcessSupervisor? runTarget = context.Workspace.Targets.LastOrDefault(t => t.ProfileOutPath is not null);
         path ??= context.Workspace.CurrentEntry?.ProvenancePath
                ?? context.Workspace.CurrentSession?.Processes.FirstOrDefault(p => p.HasAllocations)?.AllocationsPath
@@ -68,8 +68,8 @@ public sealed class AllocationsReplCommand : IReplCommand
         }
         if (!File.Exists(path))
         {
-            // The aggregate profile is only written at process exit - but if the target is
-            // still running with a control channel, ask the profiler to flush it now.
+            // Aggregate profile is only written at exit; if the target is still live
+            // with a control channel, ask the profiler to flush now.
             ProcessSupervisor? live = context.Workspace.Targets.FirstOrDefault(
                 t => !t.RootExited && (t.ProfileOutPath == path || t.SessionId == context.Workspace.CurrentSession?.Id));
             if (live is not null)
@@ -133,12 +133,12 @@ public sealed class AllocationsReplCommand : IReplCommand
         {
             if (site.Frames.Count == 0)
             {
-                continue; // a stack with no managed frames (native/entry allocation)
+                continue; // no managed frames (native/entry allocation)
             }
             string leaf = site.Frames[^1];
             (long Bytes, long Count) cur = self.GetValueOrDefault(leaf);
             self[leaf] = (cur.Bytes + site.AllocBytes, cur.Count + site.AllocCount);
-            foreach (string frame in site.Frames.Distinct()) // inclusive = passes through, once per stack
+            foreach (string frame in site.Frames.Distinct()) // inclusive: once per stack
             {
                 inclusive[frame] = inclusive.GetValueOrDefault(frame) + site.AllocBytes;
             }

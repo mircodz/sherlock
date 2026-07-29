@@ -34,8 +34,7 @@ public static class ProfileFormat
 
 /// <summary>
 /// Builds a provenance container: one shared interned stack table backing both the allocation
-/// profile and per-object correlation. Managed mirror of the native writer (which does this in
-/// production); used here for tests and tooling.
+/// profile and per-object correlation. Managed mirror of the native writer; used for tests and tooling.
 /// </summary>
 public sealed class ProvenanceWriter
 {
@@ -79,9 +78,9 @@ public sealed class ProvenanceWriter
         }
         if (_corr.Count > 0)
         {
-            // Sort by address so the reader can binary-search; emitted only when there's provenance.
-            // Chunked (N sections) to match the native writer and to stay under the reader's per-section
-            // cap: one 16-byte record per live object overflows a single section past ~134M objects.
+            // Sort by address so the reader can binary-search. Chunked to match the native writer and
+            // stay under the reader's per-section cap: one 16-byte record per live object overflows a
+            // single section past ~134M objects.
             _corr.Sort(static (a, b) => a.Address.CompareTo(b.Address));
             w.AddChunkedRecords<CorrelationRecord>(SectionType.Correlation, ProfileFormat.Version, CollectionsMarshal.AsSpan(_corr));
         }
@@ -89,17 +88,15 @@ public sealed class ProvenanceWriter
 }
 
 /// <summary>Read-only view over a provenance container: allocation + correlation columns, plus the
-/// stack table to resolve their ids. Backed by a <see cref="SlabFile"/> (owned by the caller): the
-/// correlation column may span many chunk sections and exceed 2&nbsp;GB, and is indexed by <c>long</c>,
-/// so <c>whoalloc</c> works past ~134M live objects without a single-section ceiling.</summary>
+/// stack table to resolve their ids. The correlation column may span many chunk sections and exceed
+/// 2&nbsp;GB, and is <c>long</c>-indexed, so <c>whoalloc</c> works past ~134M live objects.</summary>
 public sealed class ProvenanceReader
 {
     private readonly Column<CorrelationRecord> _corr;
 
     public StackTable Stacks { get; }
 
-    /// <summary>The allocation sites (one per distinct call-stack + type). Long-indexed, but bounded by
-    /// call-site cardinality in practice.</summary>
+    /// <summary>The allocation sites (one per distinct call-stack + type), long-indexed.</summary>
     public Column<AllocationRecord> Allocations { get; }
 
     /// <summary>Version of the Allocations section; >= 2 means each record carries a real <c>TypeId</c>.</summary>
@@ -116,8 +113,8 @@ public sealed class ProvenanceReader
     /// <summary>The number of tracked live objects (correlation records).</summary>
     public long CorrelationCount => _corr.Length;
 
-    /// <summary>Binary-searches the address-sorted correlation column for an object's allocating stack id.
-    /// Long-indexed and chunk-transparent: the column may be several on-disk sections.</summary>
+    /// <summary>Binary-searches the address-sorted correlation column for an object's allocating stack
+    /// id. Long-indexed and chunk-transparent: the column may be several on-disk sections.</summary>
     public bool TryGetStack(ulong address, out uint stackId)
     {
         long lo = 0, hi = _corr.Length - 1;

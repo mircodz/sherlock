@@ -1,141 +1,130 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Runtime.InteropServices;
 using System.Threading;
-using Microsoft.Diagnostics.Runtime;
+using Sherlock.Core.HeapModel;
 
 namespace Sherlock.Core.Analysis;
 
 /// <summary>
-/// Builds a <see cref="DominatorTree"/> for the managed heap using the Cooper-Harvey-Kennedy iterative
-/// dominators algorithm (<i>A Simple, Fast Dominance Algorithm</i>, 2001).
+/// The V2 dominator-tree builder. Unlike <see cref="DominatorAnalyzer"/> (V1, which walks the heap
+/// through ClrMD every time: DAC-bound, ~1-2M edges/s, nothing cached), V2 computes over a
+/// <see cref="HeapGraph"/>, a compact object graph extracted once by bypassing the DAC (~4-5x faster)
+/// and persisted beside the dump as a <c>.slab</c>, so reopening a snapshot skips extraction. The
+/// dominator math (Cooper-Harvey-Kennedy + retained sizes) is identical and produces the same
+/// <see cref="DominatorTree"/>, kept separate until we make it the default.
 /// </summary>
-/// <remarks>
-/// The graph is stored in CSR form (flat offset/edge arrays, not a <see cref="List{T}"/> per object)
-/// with a sorted-address index (binary search, not a <see cref="Dictionary{TKey,TValue}"/>), which
-/// roughly a third faster and far lighter than the naive representation, and scales to large heaps.
-/// Extraction stays single-threaded on purpose: ClrMD's DAC (mscordaccore) takes a giant lock around
-/// heap reads, so parallelizing across threads/runtimes yields no real speedup (measured, and per the
-/// ClrMD 2.0 release notes). Going faster than this needs a lower-level heap reader that bypasses the
-/// DAC — a separate effort.
-/// </remarks>
 public sealed class DominatorAnalyzer(DumpSession session)
 {
+    /// <summary>Pure result of the dominator computation over a <see cref="HeapGraph"/>: per RPO-ordered
+    /// node its address, own (shallow) size, retained size, and immediate dominator (in RPO space). No
+    /// ClrMD, testable against a hand-built graph. Index 0 is the synthetic root.</summary>
+    public readonly record struct DominatorResult(ulong[] Address, ulong[] Own, ulong[] Retained, int[] Idom, int[] NodeByRpo);
+
     public DominatorTree Build(CancellationToken cancellationToken = default)
     {
-        ClrHeap heap = session.Runtime.Heap;
+        HeapGraph graph = session.GetHeapGraph(cancellationToken);
 
-        // Enumerate segments in address order so the collected object addresses come out globally
-        // sorted — then an address resolves to its dense id by a plain binary search (no Dictionary).
-        MemoryRange[] segments = heap.Segments
-            .Select(s => s.ObjectRange)
-            .Where(r => r.Length > 0)
-            .OrderBy(r => r.Start)
-            .ToArray();
+        // Derived cache: load from the sidecar (validated against the graph's content hash) if present,
+        // else compute and persist so reopen skips the recompute.
+        string path = SidecarPath(session.DumpPath);
+        DominatorResult r = TryLoad(path, graph)
+            ?? ComputeAndPersist(graph, path, cancellationToken);
 
-        // 1. Index every (non-free) object: dense id (address order) + shallow size.
-        var addrList = new List<ulong>();
-        var sizeList = new List<ulong>();
-        foreach (MemoryRange range in segments)
+        var rpoOf = new Dictionary<ulong, int>(r.Address.Length);
+        for (int rpo = 1; rpo < r.Address.Length; rpo++)
+            rpoOf[r.Address[rpo]] = rpo;
+
+        // If the graph carries a type column, resolve type names from it (no ClrMD) so the tree never
+        // re-enters the DAC to name a node. Falls back to ClrMD when the graph has no types.
+        Func<ulong, string>? typeNames = graph.HasTypes
+            ? address => { int id = graph.IndexOf(address); return id >= 0 ? graph.TypeNameOf(id) ?? "<unknown>" : "<unknown>"; }
+            : null;
+
+        return new DominatorTree(session.Runtime.Heap, r.Address, r.Own, r.Retained, r.Idom, rpoOf, typeNames);
+    }
+
+    /// <summary>The dominator-cache sidecar path for a dump: <c>&lt;dump&gt;.dominators.slab</c>.</summary>
+    public static string SidecarPath(string dumpPath) => dumpPath + ".dominators.slab";
+
+    private static DominatorResult? TryLoad(string path, HeapGraph graph)
+    {
+        if (!System.IO.File.Exists(path))
         {
-            foreach (ClrObject obj in heap.EnumerateObjects(range))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (obj.Type is null || obj.IsFree)
-                {
-                    continue;
-                }
-                addrList.Add(obj.Address);
-                sizeList.Add(obj.Size);
-            }
+            return null;
         }
-
-        int objectCount = addrList.Count;
-        int root = objectCount;          // synthetic root id
-        int nodeCount = objectCount + 1;
-
-        ulong[] addresses = addrList.ToArray();  // sorted
-        ulong[] sizes = sizeList.ToArray();
-
-        int IndexOf(ulong a)
+        try
         {
-            int i = Array.BinarySearch(addresses, a);
-            return i >= 0 ? i : -1;
+            return DominatorTreeStore.Load(path, graph);
         }
-
-        // 2. Successor edges in CSR form: offsets[node]..offsets[node+1] slices into edges. Objects are
-        //    re-enumerated in the same order, so the sequential id matches pass 1. The synthetic root is
-        //    node `root`, appended last.
-        var offsets = new int[nodeCount + 1];
-        var edges = new List<int>();
-        int id = 0;
-        foreach (MemoryRange range in segments)
+        catch
         {
-            foreach (ClrObject obj in heap.EnumerateObjects(range))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (obj.Type is null || obj.IsFree)
-                {
-                    continue;
-                }
-                offsets[id] = edges.Count;
-                foreach (ClrObject reference in obj.EnumerateReferences())
-                {
-                    int v = IndexOf(reference.Address);
-                    if (v >= 0)
-                    {
-                        edges.Add(v);
-                    }
-                }
-                id++;
-            }
+            return null; // corrupt / partial sidecar, recompute
         }
+    }
 
-        // Synthetic root -> every GC-rooted object.
-        offsets[root] = edges.Count;
-        var seenRoot = new HashSet<int>();
-        foreach (ClrRoot clrRoot in heap.EnumerateRoots())
+    private static DominatorResult ComputeAndPersist(HeapGraph graph, string path, CancellationToken cancellationToken)
+    {
+        DominatorResult r = Compute(graph, cancellationToken);
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            int v = IndexOf(clrRoot.Object.Address);
-            if (v >= 0 && seenRoot.Add(v))
-            {
-                edges.Add(v);
-            }
+            DominatorTreeStore.Save(path, r, graph.ContentHash);
         }
-        offsets[nodeCount] = edges.Count;
+        catch
+        {
+            // Best-effort persistence: a read-only dump directory just means we recompute next time.
+        }
+        return r;
+    }
 
-        ReadOnlySpan<int> Successors(int node) =>
-            CollectionsMarshal.AsSpan(edges).Slice(offsets[node], offsets[node + 1] - offsets[node]);
+    /// <summary>Computes the dominator tree + retained sizes purely from the graph (Cooper-Harvey-Kennedy
+    /// over reverse-postorder), with no dependency on ClrMD.</summary>
+    public static DominatorResult Compute(HeapGraph graph, CancellationToken cancellationToken = default)
+    {
+        int root = graph.Root;
+        int nodeCount = graph.NodeCount;
 
-        // 3. Reverse-postorder numbering from the synthetic root (iterative DFS).
-        int[] rpoNumber = BuildReversePostorder(Successors, root, nodeCount, out int[] nodeByRpo);
+        // Reverse-postorder from the synthetic root (iterative DFS).
+        int[] rpoNumber = BuildReversePostorder(graph, root, nodeCount, out int[] nodeByRpo);
         int m = nodeByRpo.Length;
 
-        // 4. Predecessor lists in RPO space.
-        var preds = new List<int>[m];
+        // Predecessor lists in RPO space as reverse-CSR (two flat arrays) built by counting sort: no
+        // per-node List<int> (m allocations + pointer-chasing, the first thing to OOM on a 400M-edge
+        // graph). Pass 1 counts in-degree, prefix-sum gives offsets, pass 2 scatters.
+        var predOffsets = new int[m + 1];
+        long reachableEdges = 0;
+        for (int node = 0; node < nodeCount; node++)
+        {
+            if (rpoNumber[node] < 0) continue;
+            foreach (int v in graph.Successors(node))
+            {
+                int vRpo = rpoNumber[v];
+                if (vRpo >= 0) { predOffsets[vRpo + 1]++; reachableEdges++; }
+            }
+        }
+        // The reverse-CSR edge array is a single int[] (reachable-edge count long, indexed by int). A
+        // reachable set with >2.1B refs is far beyond any 30 GB dump; fail loudly rather than corrupt
+        // via overflow. Lifting this needs a chunked predecessor array (the next tier).
+        if (reachableEdges > int.MaxValue)
+        {
+            throw new NotSupportedException(
+                $"{reachableEdges:N0} reachable edges exceed the 2.1B dominator limit; chunked predecessor storage is not yet implemented.");
+        }
         for (int i = 0; i < m; i++)
-            preds[i] = [];
+            predOffsets[i + 1] += predOffsets[i];
+        var predEdges = new int[predOffsets[m]];
+        var cursor = (int[])predOffsets.Clone();
         for (int node = 0; node < nodeCount; node++)
         {
             int uRpo = rpoNumber[node];
-            if (uRpo < 0)
-            {
-                continue;
-            }
-
-            foreach (int v in Successors(node))
+            if (uRpo < 0) continue;
+            foreach (int v in graph.Successors(node))
             {
                 int vRpo = rpoNumber[v];
-                if (vRpo >= 0)
-                {
-                    preds[vRpo].Add(uRpo);
-                }
+                if (vRpo >= 0) predEdges[cursor[vRpo]++] = uRpo;
             }
         }
 
-        // 5. Iterative dominators (CHK). idom indexed in RPO space; root dominates itself.
+        // Iterative dominators (CHK). idom in RPO space; root dominates itself.
         var idom = new int[m];
         Array.Fill(idom, -1);
         idom[0] = 0;
@@ -147,34 +136,29 @@ public sealed class DominatorAnalyzer(DumpSession session)
             for (int b = 1; b < m; b++)
             {
                 int newIdom = -1;
-                foreach (int p in preds[b])
+                for (int e = predOffsets[b]; e < predOffsets[b + 1]; e++)
                 {
-                    if (idom[p] == -1)
-                    {
-                        continue;
-                    }
-
+                    int p = predEdges[e];
+                    if (idom[p] == -1) continue;
                     newIdom = newIdom == -1 ? p : Intersect(p, newIdom, idom);
                 }
-                if (newIdom != -1 && idom[b] != newIdom)
-                {
-                    idom[b] = newIdom;
-                    changed = true;
-                }
+                if (newIdom != -1 && idom[b] != newIdom) { idom[b] = newIdom; changed = true; }
             }
         }
 
-        // 6. Retained sizes. Walk RPO high->low, accumulating each node into its immediate dominator
-        //    (descendants, at higher RPO, are already summed).
+        // Retained sizes in RPO space: accumulate each node into its immediate dominator; descendants,
+        // at higher RPO, are already summed.
         var address = new ulong[m];
         var own = new ulong[m];
+        ReadOnlySpan<ulong> gAddr = graph.Addresses.Span;
+        ReadOnlySpan<uint> gSize = graph.Sizes.Span;
         for (int rpo = 0; rpo < m; rpo++)
         {
             int node = nodeByRpo[rpo];
             if (node != root)
             {
-                address[rpo] = addresses[node];
-                own[rpo] = sizes[node];
+                address[rpo] = gAddr[node];
+                own[rpo] = gSize[node];
             }
         }
 
@@ -182,18 +166,10 @@ public sealed class DominatorAnalyzer(DumpSession session)
         for (int rpo = m - 1; rpo >= 1; rpo--)
             retained[idom[rpo]] += retained[rpo];
 
-        var rpoOf = new Dictionary<ulong, int>(m);
-        for (int rpo = 1; rpo < m; rpo++)
-            rpoOf[address[rpo]] = rpo;
-
-        return new DominatorTree(heap, address, own, retained, idom, rpoOf);
+        return new DominatorResult(address, own, retained, idom, nodeByRpo);
     }
 
-    /// <summary>
-    /// Assigns reverse-postorder numbers (root = 0) to nodes reachable from <paramref name="root"/>.
-    /// Unreachable nodes get -1. Iterative to avoid deep recursion.
-    /// </summary>
-    private static int[] BuildReversePostorder(SuccessorFn successors, int root, int nodeCount, out int[] nodeByRpo)
+    private static int[] BuildReversePostorder(HeapGraph graph, int root, int nodeCount, out int[] nodeByRpo)
     {
         var rpoNumber = new int[nodeCount];
         Array.Fill(rpoNumber, -1);
@@ -201,22 +177,17 @@ public sealed class DominatorAnalyzer(DumpSession session)
         var postorder = new List<int>();
         var visited = new bool[nodeCount];
         var stack = new Stack<(int Node, int Index)>();
-
         visited[root] = true;
         stack.Push((root, 0));
         while (stack.Count > 0)
         {
             (int node, int index) = stack.Pop();
-            ReadOnlySpan<int> succ = successors(node);
+            ReadOnlySpan<int> succ = graph.Successors(node);
             if (index < succ.Length)
             {
                 stack.Push((node, index + 1));
                 int w = succ[index];
-                if (!visited[w])
-                {
-                    visited[w] = true;
-                    stack.Push((w, 0));
-                }
+                if (!visited[w]) { visited[w] = true; stack.Push((w, 0)); }
             }
             else
             {
@@ -235,22 +206,12 @@ public sealed class DominatorAnalyzer(DumpSession session)
         return rpoNumber;
     }
 
-    private delegate ReadOnlySpan<int> SuccessorFn(int node);
-
-    /// <summary>Finds the nearest common dominator of two nodes in RPO space.</summary>
     private static int Intersect(int a, int b, int[] idom)
     {
         while (a != b)
         {
-            while (a > b)
-            {
-                a = idom[a];
-            }
-
-            while (b > a)
-            {
-                b = idom[b];
-            }
+            while (a > b) a = idom[a];
+            while (b > a) b = idom[b];
         }
         return a;
     }

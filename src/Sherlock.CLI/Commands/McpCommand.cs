@@ -14,7 +14,7 @@ public sealed class McpCommand : Command<McpCommand.Settings>
 
     protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellation)
     {
-        // stdout is the protocol transport - print nothing here. Blocks until the client disconnects.
+        // stdout is the protocol transport, print nothing here. Blocks until the client disconnects.
         McpServer.RunAsync([]).GetAwaiter().GetResult();
         return 0;
     }

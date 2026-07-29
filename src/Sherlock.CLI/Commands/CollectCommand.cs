@@ -10,10 +10,7 @@ using Spectre.Console.Cli;
 
 namespace Sherlock.CLI.Commands;
 
-/// <summary>
-/// Collects a memory dump from a live .NET process via the diagnostics IPC
-/// channel, optionally opening it in the analyzer afterwards.
-/// </summary>
+/// <summary>Collects a memory dump from a live .NET process, optionally opening it in the analyzer.</summary>
 public sealed class CollectCommand : Command<CollectCommand.Settings>
 {
     public sealed class Settings : CommandSettings
@@ -78,7 +75,7 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
             return 1;
         }
 
-        // Catalog it in the library. Own (move in) temp dumps; reference a user-chosen path.
+        // Catalog it. Own (move in) temp dumps; reference a user-chosen path.
         using Workspace workspace = ReplHost.CreateWorkspace();
         (Session session, SnapshotEntry entry) = workspace.Store.RegisterStandalone(
             SessionKind.Collect,

@@ -6,21 +6,13 @@ using Microsoft.Diagnostics.Runtime;
 namespace Sherlock.Core.Analysis;
 
 /// <summary>
-/// Finds GC roots that keep an object alive. Implemented as a breadth-first
-/// search outward from every GC root, following object references until the
-/// target is reached. The first path found is the shortest in edges.
+/// BFS-based GC-root finder: searches outward from every GC root following object references until the
+/// target is reached. The first path found is the shortest in edges. Slow on very large heaps; kept as
+/// a fallback behind the dominator-backed <see cref="RootAnalyzerV2"/>.
 /// </summary>
-/// <remarks>
-/// This is a deliberately simple traversal: it visits objects reachable from
-/// roots until it hits the target. For very large heaps this can be slow; a
-/// future revision can swap in retained-size/dominator indexing.
-/// </remarks>
 public sealed class RootAnalyzer(DumpSession session)
 {
-    /// <summary>
-    /// Returns up to <paramref name="maxPaths"/> root paths that reach
-    /// <paramref name="targetAddress"/>.
-    /// </summary>
+    /// <summary>Returns up to <paramref name="maxPaths"/> root paths reaching <paramref name="targetAddress"/>.</summary>
     public IReadOnlyList<GcRootPath> FindRoots(ulong targetAddress, int maxPaths = 1, CancellationToken cancellationToken = default)
     {
         ClrHeap heap = session.Runtime.Heap;

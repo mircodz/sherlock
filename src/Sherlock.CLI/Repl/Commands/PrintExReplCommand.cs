@@ -42,7 +42,7 @@ public sealed class PrintExReplCommand : IReplCommand
             return;
         }
 
-        // Scalar/string fields as inline values: `Name = "foobar"`, `Age = 42`.
+        // Scalar/string fields as inline values.
         foreach ((string name, string value) in ScalarFields(obj))
         {
             parent.AddNode($"{Markup.Escape(name)} [grey]=[/] {value}");
@@ -53,7 +53,7 @@ public sealed class PrintExReplCommand : IReplCommand
             return;
         }
 
-        // Reference fields (and array elements) as edges, recursed to the next level.
+        // Reference fields and array elements, recursed to the next level.
         int shown = 0;
         foreach ((string edge, ClrObject child) in ObjectFields(obj))
         {
@@ -99,7 +99,7 @@ public sealed class PrintExReplCommand : IReplCommand
         }
     }
 
-    /// <summary>Reference fields (non-string) and array elements - the recursable edges.</summary>
+    /// <summary>Reference fields (non-string) and array elements, the recursable edges.</summary>
     private static IEnumerable<(string Edge, ClrObject Target)> ObjectFields(ClrObject obj)
     {
         if (obj.IsArray)

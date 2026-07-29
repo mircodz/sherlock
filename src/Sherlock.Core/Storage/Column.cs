@@ -6,7 +6,7 @@ using System.Runtime.InteropServices;
 namespace Sherlock.Core.Storage;
 
 /// <summary>
-/// A long-indexed, memory-mapped column of fixed-width <typeparamref name="T"/> records — one on-disk
+/// A long-indexed, memory-mapped column of fixed-width <typeparamref name="T"/> records: one on-disk
 /// section or many (a large column is written as several same-typed sections). Callers index by
 /// <c>long</c> and never see mmap views, chunk boundaries, or the ~2&nbsp;GB single-section ceiling;
 /// access is zero-copy.
@@ -45,7 +45,7 @@ public sealed unsafe class Column<T> where T : unmanaged
     }
 
     /// <summary>Builds a column from its physical sections in global order (byte offset + element count
-    /// each). Any partition works — indexing relies only on the running totals.</summary>
+    /// each). Any partition works; indexing relies only on the running totals.</summary>
     public Column(ChunkedMmap mmap, ReadOnlySpan<(long byteOffset, long count)> sections)
     {
         _mmap = mmap;
@@ -83,7 +83,7 @@ public sealed unsafe class Column<T> where T : unmanaged
     }
 
     /// <summary>A zero-copy span of <paramref name="length"/> elements at <paramref name="start"/>, when
-    /// the run fits one section and one mmap view. Full scans should use <see cref="CopyTo"/> — the whole
+    /// the run fits one section and one mmap view. Full scans should use <see cref="CopyTo"/>; the whole
     /// column may exceed <see cref="int.MaxValue"/> elements.</summary>
     public ReadOnlySpan<T> Slice(long start, int length)
     {
@@ -144,7 +144,7 @@ public sealed unsafe class Column<T> where T : unmanaged
         }
     }
 
-    /// <summary>A zero-copy <see cref="ReadOnlyMemory{T}"/> over the whole column — only when it's a single
+    /// <summary>A zero-copy <see cref="ReadOnlyMemory{T}"/> over the whole column, only when it's a single
     /// section within one mmap chunk (e.g. one edge chunk); throws otherwise. Valid until the owning
     /// <see cref="SlabFile"/> is disposed.</summary>
     public ReadOnlyMemory<T> AsMemory()
@@ -175,7 +175,7 @@ public sealed unsafe class Column<T> where T : unmanaged
 }
 
 /// <summary>Exposes a raw mmap pointer as a <see cref="ReadOnlyMemory{T}"/> without copying. The owning
-/// <see cref="ChunkedMmap"/> keeps the pointer valid; this manager never frees anything.</summary>
+/// <see cref="ChunkedMmap"/> keeps the pointer valid; this manager frees nothing.</summary>
 internal sealed unsafe class PointerMemory<T> : MemoryManager<T> where T : unmanaged
 {
     private readonly T* _pointer;

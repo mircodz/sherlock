@@ -28,10 +28,7 @@ public sealed record ReplContext(Workspace Workspace, IAnsiConsole Console, Func
     }
 }
 
-/// <summary>
-/// An analysis command. The same instances back both the interactive REPL and <c>--exec</c>,
-/// so analysis logic lives in one place.
-/// </summary>
+/// <summary>An analysis command, shared by both the interactive REPL and <c>--exec</c>.</summary>
 public interface IReplCommand
 {
     /// <summary>Primary command name, e.g. <c>dumpheap</c>.</summary>

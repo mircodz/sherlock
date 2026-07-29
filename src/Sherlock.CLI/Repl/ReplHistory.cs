@@ -4,10 +4,7 @@ using System.IO;
 
 namespace Sherlock.CLI.Repl;
 
-/// <summary>
-/// Command history for the interactive REPL, persisted across sessions to a
-/// file in the user's home directory.
-/// </summary>
+/// <summary>Command history for the REPL, persisted across sessions to a file in the user's home directory.</summary>
 public sealed class ReplHistory
 {
     private readonly string? _path;

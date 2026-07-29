@@ -14,9 +14,6 @@
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageLicenseFile>LICENSE</PackageLicenseFile>
 
-    <!-- The analyzer walks whole object graphs (dominators, histogram) over multi-GB dumps, so tune
-         it for throughput: Server GC (parallel, per-core heaps) for the heavy allocation of analysis,
-         and Dynamic PGO to re-optimize the hot graph-walk methods in the long-running REPL. -->
     <ServerGarbageCollection>true</ServerGarbageCollection>
     <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
     <TieredPGO>true</TieredPGO>
@@ -34,13 +31,12 @@
   <ItemGroup>
     <ProjectReference Include="..\Sherlock.Core\Sherlock.Core.csproj" />
     <ProjectReference Include="..\Sherlock.Mcp\Sherlock.Mcp.csproj" />
-    <!-- The live run dashboard is a Tessera TUI hosted in-process. -->
-    <ProjectReference Include="..\..\..\Tessera\src\Tessera\Tessera.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Spectre.Console" Version="0.55.2" />
     <PackageReference Include="Spectre.Console.Cli" Version="0.55.0" />
+    <PackageReference Include="Cellar" Version="0.1.0" />
   </ItemGroup>
 
 </Project>

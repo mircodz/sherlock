@@ -4,7 +4,7 @@ namespace Sherlock.Core;
 
 /// <summary>
 /// Read-only access to the snapshot catalog: resolves an id/label to an open <see cref="Snapshot"/>.
-/// Shared by the CLI and the MCP server so both front-ends open snapshots the same way.
+/// Shared by the CLI and MCP server so both open snapshots the same way.
 /// </summary>
 public sealed class SnapshotLibrary(SnapshotStore store)
 {

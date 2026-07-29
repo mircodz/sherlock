@@ -6,17 +6,14 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# The allocation callback (ObjectAllocated -> Aggregator::record) runs on every sampled allocation in
-# the target, so this library is genuinely hot — default to a fully optimized build; Debug is opt-in.
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
 option(SHERLOCK_ASAN "Build with Address/UndefinedBehavior sanitizers (dev/test)" OFF)
-# The .so is injected into an arbitrary customer .NET process — possibly on a different/older CPU than
-# the build machine — so -march=native (which emits e.g. AVX-512) would SIGILL there. Default OFF; the
-# packaged build gets a safe x86-64-v2 floor. Turn ON only for a local dev build on the same machine.
-option(SHERLOCK_NATIVE_ARCH "Tune for the build machine's CPU (-march=native); UNSAFE for shipped/portable builds" OFF)
+# -march=native is unsafe for the shipped .so: it's injected into arbitrary processes that may run on
+# an older CPU. On by default only for local dev builds on the same machine.
+option(SHERLOCK_NATIVE_ARCH "Tune for the build machine's CPU (-march=native); unsafe for shipped builds" OFF)
 
 find_program(CCACHE_PROGRAM ccache)
 if(CCACHE_PROGRAM)
@@ -43,29 +40,21 @@ if(NOT WIN32)
     add_link_options(-pthread)
     include_directories(SYSTEM common/unix)
 
-    # Optimized (non-Debug) builds: aggressive optimization for the allocation hot path.
     add_compile_options($<$<NOT:$<CONFIG:Debug>>:-O3>)
     add_compile_options($<$<NOT:$<CONFIG:Debug>>:-funroll-loops>)
     if(SHERLOCK_NATIVE_ARCH)
         add_compile_options($<$<NOT:$<CONFIG:Debug>>:-march=native>)
-    else()
-        # Portable floor for a shipped plugin: SSE4.2/POPCNT-era baseline, safe on any x86-64-v2 CPU
-        # (~2010+). Avoids SIGILL from build-machine-specific ISA in a foreign process.
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+        # Portable x86-64 floor (SSE4.2/POPCNT, ~2010+). ARM64 has no equivalent sub-baseline, so it's x86-only.
         add_compile_options($<$<NOT:$<CONFIG:Debug>>:-march=x86-64-v2>)
     endif()
 
-    # Injected-plugin hygiene: hide all symbols by default so our internals can't interpose (or be
-    # interposed by) the host CLR / customer app; only the two DllGetClassObject/DllCanUnloadNow entry
-    # points are exported (marked in dllmain.cpp). initial-exec TLS is faster and loader-safe for a
-    # dlopen'd lib's thread_locals (the alloc hot path uses them). Ship our own C++ runtime statically
-    # so we don't fight whatever libstdc++ the target already loaded.
+    # Hide all symbols (only the DllGetClassObject/DllCanUnloadNow entry points are exported); initial-exec
+    # TLS for the dlopen'd lib's hot-path thread_locals.
     add_compile_options(-fvisibility=hidden -fvisibility-inlines-hidden -ftls-model=initial-exec)
-    # Strip build-machine paths from the binary for reproducibility.
     add_compile_options("-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.")
 endif()
 
-# Link-time optimization for optimized builds — lets the hot path (Aggregator::record, hashFrames)
-# inline across the profiler/aggregator translation units.
 include(CheckIPOSupported)
 check_ipo_supported(RESULT SHERLOCK_IPO_OK OUTPUT SHERLOCK_IPO_MSG)
 if(SHERLOCK_IPO_OK)
@@ -76,8 +65,7 @@ endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_link_options(-Wl,-z,relro,-z,now)
     add_link_options(-Wl,--build-id)
-    # Carry our own libstdc++/libgcc so the injected .so can't clash with the target's C++ runtime.
-    # (Not under ASan — the sanitizer runtime needs the shared libs.)
+    # Carry our own C++ runtime so the injected .so can't clash with the target's (not under ASan).
     if(NOT SHERLOCK_ASAN)
         add_link_options(-static-libstdc++ -static-libgcc)
     endif()
@@ -102,7 +90,7 @@ set(SOURCES
 
 if(WIN32)
     list(APPEND SOURCES src/profiler.def)
-    add_compile_definitions(_CRT_SECURE_NO_WARNINGS) # std::getenv
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 endif(WIN32)
 
 add_library(SherlockProfiler SHARED ${SOURCES})

@@ -20,13 +20,11 @@ namespace Sherlock {
 
 namespace {
 
-// Cap stack depth so pathological recursion can't blow up the hot path or the
-// aggregation key.
+// Cap stack depth so pathological recursion can't blow up the hot path or the aggregation key.
 constexpr std::size_t kMaxFrames = 64;
 
-// Insert the current pid before the extension (allocations.tsv -> allocations.<pid>.tsv),
-// so every profiled process - including children that inherit the env - writes a
-// distinct file instead of clobbering a shared one.
+// Insert the current pid before the extension (allocations.tsv -> allocations.<pid>.tsv), so every
+// profiled process (including children that inherit the env) writes a distinct file.
 std::string withPid(const std::string& path) {
 #ifdef _WIN32
     int pid = _getpid();
@@ -95,20 +93,19 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
     bool hasStartupTriggers = triggerEnv != nullptr && triggerEnv[0] != '\0';
     const char* ctlSocketEnv = std::getenv("SHERLOCK_CONTROL_SOCKET");
     bool controlPresent = ctlSocketEnv != nullptr && ctlSocketEnv[0] != '\0';
-    // Snapshot triggers are possible if pre-armed at startup, or if the control channel
-    // lets the REPL arm them live.
+    // Snapshot triggers are possible if pre-armed at startup, or if the control channel lets the
+    // REPL arm them live.
     bool triggersEnabled = hasStartupTriggers || controlPresent;
 
-    // Allocation tracking (ObjectAllocated) and GC callbacks are always on. The shadow stack
-    // (per-thread call stack maintained by ReJIT-injected IL, read O(1) in ObjectAllocated) is
-    // the allocation-stack capture mechanism, so ReJIT + module loads are always enabled too.
+    // Allocation tracking (ObjectAllocated) and GC callbacks are always on. The shadow stack (per-thread
+    // call stack maintained by ReJIT-injected IL, read O(1) in ObjectAllocated) captures allocation
+    // stacks, so ReJIT + module loads are always enabled too.
     DWORD eventMask = COR_PRF_MONITOR_OBJECT_ALLOCATED |
                       COR_PRF_ENABLE_OBJECT_ALLOCATED |
                       COR_PRF_MONITOR_GC | // GC callbacks for survivor tracking + gc: triggers
                       COR_PRF_ENABLE_REJIT | COR_PRF_MONITOR_MODULE_LOADS;
     if (triggersEnabled)
-        // Exceptions for throw: triggers. No global inline-disable - call: triggers simply don't
-        // fire on inlined/tiny methods (documented).
+        // Exceptions for throw: triggers. call: triggers simply don't fire on inlined/tiny methods.
         eventMask |= COR_PRF_MONITOR_EXCEPTIONS;
 
     hr = corProfilerInfo->SetEventMask(eventMask);
@@ -153,9 +150,8 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
         }
     }
 
-    // Control channel: connect to sl if a socket was provided. This is the unified
-    // sl<->profiler channel for on-demand requests (emit-correlation, flush-allocations,
-    // arm-trigger) and pushes events (snapshot triggers).
+    // Control channel: connect to sl if a socket was provided. Carries on-demand requests
+    // (emit-correlation, flush-allocations, arm-trigger) and pushes events (snapshot triggers).
     if (controlPresent) {
         control = std::make_unique<control::ControlChannel>(logger.get());
         if (std::optional<std::string> err = control->connect(ctlSocketEnv)) {
@@ -184,10 +180,9 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
 }
 
 HRESULT STDMETHODCALLTYPE Profiler::InitializeForAttach(IUnknown*, void*, UINT) {
-    // Attach is unsupported: allocation tracking needs COR_PRF_MONITOR_OBJECT_ALLOCATED, an
-    // IMMUTABLE flag that SetEventMask rejects on attach (CORPROF_E_IMMUTABLE_FLAGS_SET), so there
-    // is no useful degraded mode. Fail clearly at load time rather than half-initialize. Sherlock
-    // attaches at process start via CORECLR_PROFILER.
+    // Attach is unsupported: allocation tracking needs COR_PRF_MONITOR_OBJECT_ALLOCATED, an IMMUTABLE
+    // flag SetEventMask rejects on attach (CORPROF_E_IMMUTABLE_FLAGS_SET), so there's no useful degraded
+    // mode. Fail clearly at load time. Sherlock attaches at process start via CORECLR_PROFILER.
     if (logger)
         logger->logError("Sherlock must be set at startup (CORECLR_PROFILER); runtime attach is not supported.");
     return E_NOTIMPL;
@@ -205,8 +200,8 @@ control::Reply Profiler::handleControl(std::string_view cmd, std::span<const std
             corProfilerInfo->ForceGC(); // settle addresses before emitting
         }
         aggregator->emitCorrelation(correlationPath);
-        // Return the GC count at emit; sl re-checks after the dump to detect drift (a GC
-        // between emit and dump would move objects and invalidate the address join).
+        // Return the GC count at emit; sl re-checks after the dump to detect drift (a GC between emit
+        // and dump would move objects and invalidate the address join).
         return control::Reply::success(correlationPath + "\t" + std::to_string(gcCount.load()));
     }
     if (cmd == control::commands::kGcCount) {
@@ -330,16 +325,15 @@ HRESULT STDMETHODCALLTYPE Profiler::ObjectAllocated(ObjectID objectId, ClassID c
         totalAllocations.fetch_add(1, std::memory_order_relaxed);
         totalBytes.fetch_add(objectSize, std::memory_order_relaxed);
 
-        // alloc: snapshot triggers - fire once when an instance of the armed type is allocated.
-        // resolveTypeName is a metadata lookup (cached, but still a map hit) — only pay it when an
-        // alloc trigger is actually armed.
+        // alloc: triggers, fire once when an instance of the armed type is allocated. resolveTypeName
+        // is a (cached) metadata lookup, so only pay it when an alloc trigger is actually armed.
         if (triggers && triggers->wantsAlloc()) {
             if (auto display = triggers->onAlloc(aggregator->resolveTypeName(classId)))
                 fireTrigger(*display);
         }
 
-        // Sampling gate: when an interval is set, only every ~N bytes pays for the
-        // (expensive) stack walk; 0 means sample every allocation.
+        // Sampling gate: when an interval is set, only every ~N bytes pays for the (expensive)
+        // stack walk; 0 means sample every allocation.
         bool take = sampleInterval == 0;
         if (!take) {
             t_bytesSinceSample += objectSize;
@@ -351,16 +345,15 @@ HRESULT STDMETHODCALLTYPE Profiler::ObjectAllocated(ObjectID objectId, ClassID c
         if (!take)
             return S_OK;
 
-        // Attribute the allocation to the maintained shadow stack. It's stored root->leaf; we
-        // hand record() a span directly into that storage — no copy, no stack walk. When deeper
-        // than kMaxFrames, keep the leaf-most frames (innermost callers nearest the allocation),
-        // which are the contiguous tail of the root->leaf buffer.
+        // Attribute the allocation to the shadow stack. It's stored root->leaf; we hand record() a
+        // span directly into that storage (no copy, no stack walk). When deeper than kMaxFrames, keep
+        // the leaf-most frames (innermost callers nearest the allocation), the contiguous tail.
         const std::uint32_t depth = shadow::storedDepth();
         const std::uint32_t n = depth < kMaxFrames ? depth : static_cast<std::uint32_t>(kMaxFrames);
         const FunctionID* sf = shadow::frames();
         aggregator->record(std::span<const FunctionID>(sf + (depth - n), n), objectSize, objectId, classId);
     } catch (...) {
-        // Swallow — a throw crossing back into the runtime would be undefined behavior.
+        // Swallow: a throw crossing back into the runtime would be undefined behavior.
     }
     return S_OK;
 }
@@ -425,7 +418,7 @@ HRESULT STDMETHODCALLTYPE Profiler::ObjectsAllocatedByClass(ULONG, ClassID[], UL
 HRESULT STDMETHODCALLTYPE Profiler::ObjectReferences(ObjectID, ClassID, ULONG, ObjectID[]) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::RootReferences(ULONG, ObjectID[]) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ExceptionThrown(ObjectID thrownObjectId) {
-    // throw: snapshot triggers - fire once when a matching exception type is thrown.
+    // throw: triggers, fire once when a matching exception type is thrown.
     if (triggers && triggers->wantsThrow() && aggregator) {
         ClassID classId = 0;
         if (SUCCEEDED(corProfilerInfo->GetClassFromObject(thrownObjectId, &classId))) {
@@ -463,8 +456,8 @@ HRESULT STDMETHODCALLTYPE Profiler::GarbageCollectionStarted(int cGenerations, B
     maxGenCollected.store(maxGen, std::memory_order_relaxed);
 
     // Report the address spans of the condemned generation(s) to the aggregator. The GC only reports
-    // survivors for generations it actually collects; a tracked object in a higher, un-collected gen
-    // must be carried over, not dropped. GetGenerationBounds here reflects the pre-collection layout.
+    // survivors for generations it collects; a tracked object in a higher, un-collected gen must be
+    // carried over, not dropped. GetGenerationBounds here reflects the pre-collection layout.
     if (aggregator && corProfilerInfo) {
         ULONG count = 0;
         if (SUCCEEDED(corProfilerInfo->GetGenerationBounds(0, &count, nullptr)) && count > 0) {
@@ -482,10 +475,9 @@ HRESULT STDMETHODCALLTYPE Profiler::GarbageCollectionStarted(int cGenerations, B
                         aggregator->noteCondemnedRange(
                             ranges[i].rangeStart, static_cast<std::uint64_t>(ranges[i].rangeLength));
                     }
-                    // Separately report the LOH/POH spans (gen 3/4) regardless of condemnation: a
-                    // large object allocated between full GCs is never survivor-reported by an
-                    // ephemeral GC, so the aggregator admits it as alive when it's on the LOH/POH but
-                    // not condemned by this collection.
+                    // Separately report the LOH/POH spans (gen 3/4) regardless of condemnation: a large
+                    // object allocated between full GCs is never survivor-reported by an ephemeral GC,
+                    // so the aggregator admits it as alive when it's on the LOH/POH but not condemned.
                     if (g >= 3) {
                         aggregator->noteLargeObjectRange(
                             ranges[i].rangeStart, static_cast<std::uint64_t>(ranges[i].rangeLength));
@@ -499,7 +491,7 @@ HRESULT STDMETHODCALLTYPE Profiler::GarbageCollectionStarted(int cGenerations, B
 HRESULT STDMETHODCALLTYPE Profiler::SurvivingReferences(ULONG, ObjectID[], ULONG[]) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::GarbageCollectionFinished() {
     if (aggregator) aggregator->endGc();
-    // gc: snapshot triggers - fire once after a collection of the armed generation.
+    // gc: triggers, fire once after a collection of the armed generation.
     if (triggers && triggers->wantsGc()) {
         if (auto display = triggers->onGc(maxGenCollected.load(std::memory_order_relaxed)))
             fireTrigger(*display);
@@ -516,8 +508,7 @@ HRESULT STDMETHODCALLTYPE Profiler::ReJITCompilationStarted(FunctionID, ReJITID,
 HRESULT STDMETHODCALLTYPE Profiler::GetReJITParameters(ModuleID moduleId, mdMethodDef methodId, ICorProfilerFunctionControl* pFunctionControl) {
     // Shadow-stack instrumentation wraps the whole body; when active it owns every token (a probe's
     // prologue-only splice would be lost inside our try/finally anyway). Probes handle the rest only
-    // when shadow-stack isn't running.
-    if (shadowInstr)
+    // when shadow-stack isn't running.    if (shadowInstr)
         return shadowInstr->getReJITParameters(moduleId, methodId, pFunctionControl);
     if (probes)
         return probes->getReJITParameters(moduleId, methodId, pFunctionControl);
@@ -528,8 +519,8 @@ HRESULT STDMETHODCALLTYPE Profiler::ReJITError(ModuleID, mdMethodDef methodId, F
     char buf[16];
     std::snprintf(buf, sizeof buf, "0x%08x", static_cast<unsigned>(hrStatus));
     logger->logError("ReJIT error for token " + std::to_string(methodId) + ": " + buf);
-    // Feed the circuit breaker: enough rewrite rejections latch the shadow-stack instrumenter off so we
-    // stop handing the runtime IL it won't accept (protects the profiled process).
+    // Feed the circuit breaker: enough rewrite rejections latch the shadow-stack instrumenter off so
+    // we stop handing the runtime IL it won't accept.
     if (shadowInstr)
         shadowInstr->noteReJITError();
     return S_OK;

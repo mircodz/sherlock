@@ -34,7 +34,7 @@ public static class RunLauncher
         string? snapshotOn = null;
         var rest = new List<string>();
 
-        // `--` ends option parsing; the first non-flag token is the target and the rest its args.
+        // `--` ends option parsing; the first non-flag token is the target, the rest its args.
         for (int i = 0; i < args.Count; i++)
         {
             string arg = args[i];
@@ -63,8 +63,8 @@ public static class RunLauncher
 
     /// <summary>
     /// Launches the target as a live workspace target under a fresh run session. On success the
-    /// supervisor is registered with the workspace (so its pollers see it) and returned; on failure
-    /// the error is printed and the empty session rolled back.
+    /// supervisor is registered with the workspace and returned; on failure the error is printed
+    /// and the empty session rolled back.
     /// </summary>
     public static (ProcessSupervisor Supervisor, Session Session)? Launch(Workspace workspace, IAnsiConsole console, RunSpec spec)
     {
@@ -100,7 +100,7 @@ public static class RunLauncher
         catch (DumpAnalysisException ex)
         {
             supervisor.Dispose();
-            workspace.Store.Remove(session.Id); // roll back the empty session
+            workspace.Store.Remove(session.Id); // roll back empty session
             console.MarkupLineInterpolated($"[red]error:[/] {ex.Message}");
             return null;
         }

@@ -12,9 +12,8 @@ using Sherlock.Core.Store;
 namespace Sherlock.Core;
 
 /// <summary>
-/// A loaded snapshot: the dump (for heap analysis) plus, when present, its allocation provenance.
-/// Every analysis is lazy and cached for this snapshot's lifetime; loading another snapshot builds a
-/// fresh one, so the caches never go stale.
+/// A loaded snapshot: the dump plus, when present, its allocation provenance. Every analysis is
+/// lazy and cached for this snapshot's lifetime.
 /// </summary>
 public sealed class Snapshot(DumpSession dump, SnapshotEntry? entry = null) : IDisposable
 {
@@ -36,14 +35,13 @@ public sealed class Snapshot(DumpSession dump, SnapshotEntry? entry = null) : ID
     public IReadOnlyList<ExceptionInfo> Exceptions => field ??= new ExceptionAnalyzer(dump).FindExceptions();
 
     public IReadOnlyList<HeapTypeStat> Histogram => dump.GetHistogram();
-    // V2 pipeline: dominators over the persisted, DAC-bypassing heap graph (extracted once, cached on
-    // disk beside the dump). Same result as GetDominatorTree, much faster on reopen.
-    public DominatorTree Dominators => dump.GetDominatorTreeV2();
+    // Dominators over the persisted DAC-bypassing heap graph, cached on disk so reopening skips recompute.
+    public DominatorTree Dominators => dump.GetDominatorTree();
 
     // Parameterized queries.
     public ObjectDetail Inspect(ulong address) => new ObjectInspector(dump).Inspect(address);
-    // V2 pipeline: gcroot over the persisted dominator tree (DAC-free, O(path length)) instead of a
-    // ClrMD BFS outward from every root. Same "why it's alive" answer, no multi-minute heap walk.
+    // gcroot over the persisted dominator tree (DAC-free, O(path length)) instead of a ClrMD BFS from
+    // every root. Same answer, no multi-minute heap walk.
     public IReadOnlyList<GcRootPath> Roots(ulong address, int maxPaths = 1, CancellationToken cancellationToken = default) =>
         new RootAnalyzerV2(dump).FindRoots(address, maxPaths, cancellationToken);
     public InstanceListing Instances(string filter, int limit = 20) => new HeapAnalyzer(dump).ListInstances(filter, limit);

@@ -5,10 +5,7 @@ using Spectre.Console;
 
 namespace Sherlock.CLI.Repl;
 
-/// <summary>
-/// The interactive read-eval-print loop. Holds one open <see cref="DumpSession"/>
-/// for the lifetime of the session and dispatches typed lines to commands.
-/// </summary>
+/// <summary>The interactive read-eval-print loop, holding one open session and dispatching typed lines.</summary>
 public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAnsiConsole console)
 {
     private static readonly string[] ExitWords = ["exit", "quit", "q"];
@@ -112,7 +109,7 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
         }
         catch (Exception ex)
         {
-            // Keep the session alive: one bad command shouldn't end the REPL.
+            // One bad command shouldn't end the REPL.
             console.MarkupLineInterpolated($"[red]{command.Name} failed:[/] {ex.Message}");
         }
 

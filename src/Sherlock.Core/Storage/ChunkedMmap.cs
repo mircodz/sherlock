@@ -6,8 +6,8 @@ namespace Sherlock.Core.Storage;
 
 /// <summary>
 /// Read-only view of a file mapped in ≤1&nbsp;GiB chunks, so files and reads larger than an int-length
-/// span still work. A global <c>long</c> offset resolves to <c>(chunk, offsetInChunk)</c>; reads that
-/// straddle a chunk boundary are stitched by <see cref="CopyTo"/>.
+/// span still work. A global <c>long</c> offset resolves to <c>(chunk, offsetInChunk)</c>; reads
+/// straddling a chunk boundary are stitched by <see cref="CopyTo"/>.
 /// </summary>
 public sealed unsafe class ChunkedMmap : IDisposable
 {
@@ -54,7 +54,7 @@ public sealed unsafe class ChunkedMmap : IDisposable
                 MemoryMappedViewAccessor view = file.CreateViewAccessor(offset, len, MemoryMappedFileAccess.Read);
                 byte* p = null;
                 view.SafeMemoryMappedViewHandle.AcquirePointer(ref p);
-                p += view.PointerOffset; // the view may begin at a granularity boundary before `offset`
+                p += view.PointerOffset; // view may begin at a granularity boundary before `offset`
                 views[i] = view;
                 pointers[i] = p;
                 lengths[i] = len;

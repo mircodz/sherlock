@@ -45,15 +45,14 @@ namespace {
 
 // Opcode tables, il::Insn, method-header/body decode, and compress/uncompress live in il_writer.{hpp,cpp}.
 // The helpers below are shadow-stack-specific (they mint a return-value local + LocalVarSig).
-// The method's return type, as needed to stash the returned value in a local before `leave`.
 struct RetType {
     bool nonVoid = false;         // false for void (no return-value local needed)
     std::vector<BYTE> blob;       // the RetType signature bytes (only when nonVoid), for the LocalVarSig
 };
 
-// Parse the method's return type from its signature. Returns false only when the return shape is one we
-// deliberately refuse to instrument (byref/typedref returns, or an exotic RetType we can't size) — the
-// caller then skips the method. A void return is success with nonVoid=false.
+// Parse the method's return type from its signature. Returns false for return shapes we refuse to
+// instrument (byref/typedref, or an exotic RetType we can't size); the caller then skips the method.
+// A void return is success with nonVoid=false.
 bool parseReturnType(ICorProfilerInfo10* info, ModuleID moduleId, mdMethodDef methodToken, RetType& rt) {
     IMetaDataImport* md = nullptr;
     if (!SUCCEEDED(info->GetModuleMetaData(moduleId, ofRead, IID_IMetaDataImport, (IUnknown**)&md)) || !md) {
@@ -81,7 +80,6 @@ bool parseReturnType(ICorProfilerInfo10* info, ModuleID moduleId, mdMethodDef me
                 result = false; // ref returns / typedref: skip (uncommon, tricky)
             } else {
                 // Simple value/ref element types we can size to one byte, plus CLASS/VALUETYPE (+token).
-                // Anything else: skip.
                 bool simple = false;
                 switch (et) {
                     case ELEMENT_TYPE_BOOLEAN: case ELEMENT_TYPE_CHAR:
@@ -166,9 +164,9 @@ ShadowStackInstrumenter::ModuleSigs& ShadowStackInstrumenter::ensureSigs(ModuleI
     return sigByModule_.emplace(moduleId, sigs).first->second;
 }
 
-// Core IL rewrite shared by the JIT and ReJIT paths. Fills `out` with a fully assembled
-// method body (fat header + try/finally-wrapped code + EH section) and returns true; returns
-// false to skip (caller leaves the original IL untouched). Never sets the body itself.
+// Core IL rewrite shared by the JIT and ReJIT paths. Fills `out` with a fully assembled method body
+// (fat header + try/finally-wrapped code + EH section) and returns true; false to skip (caller leaves
+// the original IL untouched). Never sets the body itself.
 bool ShadowStackInstrumenter::buildIL(FunctionID functionId, ModuleID moduleId,
                                       mdMethodDef methodToken, std::vector<BYTE>& out) {
     ModuleSigs& sigs = ensureSigs(moduleId);
@@ -195,8 +193,8 @@ bool ShadowStackInstrumenter::buildIL(FunctionID functionId, ModuleID moduleId,
     if (!il::decodeBody(code, codeSize, insns, unsafeToWrap)) { return false; }
     if (insns.empty() || unsafeToWrap) { return false; }
 
-    // ---- determine return type: extract the RetType blob from the method sig, so we can add a local
-    // to stash the returned value before `leave`. Void => no local; an exotic/byref return => skip. ----
+    // ---- return type: extract the RetType blob so we can add a local to stash the returned value
+    // before `leave`. Void => no local; exotic/byref return => skip. ----
     RetType rt;
     if (!parseReturnType(info_, moduleId, methodToken, rt)) { return false; }
     const bool nonVoid = rt.nonVoid;
@@ -221,8 +219,8 @@ bool ShadowStackInstrumenter::buildIL(FunctionID functionId, ModuleID moduleId,
     prologue.conv_i();                                                          // conv.i
     prologue.calli(sigs.push);                                                  // calli pushSig
 
-    // Per-body-instruction new offset map. We know each transformed instruction's size
-    // up front (branches all long-form; ret expands), so we can assign offsets directly.
+    // Per-body-instruction new offset map. Each transformed instruction's size is known up front
+    // (branches all long-form; ret expands), so we assign offsets directly.
     std::uint32_t tryStart = static_cast<std::uint32_t>(prologue.size());
     std::vector<std::uint32_t> newOff(insns.size());
     auto transformedLen = [&](const il::Insn& in) -> std::uint32_t {
@@ -293,9 +291,8 @@ bool ShadowStackInstrumenter::buildIL(FunctionID functionId, ModuleID moduleId,
     }
 
     // ---- relocate original EH clauses into the new offset space ----
-    // Parse the clauses at their original (absolute) offsets, then remap each into the rewritten body.
-    // Unlike the probe's constant shift, offsets here move non-uniformly (branches widened, ret expanded),
-    // so any offset that doesn't land on an instruction boundary means we can't safely rewrite — bail.
+    // Offsets move non-uniformly (branches widened, ret expanded), unlike the probe's constant shift,
+    // so any offset that doesn't land on an instruction boundary means we can't safely rewrite: bail.
     std::vector<il::EHClause> clauses;
     {
         std::vector<il::EHClause> original;
@@ -331,17 +328,16 @@ bool ShadowStackInstrumenter::buildIL(FunctionID functionId, ModuleID moduleId,
     const std::vector<BYTE>& finallyBytes = finallyBody.bytes();
     std::uint32_t newCodeSize = static_cast<std::uint32_t>(prologueBytes.size() + body.size() + finallyBytes.size() + endSeq.size());
 
-    // Sanity cap: our transform only prepends a fixed prologue/finally (~40 bytes) and grows the body by a
-    // few bytes per instruction (short->long branch, ret->leave). So the rewritten code can't legitimately
-    // be more than the original plus a bounded margin — a gross overrun means a layout bug produced a
-    // malformed body, and handing that to the runtime is exactly the in-process hazard we must avoid. Bail
-    // (leave the original IL) rather than emit something we can't vouch for.
+    // Our transform prepends a fixed prologue/finally and grows the body by a few bytes per instruction,
+    // so the rewritten code can't legitimately exceed the original plus a bounded margin. A gross overrun
+    // means a layout bug produced a malformed body; handing that to the runtime is the in-process hazard
+    // we must avoid. Bail (leave the original IL) rather than emit something we can't vouch for.
     constexpr std::uint32_t kFixedOverhead = 256; // prologue + finally + end + slack
     if (newCodeSize > static_cast<std::uint64_t>(codeSize) * 2 + kFixedOverhead) {
         if (logger_)
             logger_->logWarning("shadow rewrite produced an implausible body size (" +
                                 std::to_string(newCodeSize) + " from " + std::to_string(codeSize) +
-                                ") — skipping method");
+                                "); skipping method");
         return false;
     }
 
@@ -376,10 +372,10 @@ void ShadowStackInstrumenter::onModuleLoaded(ModuleID moduleId) {
     if (FAILED(info_->GetModuleMetaData(moduleId, ofRead, IID_IMetaDataImport, (IUnknown**)&md)) || md == nullptr)
         return;
 
-    // Enumerate every method defined in this module and request a ReJIT for each. The rewritten
-    // IL is supplied later from getReJITParameters (called by the runtime before first use, and
-    // used for inlined bodies too — so we can leave inlining ON). EnumMethods needs a concrete
-    // typedef, so walk all type defs first (plus the module's <Module> global-methods pseudo-type).
+    // Enumerate every method in this module and request a ReJIT for each. The rewritten IL is supplied
+    // later from getReJITParameters (called before first use, and used for inlined bodies too, so we can
+    // leave inlining ON). EnumMethods needs a concrete typedef, so walk all type defs (plus the module's
+    // <Module> global-methods pseudo-type).
     std::vector<ModuleID> reMods;
     std::vector<mdMethodDef> reToks;
 
@@ -424,13 +420,12 @@ void ShadowStackInstrumenter::onModuleLoaded(ModuleID moduleId) {
 
 HRESULT ShadowStackInstrumenter::getReJITParameters(ModuleID moduleId, mdMethodDef methodToken,
                                                     ICorProfilerFunctionControl* control) {
-    // Circuit breaker: once latched off (too many prior ReJITErrors), never rewrite again — leave the
-    // original IL so the process runs unmodified.
+    // Circuit breaker: once latched off (too many prior ReJITErrors), never rewrite again.
     if (disabled_.load(std::memory_order_relaxed)) { skipped_++; return S_OK; }
 
     // Resolve the FunctionID so buildIL can bake it into the push. GetFunctionFromToken gives the
-    // canonical (non-generic) FunctionID; generic instantiations share this body's IL, which is
-    // fine — the shadow frame just identifies the method, resolved to a name at dump time.
+    // canonical (non-generic) FunctionID; generic instantiations share this body's IL, which is fine:
+    // the shadow frame just identifies the method, resolved to a name at dump time.
     FunctionID functionId = 0;
     if (FAILED(info_->GetFunctionFromToken(moduleId, methodToken, &functionId)))
         functionId = 0; // still emit; a 0 frame resolves to <unknown> but keeps depth correct
@@ -445,15 +440,15 @@ HRESULT ShadowStackInstrumenter::getReJITParameters(ModuleID moduleId, mdMethodD
 }
 
 void ShadowStackInstrumenter::noteReJITError() {
-    // The runtime rejected one of our rewritten bodies. A handful can happen on exotic IL we mis-handled;
+    // The runtime rejected one of our rewritten bodies. A handful happen on exotic IL we mis-handled;
     // a flood means our rewriting is systematically wrong for this app, so latch off to protect the
-    // process rather than keep feeding the JIT bad IL. Already-instrumented methods stay instrumented
-    // (they compiled fine); we only stop rewriting further ones.
+    // process. Already-instrumented methods stay instrumented (they compiled fine); we only stop
+    // rewriting further ones.
     std::uint64_t n = rejitErrors_.fetch_add(1, std::memory_order_relaxed) + 1;
     if (n >= kMaxReJITErrors && !disabled_.exchange(true, std::memory_order_relaxed)) {
         if (logger_)
             logger_->logError("shadow-stack instrumentation disabled after " + std::to_string(n) +
-                              " ReJIT errors — leaving remaining methods un-instrumented");
+                              " ReJIT errors; leaving remaining methods un-instrumented");
     }
 }
 

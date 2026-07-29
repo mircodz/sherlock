@@ -40,7 +40,7 @@ public sealed class DiffReplCommand : IReplCommand
                 return (Index(a.GetHistogram()), Index(b.GetHistogram()));
             });
 
-        // Per-type deltas across the union of types in both snapshots.
+        // Per-type deltas over the union of types in both snapshots.
         var rows = new List<(string Type, long DCount, long DBytes, bool IsNew)>();
         foreach (string type in baseline.Keys.Union(target.Keys))
         {

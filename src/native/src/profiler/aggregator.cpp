@@ -17,14 +17,10 @@ namespace Sherlock {
 
 namespace {
 
-// One shard pointer per thread, tagged with its owning Aggregator's unique id.
-// Production has a single Aggregator per process, so after the first allocation on a
-// thread this is a single compare+branch on the hot path. The tag exists so a *new*
-// Aggregator on the same thread (tests, or any re-init) allocates a fresh shard instead
-// of reusing the previous aggregator's — whose shards were freed in its destructor,
-// which would otherwise be a use-after-free. We key on a monotonic instance id rather
-// than the `this` pointer because a stack-allocated Aggregator can be reborn at the same
-// address a just-destroyed one occupied, aliasing the pointer.
+// One shard pointer per thread, tagged with its owning Aggregator's id. The tag lets a new
+// Aggregator on the same thread allocate a fresh shard instead of reusing the previous one's
+// (freed in its destructor: use-after-free). Keyed on a monotonic id, not `this`, because a
+// stack-allocated Aggregator can be reborn at a just-destroyed one's address.
 struct ThreadShard {
     std::uint64_t ownerId = 0;
     Aggregator::Shard* shard = nullptr;
@@ -33,7 +29,7 @@ thread_local ThreadShard t_shard;
 
 std::atomic<std::uint64_t> g_nextAggregatorId{1};
 
-// FNV-1a over the frame ids - cheap and good enough to key distinct stacks.
+// FNV-1a over the frame ids.
 std::uint64_t hashFrames(std::span<const FunctionID> frames) {
     std::uint64_t h = 1469598103934665603ull;
     for (FunctionID f : frames) {
@@ -43,9 +39,9 @@ std::uint64_t hashFrames(std::span<const FunctionID> frames) {
     return h;
 }
 
-/// Narrows a UTF-16 metadata string to ASCII (type/method names are effectively
-/// ASCII); non-ASCII code units become '?'. Portable across the WCHAR/wchar_t
-/// difference between Windows and the Unix PAL.
+/// Narrows a UTF-16 metadata string to ASCII (type/method names are ASCII); non-ASCII
+/// code units become '?'. Portable across the WCHAR/wchar_t difference between Windows
+/// and the Unix PAL.
 std::string narrow(const WCHAR* s, ULONG len) {
     std::string out;
     out.reserve(len);
@@ -67,9 +63,8 @@ Aggregator::~Aggregator() {
         delete shards_[i];
 }
 
-// Reserve the per-thread shard structures up front so the hot path never pays for a
-// map rehash or a pending-vector realloc mid-allocation - bounded latency on the
-// allocating thread. `pending` is clear()ed (not freed) each GC, so it keeps capacity.
+// Reserve the per-thread shard structures up front so the hot path never pays for a map rehash
+// or a pending realloc mid-allocation. `pending` is clear()ed (not freed) each GC, keeping capacity.
 namespace {
 constexpr std::size_t kSitesReserve = 4096;    // distinct allocation stacks per thread
 constexpr std::size_t kPendingReserve = 2048;  // sampled objects awaiting their first GC
@@ -83,15 +78,15 @@ Aggregator::Shard& Aggregator::localShard() {
         int idx = shardCount_.fetch_add(1, std::memory_order_acq_rel);
         if (idx < kMaxShards)
             shards_[idx] = shard;       // registered; GC sweep & dump will see it
-        // else: too many threads - shard still works locally, just isn't dumped.
+        // else: too many threads, shard still works locally but isn't dumped.
         t_shard = {instanceId_, shard};
     }
     return *t_shard.shard;
 }
 
 void Aggregator::record(std::span<const FunctionID> frames, std::uint64_t bytes, ObjectID addr, ClassID classId) {
-    // Key by (stack, type): mix the classId into the stack hash so the same call site allocating
-    // two types lands in two sites. A key collision across distinct pairs would only merge counts.
+    // Key by (stack, type): mix classId into the stack hash so one call site allocating two types
+    // lands in two sites. A key collision across distinct pairs would only merge counts.
     std::uint64_t key = hashFrames(frames);
     key = (key ^ static_cast<std::uint64_t>(classId)) * 1099511628211ull;
     Shard& shard = localShard();
@@ -100,7 +95,7 @@ void Aggregator::record(std::span<const FunctionID> frames, std::uint64_t bytes,
     Site* site;
     if (it == shard.sites.end()) {
         Site fresh;
-        fresh.frames.assign(frames.begin(), frames.end()); // copy the view into the stored site
+        fresh.frames.assign(frames.begin(), frames.end());
         fresh.classId = classId;
         site = &shard.sites.emplace(key, std::move(fresh)).first->second;
     } else {
@@ -137,8 +132,8 @@ void Aggregator::noteSurvivorRange(ObjectID start, std::uint64_t length) {
 }
 
 void Aggregator::noteMove(ObjectID oldStart, ObjectID newStart, std::uint64_t length) {
-    // The old range is also a survivor span (for the liveness test); the old->new
-    // delta additionally lets us follow the object's identity to its new address.
+    // The old range is also a survivor span (for the liveness test); the old->new delta lets us
+    // follow the object's identity to its new address.
     std::lock_guard<std::mutex> lock(noteMutex_);
     survivorRanges_.emplace_back(static_cast<std::uint64_t>(oldStart),
                                  static_cast<std::uint64_t>(oldStart) + length);
@@ -164,9 +159,8 @@ bool Aggregator::inLargeObjectHeap(ObjectID addr) const {
 }
 
 void Aggregator::endGc() {
-    // Sort the range vectors (required by inSortedRanges / ForwardCursor). The runtime tends to report
-    // these already in address order, and on a full GC R scales with the surviving population, so guard
-    // each sort behind an is_sorted check — O(R) when already ordered, O(R log R) only when not.
+    // Sort the range vectors (required by inSortedRanges / ForwardCursor). The runtime tends to
+    // report these already in address order, so guard each sort behind an is_sorted check.
     if (!std::is_sorted(survivorRanges_.begin(), survivorRanges_.end()))
         std::sort(survivorRanges_.begin(), survivorRanges_.end());
     if (!std::is_sorted(condemnedRanges_.begin(), condemnedRanges_.end()))
@@ -179,9 +173,9 @@ void Aggregator::endGc() {
                   [](const intervals::MoveRange& a, const intervals::MoveRange& b) { return a.oldStart < b.oldStart; });
 
     // Fold per-site survived-stats and collect this GC's fresh survivors. An object survives if it's
-    // in a survivor span, OR it's on the LOH/POH but uncondemned — an ephemeral GC never reports
-    // large-object survivors, yet they're alive (not examined). Without this, large objects would be
-    // dropped from `pending` at the first ephemeral GC. (Binary searches: `pending` is unsorted.)
+    // in a survivor span, OR it's on the LOH/POH but uncondemned: an ephemeral GC never reports large-
+    // object survivors, yet they're alive (not examined). Without this, large objects would be dropped
+    // from `pending` at the first ephemeral GC.
     if (correlate_)
         newSurvivors_.clear();
     int n = shardCount_.load(std::memory_order_acquire);
@@ -202,10 +196,10 @@ void Aggregator::endGc() {
     }
 
     if (correlate_) {
-        // `live_` is sorted by address and grows monotonically, so touching all of it every GC makes
-        // frequent gen-0 GCs progressively slower. Instead sweep only the contiguous address window
-        // this GC could have changed — everything outside is carried verbatim and left in place, so
-        // work is O(touched). A full GC condemns the whole heap → window = whole vector.
+        // live_ is sorted by address and grows monotonically, so touching all of it every GC makes
+        // frequent gen-0 GCs progressively slower. Sweep only the contiguous address window this GC
+        // could have changed; everything outside is carried verbatim. A full GC condemns the whole
+        // heap, so window = whole vector.
         auto byAddr = [](const LiveEntry& a, const LiveEntry& b) { return a.addr < b.addr; };
         std::sort(newSurvivors_.begin(), newSurvivors_.end(), byAddr);
 
@@ -218,14 +212,14 @@ void Aggregator::endGc() {
             windowStart = condemnedRanges_.front().first;
             windowEnd = condemnedRanges_.back().second;
             // A relocated entry (move target) or fresh survivor must fall inside the window, else the
-            // splice would misorder it — fold both into the bounds.
+            // splice would misorder it; fold both into the bounds.
             for (const intervals::MoveRange& m : moves_) {
                 windowStart = std::min(windowStart, m.newStart);
                 windowEnd = std::max(windowEnd, m.newStart + m.length);
             }
             if (!newSurvivors_.empty()) {
-                windowStart = std::min(windowStart, newSurvivors_.front().addr);
-                windowEnd = std::max(windowEnd, newSurvivors_.back().addr + 1);
+                windowStart = std::min(windowStart, static_cast<std::uint64_t>(newSurvivors_.front().addr));
+                windowEnd = std::max(windowEnd, static_cast<std::uint64_t>(newSurvivors_.back().addr) + 1);
             }
         }
 
@@ -240,7 +234,7 @@ void Aggregator::endGc() {
         // (a) Sweep live_[lo, hi) into windowScratch_: carry uncondemned survivors verbatim, remap
         // collected survivors, drop the dead. Compaction preserves order within a heap, so the output
         // is K ascending runs (K = interleaving GC heaps; 1 for Workstation GC). A run boundary is
-        // where an emitted address drops — recorded free, so we k-way merge instead of re-sorting.
+        // where an emitted address drops, recorded free, so we k-way merge instead of re-sorting.
         intervals::ForwardCursor cursor(survivorRanges_, moves_, condemnedRanges_);
         windowScratch_.clear();
         windowScratch_.reserve((hi - lo) + newSurvivors_.size());
@@ -266,7 +260,7 @@ void Aggregator::endGc() {
         }
 
         // (b) Merge the K swept runs (plus newSurvivors_) into sorted order. One run and no fresh
-        // survivors → already sorted, skip the merge (the Workstation-GC fast path).
+        // survivors: already sorted, skip the merge (the Workstation-GC fast path).
         std::vector<LiveEntry>* merged;
         std::size_t nRuns = runStarts_.size();
         if (nRuns <= 1 && newSurvivors_.empty()) {
@@ -285,7 +279,7 @@ void Aggregator::endGc() {
 
             mergeOut_.clear();
             mergeOut_.reserve(windowScratch_.size() + newSurvivors_.size());
-            // K is tiny (heaps ≈ cores, plus one). A flat min-scan over the run heads beats a heap's
+            // K is tiny (heaps ~ cores, plus one). A flat min-scan over the run heads beats a heap's
             // cache misses at this K. Ties resolve to the lower-indexed run so a carried survivor wins
             // over a colliding fresh one (swept runs precede newSurvivors_); dedup below drops the loser.
             for (;;) {
@@ -304,8 +298,8 @@ void Aggregator::endGc() {
             merged = &mergeOut_;
         }
 
-        // Drop duplicate addresses (a fresh survivor colliding with a carried one — shouldn't happen
-        // for distinct live objects, but keep the first/carried identity if it does).
+        // Drop duplicate addresses (a fresh survivor colliding with a carried one; keep the carried
+        // identity if it happens).
         merged->erase(
             std::unique(merged->begin(), merged->end(),
                         [](const LiveEntry& a, const LiveEntry& b) { return a.addr == b.addr; }),
@@ -327,8 +321,8 @@ void Aggregator::endGc() {
 }
 
 void Aggregator::countPendingAsSurvived() {
-    // At shutdown, anything still pending was never collected - i.e. still alive. Append the newly
-    // discovered live objects and re-sort once (this is a cold, one-shot path).
+    // At shutdown, anything still pending was never collected, i.e. still alive. Append the newly
+    // discovered live objects and re-sort once (cold, one-shot path).
     std::size_t appended = 0;
     int n = shardCount_.load(std::memory_order_acquire);
     for (int i = 0; i < n && i < kMaxShards; ++i) {
@@ -404,7 +398,7 @@ void Aggregator::emitCorrelation(const std::string& path) {
     writeProfile(pw, merged);
 
     // Each live object's address -> its allocation stack id (intern each site once). live_ is kept
-    // sorted by address, so this emits an already-sorted object column — the .slab join to the heap
+    // sorted by address, so this emits an already-sorted object column: the .slab join to the heap
     // dump is then a linear merge-join on address, no read-time sort.
     std::unordered_map<const Site*, std::uint32_t> siteStack;
     for (const LiveEntry& lv : live_) {
@@ -445,7 +439,7 @@ bool Aggregator::writeSlab(const std::string& path, storage::ProvenanceWriter& p
             logger_->logError("could not open profile output: " + path);
         return false;
     }
-    // Stream straight to the file — never materialize the whole container in RAM (the correlation
+    // Stream straight to the file, never materialize the whole container in RAM (the correlation
     // column alone can be gigabytes on a large heap).
     return cw.writeTo(out);
 }

@@ -7,9 +7,9 @@ using Microsoft.Diagnostics.Runtime;
 namespace Sherlock.Core.Analysis;
 
 /// <summary>
-/// Finds delegates whose invocation list has grown large - the classic event-handler leak, where a
-/// long-lived publisher keeps every subscriber alive because they never unsubscribed (<c>-=</c>).
-/// The subscriber (a delegate's <c>_target</c>) can't be collected while the event holds it.
+/// Finds delegates whose invocation list has grown large, the classic event-handler leak: a
+/// long-lived publisher pins every subscriber that never unsubscribed (<c>-=</c>), because the
+/// event holds each delegate's <c>_target</c>.
 /// </summary>
 public sealed class EventHandlerAnalyzer(DumpSession session)
 {
@@ -37,8 +37,8 @@ public sealed class EventHandlerAnalyzer(DumpSession session)
                 continue;
             }
 
-            // The array is often over-allocated with trailing nulls, so count real handlers and
-            // tally their target types (the subscriber instances the event pins alive).
+            // The array is often over-allocated with trailing nulls; count real handlers and
+            // tally their target types (the instances the event pins alive).
             var targets = new Dictionary<string, int>(StringComparer.Ordinal);
             int subscribers = 0;
             for (int i = 0; i < invocation.Length; i++)

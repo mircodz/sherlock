@@ -4,7 +4,7 @@ using Sherlock.Core.HeapModel;
 namespace Sherlock.Core.Tests.HeapModel;
 
 /// <summary>
-/// Exercises <see cref="AddressIndex"/> — the two-level bucket index that resolves an object address to
+/// Exercises <see cref="AddressIndex"/>, the two-level bucket index that resolves an object address to
 /// its dense id. It replaces a plain binary search over hundreds of millions of addresses, so a
 /// boundary/off-by-one bug here silently mis-resolves reference targets during graph extraction.
 /// </summary>

@@ -5,9 +5,9 @@ using Sherlock.Core.Storage;
 namespace Sherlock.Core.Profiling;
 
 /// <summary>
-/// One allocation call stack and what it allocated. <see cref="Frames"/> runs
-/// root -> leaf (the allocating method last). <see cref="SurvivedBytes"/>/
-/// <see cref="SurvivedCount"/> are the subset that outlived their first GC.
+/// One allocation call stack and what it allocated. <see cref="Frames"/> runs root -> leaf (the
+/// allocating method last). <see cref="SurvivedBytes"/>/<see cref="SurvivedCount"/> are the subset
+/// that outlived their first GC.
 /// </summary>
 public sealed record AllocationSite(
     IReadOnlyList<string> Frames,
@@ -21,9 +21,9 @@ public sealed record AllocationSite(
     public string Method => Frames.Count > 0 ? Frames[^1] : "<no managed frame>";
 }
 
-/// <summary>What one allocated type accounts for across a profile: churn (allocated) and what stuck
-/// (survived), plus how many distinct call sites produce it. A type from a single site is easy to
-/// reason about; a survivor type from one hot site is a leak's smoking gun.</summary>
+/// <summary>What one allocated type accounts for across a profile: churn (allocated), what stuck
+/// (survived), and how many distinct call sites produce it. A survivor type from one hot site is a
+/// leak's smoking gun.</summary>
 public sealed record AllocationTypeStat(
     string TypeName, long AllocBytes, long AllocCount, long SurvivedBytes, int SiteCount);
 
@@ -45,14 +45,13 @@ public sealed record AllocationProfile(IReadOnlyList<AllocationSite> Sites)
             .OrderByDescending(t => t.AllocBytes)
             .ToList();
 
-    /// <summary>The subset of the profile that allocated <paramref name="typeName"/> — feed it to
+    /// <summary>The subset of the profile that allocated <paramref name="typeName"/>. Feed it to
     /// <see cref="AllocationTreeNode.Build"/> for that type's allocation call tree.</summary>
     public AllocationProfile OfType(string typeName) =>
         new(Sites.Where(s => s.TypeName == typeName).ToList());
 
-    /// <summary>The subset of sites whose call stack passes through <paramref name="method"/> — its
-    /// inclusive allocation. <c>.ByType()</c> on this is what a method allocates, by type; the total
-    /// is its inclusive bytes.</summary>
+    /// <summary>The subset of sites whose call stack passes through <paramref name="method"/>, its
+    /// inclusive allocation. <c>.ByType()</c> on this is what a method allocates, by type.</summary>
     public AllocationProfile Through(string method) =>
         new(Sites.Where(s => s.Frames.Contains(method)).ToList());
 }

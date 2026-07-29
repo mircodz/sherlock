@@ -43,9 +43,8 @@ public sealed class StackTable
         _frameCache = new string?[FrameCount];
     }
 
-    /// <summary>Reads the stack table from a <see cref="SlabFile"/>. The four sub-sections (strings pool,
-    /// frame/stack records, frame-id pool) are bounded by call-site cardinality (tens of thousands), so
-    /// they're small single-section blobs — no chunking needed here.</summary>
+    /// <summary>Reads the stack table from a <see cref="SlabFile"/>. The four sub-sections are bounded
+    /// by call-site cardinality (tens of thousands), so they're small single-section blobs.</summary>
     public static StackTable Read(SlabFile slab) =>
         new(slab.Blob(SectionType.Strings),
             slab.Blob(SectionType.Frames),

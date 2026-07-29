@@ -47,10 +47,8 @@ public sealed class ObjectInspector(DumpSession session)
             Fields: fields);
     }
 
-    /// <summary>
-    /// If <paramref name="obj"/> is an array or a supported collection, returns its
-    /// logical length and a capped, formatted preview of its elements. Otherwise null.
-    /// </summary>
+    /// <summary>For an array or supported collection, returns its logical length and a
+    /// capped element preview. Otherwise null.</summary>
     private static int? TryEnumerate(ClrObject obj, ClrType type, out IReadOnlyList<string> elements)
     {
         elements = [];
@@ -118,7 +116,7 @@ public sealed class ObjectInspector(DumpSession session)
                     ClrValueType value = array.GetStructValue(index);
                     return $"{{{value.Type?.Name ?? componentType?.Name ?? "struct"}}}";
 
-                default: // String, Class, Object, Array, SZArray — reference elements.
+                default: // String, Class, Object, Array, SZArray: reference elements.
                     return FormatReference(array.GetObjectValue(index));
             }
         }

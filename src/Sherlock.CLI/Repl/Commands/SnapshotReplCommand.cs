@@ -31,9 +31,8 @@ public sealed class SnapshotReplCommand : IReplCommand
         }
         else
         {
-            // No pid: pick from the live .NET processes across all runs. Prefer a single app
-            // *child* (the target under a launcher like `dotnet run`); fall back to the single
-            // live process; otherwise the target is ambiguous, so make the user choose.
+            // No pid: pick from live .NET processes. Prefer the single app child (target under a
+            // launcher like `dotnet run`), else the single live process, else make the user choose.
             List<SupervisedProcess> live = context.Workspace.Targets
                 .SelectMany(t => t.List())
                 .Where(p => p.IsDotnet)

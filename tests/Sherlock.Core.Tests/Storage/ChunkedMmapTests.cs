@@ -6,11 +6,10 @@ using Sherlock.Core.Tests.Common;
 namespace Sherlock.Core.Tests.Storage;
 
 /// <summary>
-/// Verifies <see cref="ChunkedMmap"/> reads correctly across chunk boundaries — the primitive that
+/// Verifies <see cref="ChunkedMmap"/> reads correctly across chunk boundaries, the primitive that
 /// lets containers exceed the 2&nbsp;GiB single-mmap-view cap. Boundary math is off-by-one-prone, so
-/// these exercise reads that start in one chunk and end in another (using a tiny synthetic chunk size
-/// isn't possible since ChunkSize is a const, so we validate the arithmetic on sub-chunk files plus a
-/// straddling read against a known pattern).
+/// these exercise reads that start in one chunk and end in another. ChunkSize is a const, so we
+/// validate the arithmetic on sub-chunk files plus a straddling read against a known pattern.
 /// </summary>
 public sealed class ChunkedMmapTests : IDisposable
 {

@@ -6,9 +6,8 @@ using Sherlock.Core.Tests.Common;
 namespace Sherlock.Core.Tests.HeapModel;
 
 /// <summary>
-/// Round-trips the derived dominator-tree cache and asserts the validity key rejects a stale cache
-/// (one computed from a different graph). Guards the persisted derived cache — a silent mismatch here
-/// would serve wrong retained sizes.
+/// Round-trips the derived dominator-tree cache and asserts the validity key rejects a stale cache.
+/// A silent mismatch here would serve wrong retained sizes.
 /// </summary>
 public sealed class DominatorTreeStoreTests : IDisposable
 {
@@ -19,7 +18,7 @@ public sealed class DominatorTreeStoreTests : IDisposable
 
     public void Dispose() => _tmp.Dispose();
 
-    // A simple diamond graph: root->A; A->B,C; B->D; C->D.
+    // A diamond graph: root->A; A->B,C; B->D; C->D.
     private static HeapGraph DiamondGraph()
     {
         ulong[] addresses = [0x1000, 0x2000, 0x3000, 0x4000];
@@ -33,10 +32,10 @@ public sealed class DominatorTreeStoreTests : IDisposable
     public void RoundTrips_ResultIdenticalToCompute()
     {
         HeapGraph g = DiamondGraph();
-        DominatorAnalyzerV2.DominatorResult computed = DominatorAnalyzerV2.Compute(g);
+        DominatorAnalyzer.DominatorResult computed = DominatorAnalyzer.Compute(g);
 
         DominatorTreeStore.Save(_path, computed, g.ContentHash);
-        DominatorAnalyzerV2.DominatorResult? loaded = DominatorTreeStore.Load(_path, g);
+        DominatorAnalyzer.DominatorResult? loaded = DominatorTreeStore.Load(_path, g);
 
         Assert.NotNull(loaded);
         Assert.Equal(computed.Address, loaded!.Value.Address);
@@ -50,19 +49,19 @@ public sealed class DominatorTreeStoreTests : IDisposable
     public void Load_RejectsMismatchedGraphHash()
     {
         HeapGraph g = DiamondGraph();
-        DominatorTreeStore.Save(_path, DominatorAnalyzerV2.Compute(g), g.ContentHash ^ 0xDEADBEEF);
+        DominatorTreeStore.Save(_path, DominatorAnalyzer.Compute(g), g.ContentHash ^ 0xDEADBEEF);
 
-        // The stored key differs from the graph's actual hash → cache is invalid → null → recompute.
+        // Stored key differs from the graph's actual hash, so the cache is invalid and Load returns null.
         Assert.Null(DominatorTreeStore.Load(_path, g));
     }
 
     [Fact]
     public void ContentHash_IsStableAndStructureSensitive()
     {
-        // Same structure → same hash (deterministic, not per-process randomized).
+        // Same structure, same hash (deterministic, not per-process randomized).
         Assert.Equal(DiamondGraph().ContentHash, DiamondGraph().ContentHash);
 
-        // A changed edge → different hash.
+        // A changed edge, different hash.
         ulong[] addresses = [0x1000, 0x2000, 0x3000, 0x4000];
         uint[] sizes = [10, 20, 30, 40];
         int[] offsets = [0, 2, 3, 4, 4, 5];

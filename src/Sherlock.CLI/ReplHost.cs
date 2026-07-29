@@ -12,10 +12,7 @@ internal static class ReplHost
     /// <summary>Creates a workspace over the default snapshot store.</summary>
     public static Workspace CreateWorkspace() => new(SnapshotStore.Default());
 
-    /// <summary>
-    /// Opens a dump as a transient current snapshot and runs the interactive REPL.
-    /// Used by <c>collect --analyze</c> and <c>run ... snapshot --analyze</c>.
-    /// </summary>
+    /// <summary>Opens a dump as a transient current snapshot and runs the interactive REPL.</summary>
     public static int OpenAndRun(IAnsiConsole console, string dumpPath)
     {
         using Workspace workspace = CreateWorkspace();

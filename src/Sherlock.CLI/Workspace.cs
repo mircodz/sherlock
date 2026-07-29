@@ -107,8 +107,8 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
 
             foreach ((int firingPid, string probe) in signals)
             {
-                // Coherently capture the process that fired (a child under `dotnet run`, not the
-                // launcher), so a triggered snapshot carries provenance too. Don't auto-load it.
+                // Capture the process that fired (a child under `dotnet run`, not the
+                // launcher), so a triggered snapshot carries provenance. Don't auto-load it.
                 SnapshotEntry entry = Capture(firingPid, load: false, reason: probe).Entry;
                 (captured ??= []).Add((entry, probe));
             }
@@ -147,7 +147,7 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
 
     /// <summary>
     /// Coherently snapshots a live process: for a profiled/correlated target it forces a GC and
-    /// captures the allocation state at the same instant as the dump, bundling it into the snapshot.
+    /// captures allocation state at the same instant as the dump, bundling it into the snapshot.
     /// </summary>
     public CaptureResult Capture(int pid, bool load = true, string? reason = null)
     {
@@ -160,7 +160,7 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
         {
             if (correlated)
             {
-                // A unified provenance.slab (allocations + correlation) at this instant.
+                // Unified provenance.slab (allocations + correlation) at this instant.
                 (provenance, gcAtEmit) = target.RequestCorrelationSnapshot(pid, CaptureTimeout);
             }
             else
@@ -174,8 +174,8 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
         ProvenanceState state = ProvenanceState.None;
         if (entry.HasCorrelation)
         {
-            // Drift: a GC between the emit and the external dump moves objects and stales the
-            // address join. We can detect it (via the GC count) but not prevent it.
+            // A GC between the emit and the external dump moves objects and stales the address
+            // join. We can detect it (via the GC count) but not prevent it.
             bool drifted = gcAtEmit >= 0 && target!.GcCount(pid, DriftTimeout) is long now && now >= 0 && now != gcAtEmit;
             state = drifted ? ProvenanceState.Drifted : ProvenanceState.Exact;
         }
@@ -236,7 +236,7 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
         Current?.Dispose();
         foreach (ProcessSupervisor target in _targets)
         {
-            target.Dispose(); // leaves the processes running; just releases handles
+            target.Dispose(); // leaves processes running; just releases handles
         }
     }
 }

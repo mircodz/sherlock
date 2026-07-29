@@ -8,26 +8,26 @@ using Sherlock.Core.Storage;
 namespace Sherlock.Core.HeapModel;
 
 /// <summary>
-/// Round-trips a <see cref="HeapGraph"/> to a self-describing <c>.slab</c> container: the columns are
+/// Round-trips a <see cref="HeapGraph"/> to a self-describing <c>.slab</c> container: columns are
 /// written as zero-copy POD sections and read back as zero-copy views into the memory-mapped file, so a
 /// persisted graph reloads without re-walking the dump and without materializing every column into a
 /// heap array (which would double peak memory). The reloaded graph owns the mapping and frees it on
-/// dispose. The optional type columns (per-object type id + the name table) are written when present,
-/// and absent-on-load simply yields a graph with no types (callers fall back to ClrMD).
+/// dispose. The optional type columns (per-object type id + name table) are written when present, and
+/// absent-on-load yields a graph with no types (callers fall back to ClrMD).
 ///
 /// The edge column is written as one <see cref="SectionType.GraphEdgesChunk"/> section per
 /// <see cref="EdgeColumn"/> chunk (plus a <see cref="SectionType.GraphEdgeChunkMeta"/> chunk-start
-/// table), and the whole file is streamed — so a graph whose edges exceed the ~2.1B single-array /
-/// single-section ceiling round-trips without ever concatenating them. CSR offsets are <c>long</c>.
+/// table), and the file is streamed, so a graph whose edges exceed the ~2.1B single-array / single-section
+/// ceiling round-trips without ever concatenating them. CSR offsets are <c>long</c>.
 /// </summary>
 public static class HeapGraphStore
 {
     // Bump when the section set or layout changes. Load rejects any slab whose core section carries a
-    // different version, so an out-of-date sidecar is transparently rebuilt rather than read partially.
-    // v2: added the TypeIds/TypeNames columns and the GraphMeta (free-space) section.
+    // different version, so a stale sidecar is rebuilt rather than read partially.
+    // v2: added TypeIds/TypeNames columns and the GraphMeta (free-space) section.
     // v3: long CSR offsets + chunked edge column (GraphEdgesChunk / GraphEdgeChunkMeta).
-    // v4: per-object columns (addresses/sizes/offsets/typeids) written chunked so a >268M-object graph
-    //     no longer overflows the writer's int-length span or the reader's per-section cap.
+    // v4: per-object columns chunked so a >268M-object graph no longer overflows the writer's int-length
+    //     span or the reader's per-section cap.
     private const ushort Version = 4;
 
     public static void Save(string path, HeapGraph graph)
@@ -61,21 +61,21 @@ public static class HeapGraphStore
     }
 
     /// <summary>Loads a graph from <paramref name="path"/>, or null if the file is missing a core section
-    /// (a format mismatch — the caller should rebuild). Type columns are optional.
+    /// (format mismatch; the caller should rebuild). Type columns are optional.
     ///
-    /// The per-object columns are chunked on disk; here they're materialized into dense arrays (via
+    /// Per-object columns are chunked on disk and materialized here into dense arrays (via
     /// <see cref="Column{T}"/>) so <see cref="HeapGraph"/> and the analyzers keep their contiguous
-    /// <see cref="ReadOnlyMemory{T}"/> view and the dominator hot loops stay raw-span indexed — no
-    /// out-of-core indirection. The edge column stays memory-mapped (chunked, not materialized), so the
-    /// returned graph owns the <see cref="SlabFile"/> and frees it on dispose. Materializing the small
-    /// per-object columns caps at ~2.1B objects (int array element count), far past any real dump.</summary>
+    /// <see cref="ReadOnlyMemory{T}"/> view and the dominator hot loops stay raw-span indexed. The edge
+    /// column stays memory-mapped (chunked, not materialized), so the returned graph owns the
+    /// <see cref="SlabFile"/> and frees it on dispose. Materializing the per-object columns caps at ~2.1B
+    /// objects (int array element count), far past any real dump.</summary>
     public static HeapGraph? Load(string path)
     {
         SlabFile slab = SlabFile.Open(path);
         try
         {
             // GraphOffsets (always ≥2 longs, incl. the synthetic root) and GraphEdgeChunkMeta are present
-            // for any valid graph — including an empty one, whose GraphAddresses/GraphSizes columns are
+            // for any valid graph, including an empty one, whose GraphAddresses/GraphSizes columns are
             // legitimately zero-length (and so emit no sections). Gate validity/version on GraphOffsets.
             if (!slab.Has(SectionType.GraphOffsets) || !slab.Has(SectionType.GraphEdgeChunkMeta))
             {
@@ -85,7 +85,7 @@ public static class HeapGraphStore
             if (slab.SectionVersion(SectionType.GraphOffsets) != Version)
             {
                 slab.Dispose();
-                return null; // stale format — caller rebuilds from the dump
+                return null; // stale format; caller rebuilds from the dump
             }
 
             ReadOnlyMemory<ulong> addresses = Materialize(slab.GetColumn<ulong>(SectionType.GraphAddresses));
@@ -139,7 +139,7 @@ public static class HeapGraphStore
         return arr;
     }
 
-    // [u32 count][ (u32 byteLen, utf8 bytes) x count ] — little-endian.
+    // [u32 count][ (u32 byteLen, utf8 bytes) x count ], little-endian.
     private static byte[] EncodeNames(string[] names)
     {
         var buffer = new List<byte>(names.Length * 24);

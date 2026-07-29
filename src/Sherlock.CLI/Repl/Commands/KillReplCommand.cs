@@ -8,10 +8,7 @@ using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
 
-/// <summary>
-/// Snapshots a run target, then kills its process tree. Pass <c>--no-snapshot</c>
-/// to just kill.
-/// </summary>
+/// <summary>Snapshots a run target, then kills its process tree. <c>--no-snapshot</c> to just kill.</summary>
 public sealed class KillReplCommand : IReplCommand
 {
     public string Name => "kill";

@@ -9,9 +9,8 @@ using Sherlock.Core.HeapModel;
 namespace Sherlock.Core;
 
 /// <summary>
-/// An open dump and its analysis facade. A dump is immutable, so expensive whole-heap
-/// results (dominator tree, type histogram) are computed once and cached for the session's
-/// lifetime; loading another snapshot creates a fresh session with a fresh cache.
+/// An open dump and its analysis facade. Dumps are immutable, so expensive whole-heap results
+/// (dominator tree, type histogram) are computed once and cached for the session's lifetime.
 /// </summary>
 public sealed class DumpSession : IDisposable
 {
@@ -29,34 +28,28 @@ public sealed class DumpSession : IDisposable
     public ClrRuntime Runtime { get; }
 
     private DominatorTree? _dominatorTree;
-    private DominatorTree? _dominatorTreeV2;
     private HeapGraphProvider? _heapGraph;
     private IReadOnlyList<HeapTypeStat>? _histogram;
 
-    /// <summary>The heap's dominator tree - built once, cached.</summary>
-    public DominatorTree GetDominatorTree(CancellationToken cancellationToken = default) =>
-        _dominatorTree ??= new DominatorAnalyzer(this).Build(cancellationToken);
-
-    /// <summary>The compact object graph (V2): extracted once by bypassing ClrMD's DAC and persisted
-    /// beside the dump, so reopening the snapshot skips extraction. Backs the V2 analyses.</summary>
+    /// <summary>The compact object graph, extracted once (bypassing ClrMD's DAC) and persisted beside
+    /// the dump so reopening skips extraction. Backs the graph analyses.</summary>
     public HeapModel.HeapGraph GetHeapGraph(CancellationToken cancellationToken = default) =>
         (_heapGraph ??= new HeapGraphProvider(this)).Get(cancellationToken);
 
-    /// <summary>The heap's dominator tree via the V2 graph pipeline - built once, cached. Same result
-    /// as <see cref="GetDominatorTree"/>; kept separate while V2 is opt-in.</summary>
-    public DominatorTree GetDominatorTreeV2(CancellationToken cancellationToken = default) =>
-        _dominatorTreeV2 ??= new DominatorAnalyzerV2(this).Build(cancellationToken);
+    /// <summary>The dominator tree over the persisted DAC-free heap graph, cached on disk beside the
+    /// dump so reopening skips the recompute.</summary>
+    public DominatorTree GetDominatorTree(CancellationToken cancellationToken = default) =>
+        _dominatorTree ??= new DominatorAnalyzer(this).Build(cancellationToken);
 
-    /// <summary>The full per-type heap histogram - built once, cached. Filter in-memory. Prefers the
-    /// V2 heap graph's type column (no ClrMD walk) when it's available; falls back to a ClrMD heap walk.</summary>
+    /// <summary>The full per-type heap histogram. Prefers the heap graph's type column (no ClrMD walk)
+    /// when available; falls back to a ClrMD heap walk.</summary>
     public IReadOnlyList<HeapTypeStat> GetHistogram() =>
         _histogram ??= BuildHistogram();
 
     private IReadOnlyList<HeapTypeStat> BuildHistogram()
     {
-        // If a heap graph already exists (built by dominators, or cached on disk beside the dump), its
-        // type column gives the histogram for free — no extra heap walk. Otherwise use ClrMD directly
-        // rather than pay the full graph extraction just for a histogram.
+        // An existing heap graph (from dominators, or cached on disk) gives the histogram for free via
+        // its type column. Otherwise use ClrMD directly rather than pay full graph extraction.
         HeapModel.HeapGraphProvider provider = _heapGraph ??= new HeapGraphProvider(this);
         if (provider.TryGetCachedOrOnDisk() is { } graph && graph.Histogram() is { } rows)
         {
@@ -71,9 +64,7 @@ public sealed class DumpSession : IDisposable
         return new HeapAnalyzer(this).GetStatistics();
     }
 
-    /// <summary>
-    /// Opens a dump file and attaches to the first CLR runtime it contains.
-    /// </summary>
+    /// <summary>Opens a dump file and attaches to the first CLR runtime it contains.</summary>
     /// <exception cref="FileNotFoundException">The dump file does not exist.</exception>
     /// <exception cref="DumpAnalysisException">No managed runtime could be found in the dump.</exception>
     public static DumpSession Open(string path)

@@ -7,8 +7,7 @@ using Spectre.Console;
 namespace Sherlock.CLI.Repl.Commands;
 
 /// <summary>
-/// Arms an event-driven snapshot trigger on a live target: when the event fires, sl
-/// captures a heap dump into the run's session. Events:
+/// Arms an event-driven snapshot trigger on a live target. Events:
 ///   call:Ns.Type.Method   a method is entered (ReJIT; non-inlined methods only)
 ///   alloc:Ns.Type         an instance of the type is allocated
 ///   gc[:gen2]             after a (generation-N) garbage collection
@@ -33,7 +32,7 @@ public sealed class SnapshotOnReplCommand : IReplCommand
 
         string spec = args[0];
 
-        // Arm on the most recent live run that has a control channel (trigger capability).
+        // Arm on the most recent live run with a control channel.
         ProcessSupervisor? target = context.Workspace.Targets
             .LastOrDefault(t => !t.RootExited && t.ProfilerFeatures.Contains("snapshot-triggers"));
         if (target is null)
@@ -44,7 +43,7 @@ public sealed class SnapshotOnReplCommand : IReplCommand
             return;
         }
 
-        int armPid = target.PrimaryPid; // arm on the app (the child under a launcher, if any)
+        int armPid = target.PrimaryPid; // the app (child under a launcher, if any)
         (bool ok, string detail) = context.Console.Status()
             .Start($"Arming snapshot-on {spec}…", _ => target.ArmSnapshotTrigger(armPid, spec, TimeSpan.FromSeconds(10)));
 

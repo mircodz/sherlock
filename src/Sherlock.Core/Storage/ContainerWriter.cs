@@ -11,8 +11,8 @@ namespace Sherlock.Core.Storage;
 public sealed class ContainerWriter
 {
     // A section's payload is a list of byte-chunks written back-to-back. Most sections have exactly one
-    // chunk; a huge column (the heap-graph edges) is added as many ≤~1 GB chunks so the whole file — and
-    // any single section — can exceed 2 GB without ever materializing as one array.
+    // chunk; a huge column (the heap-graph edges) is added as many ≤~1 GB chunks so the file, and any
+    // single section, can exceed 2 GB without ever materializing as one array.
     private readonly List<Sec> _sections = [];
 
     private readonly record struct Sec(SectionType Type, ushort Version, ushort RecordSize, ulong Count, IReadOnlyList<ReadOnlyMemory<byte>> Chunks, long Length);
@@ -29,7 +29,7 @@ public sealed class ContainerWriter
     /// <paramref name="chunkBytes"/> bytes and holding a uniform element count (last is short). Mirrors
     /// the native <c>addChunkedRecords</c> layout so <see cref="Column{T}"/> reassembles either side's
     /// output. A single section is capped near 2&nbsp;GB by the reader, so a per-object column (one record
-    /// per live object) must be split. Any sort must already be applied — chunking is a pure partition.</summary>
+    /// per live object) must be split. Any sort must already be applied; chunking is a pure partition.</summary>
     public void AddChunkedRecords<T>(SectionType type, ushort version, ReadOnlySpan<T> records,
                                      long chunkBytes = ContainerFormat.DefaultChunkBytes) where T : struct
     {
@@ -42,9 +42,9 @@ public sealed class ContainerWriter
         }
     }
 
-    /// <summary>Adds a section whose payload is supplied as several byte-chunks written contiguously —
-    /// so a section larger than <see cref="int.MaxValue"/> bytes can be emitted without concatenating
-    /// into one array. <paramref name="count"/> is the logical record count across all chunks.</summary>
+    /// <summary>Adds a section whose payload is supplied as several byte-chunks written contiguously, so
+    /// a section larger than <see cref="int.MaxValue"/> bytes can be emitted without concatenating into
+    /// one array. <paramref name="count"/> is the logical record count across all chunks.</summary>
     public void AddChunkedSection(SectionType type, ushort version, ushort recordSize, IReadOnlyList<ReadOnlyMemory<byte>> chunks, ulong count)
     {
         long length = 0;
@@ -93,7 +93,7 @@ public sealed class ContainerWriter
         }
     }
 
-    /// <summary>Streams the whole container to <paramref name="stream"/> — header, section table, then
+    /// <summary>Streams the whole container to <paramref name="stream"/>: header, section table, then
     /// each section's bytes at its aligned offset. Never holds more than one section-chunk in memory, so
     /// it works for multi-gigabyte containers.</summary>
     public void WriteTo(Stream stream)

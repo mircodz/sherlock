@@ -40,7 +40,7 @@ public sealed class SegmentsReplCommand : IReplCommand
 
         context.Console.Write(table);
 
-        // Roll up totals per kind.
+        // Totals per kind.
         var byKind = segments
             .GroupBy(s => s.Kind)
             .Select(g => (Kind: g.Key, Size: g.Aggregate(0UL, (acc, s) => acc + s.Length)))

@@ -7,7 +7,7 @@ namespace Sherlock.Core.Tests.HeapModel;
 
 /// <summary>
 /// Round-trips a <see cref="HeapGraph"/> through <see cref="HeapGraphStore"/> and asserts the reloaded
-/// graph is structurally identical. This guards the persisted <c>.slab</c> format: a silent encoding
+/// graph is structurally identical, guarding the persisted <c>.slab</c> format: a silent encoding
 /// bug here corrupts every graph analysis (dominators, retained sizes, gcroot).
 /// </summary>
 public sealed class HeapGraphStoreTests : IDisposable
@@ -69,10 +69,9 @@ public sealed class HeapGraphStoreTests : IDisposable
     [Fact]
     public void RoundTrips_MultiChunkEdges_SplitAndReassemble()
     {
-        // Force the edge column to split into several sections by building it with a tiny per-chunk
-        // budget, then round-trip through the store. This exercises the >2.1B-edge path (GraphEdgesChunk
-        // sections + chunk-start meta) at small scale: the reload must reassemble byte-identical
-        // successors and actually carry multiple chunks.
+        // Force the edge column to split into several chunks via a tiny per-chunk budget, then
+        // round-trip. Exercises the >2.1B-edge path (GraphEdgesChunk sections + chunk-start meta)
+        // at small scale: the reload must reassemble byte-identical successors and carry multiple chunks.
         ulong[] addresses = [0x1000, 0x2000, 0x3000, 0x4000];
         uint[] sizes = [16, 24, 24, 48];
         long[] offsets = [0, 2, 3, 4, 4, 5]; // same CSR as SampleGraph, as long
@@ -109,9 +108,9 @@ public sealed class HeapGraphStoreTests : IDisposable
     [Fact]
     public void LoadedGraph_IsMmapBacked_StaysValidUntilDisposed()
     {
-        // Load no longer copies columns into arrays — they're zero-copy views into the memory-mapped
-        // slab, kept alive by the graph. Reading them long after Load must still work, and Dispose must
-        // release the mapping without throwing (so a caller can delete the sidecar afterwards).
+        // Columns are zero-copy views into the memory-mapped slab, kept alive by the graph. Reading
+        // long after Load must still work, and Dispose must release the mapping so the caller can
+        // delete the sidecar afterwards.
         HeapGraphStore.Save(_path, SampleGraphWithTypes());
         HeapGraph loaded = HeapGraphStore.Load(_path)!;
 
@@ -121,7 +120,7 @@ public sealed class HeapGraphStoreTests : IDisposable
         Assert.Equal("System.String", loaded.TypeNameOf(0));
 
         loaded.Dispose();
-        File.Delete(_path); // the mapping is released, so the file is deletable
+        File.Delete(_path); // mapping released, so the file is deletable
         Assert.False(File.Exists(_path));
     }
 
@@ -175,7 +174,7 @@ public sealed class HeapGraphStoreTests : IDisposable
     [Fact]
     public void GraphWithoutTypes_LoadsWithoutTypes()
     {
-        // The core graph (no type column) round-trips with HasTypes == false — callers fall back to ClrMD.
+        // The core graph (no type column) round-trips with HasTypes == false; callers fall back to ClrMD.
         HeapGraphStore.Save(_path, SampleGraph());
         HeapGraph loaded = HeapGraphStore.Load(_path)!;
 
@@ -206,8 +205,8 @@ public sealed class HeapGraphStoreTests : IDisposable
     [Fact]
     public void FreeBytes_RoundTripAndSyntheticFreeRow()
     {
-        // A graph with types + free space: the histogram should carry a synthetic "Free" row and it
-        // must survive the save/load round-trip (the doctor's fragmentation check reads it).
+        // A graph with types + free space: the histogram carries a synthetic "Free" row that must
+        // survive the round-trip (the doctor's fragmentation check reads it).
         ulong[] addresses = [0x1000, 0x2000];
         uint[] sizes = [16, 24];
         int[] offsets = [0, 0, 0, 0];

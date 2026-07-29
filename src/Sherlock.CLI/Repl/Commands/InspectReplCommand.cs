@@ -4,11 +4,7 @@ using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
 
-/// <summary>
-/// Sweeps the snapshot through every inspector (retention, event-handler leaks, finalizers,
-/// duplicate strings, fragmentation, growth) and reports the obvious problems, each pointing at
-/// the command that drills in.
-/// </summary>
+/// <summary>Sweeps the snapshot through every inspector (retention, event-handler leaks, finalizers, duplicate strings, fragmentation, growth) and reports the obvious problems, each pointing at the command that drills in.</summary>
 public sealed class InspectReplCommand : IReplCommand
 {
     public string Name => "doctor";

@@ -10,8 +10,8 @@ namespace Sherlock.Core.Analysis;
 public sealed class HeapAnalyzer(DumpSession session)
 {
     /// <summary>
-    /// Groups every live object on the heap by type name, returning counts and
-    /// total sizes ordered by total size descending. Mirrors SOS <c>dumpheap -stat</c>.
+    /// Groups live objects by type name with counts and total sizes, ordered by total size descending.
+    /// Mirrors SOS <c>dumpheap -stat</c>.
     /// </summary>
     /// <param name="typeFilter">Optional case-insensitive substring filter on the type name.</param>
     public IReadOnlyList<HeapTypeStat> GetStatistics(string? typeFilter = null)
@@ -43,20 +43,16 @@ public sealed class HeapAnalyzer(DumpSession session)
     }
 
     /// <summary>
-    /// Lists individual object instances whose type name matches
-    /// <paramref name="typeFilter"/>, returning the <paramref name="limit"/>
-    /// largest by size (descending), along with totals over all matches.
+    /// Lists instances whose type name matches <paramref name="typeFilter"/>, returning the
+    /// <paramref name="limit"/> largest by size descending, plus totals over all matches.
     /// </summary>
-    /// <remarks>
-    /// Uses a bounded min-heap so memory stays O(limit) even when millions of
-    /// objects match (e.g. listing every <c>System.String</c>).
-    /// </remarks>
+    /// <remarks>Bounded min-heap keeps memory at O(limit) even when millions of objects match.</remarks>
     public InstanceListing ListInstances(string typeFilter, int limit = 20, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(typeFilter);
 
-        // Min-heap keyed by size: the smallest of the current top-K sits at the
-        // front, ready to be evicted when a larger instance arrives.
+        // Min-heap keyed by size: the smallest of the current top-K sits at the front, evicted when a
+        // larger instance arrives.
         var top = new PriorityQueue<ObjectInstance, ulong>(limit);
         long totalMatched = 0;
         ulong totalSize = 0;
@@ -95,7 +91,6 @@ public sealed class HeapAnalyzer(DumpSession session)
             }
         }
 
-        // Drain the heap and present largest-first.
         var instances = new List<ObjectInstance>(top.Count);
         while (top.Count > 0)
         {
@@ -108,8 +103,7 @@ public sealed class HeapAnalyzer(DumpSession session)
     }
 
     /// <summary>
-    /// Finds string values that occur more than once, ordered by wasted memory
-    /// Wasted = (count - 1) * size.
+    /// Finds string values occurring more than once, ordered by wasted memory: (count - 1) * size.
     /// </summary>
     public IReadOnlyList<DuplicateString> FindDuplicateStrings(int limit = 20, CancellationToken cancellationToken = default)
     {

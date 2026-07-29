@@ -6,8 +6,7 @@ namespace Sherlock.CLI.Repl;
 
 /// <summary>
 /// A minimal interactive line reader: inline editing plus Up/Down history recall.
-/// Falls back to <see cref="Console.ReadLine"/> when input is redirected (pipes,
-/// <c>--exec</c>) or if raw-mode key reading is unavailable.
+/// Falls back to <see cref="Console.ReadLine"/> when input is redirected or raw-mode is unavailable.
 /// </summary>
 public static class LineEditor
 {
@@ -29,7 +28,7 @@ public static class LineEditor
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException)
         {
-            // No real console (e.g. some CI shells) - degrade gracefully.
+            // No real console (e.g. some CI shells); degrade gracefully.
             Console.Write(prompt);
             return Console.ReadLine();
         }
@@ -209,12 +208,10 @@ public static class LineEditor
     /// <summary>Repaints the current line and positions the cursor (ANSI).</summary>
     private static void Render(string prompt, StringBuilder buffer, int pos)
     {
-        // Clear the whole line, return to column 0, draw prompt + buffer.
         Console.Write($"{Esc}[2K\r");
         Console.Write(prompt);
         Console.Write(buffer.ToString());
 
-        // Move the cursor to prompt + pos from column 0.
         Console.Write("\r");
         int target = prompt.Length + pos;
         if (target > 0)

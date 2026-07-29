@@ -13,7 +13,7 @@ public sealed class ExceptionAnalyzer(DumpSession session)
     {
         var byAddress = new Dictionary<ulong, ExceptionInfo>();
 
-        // Exceptions currently in flight on a thread are the most interesting.
+        // Exceptions in flight on a thread are the most interesting.
         foreach (ClrThread thread in session.Runtime.Threads)
         {
             ClrException? current = thread.CurrentException;
@@ -23,7 +23,7 @@ public sealed class ExceptionAnalyzer(DumpSession session)
             }
         }
 
-        // Plus any other exception objects still alive on the heap.
+        // Plus other exception objects still alive on the heap.
         foreach (ClrObject obj in session.Runtime.Heap.EnumerateObjects())
         {
             cancellationToken.ThrowIfCancellationRequested();

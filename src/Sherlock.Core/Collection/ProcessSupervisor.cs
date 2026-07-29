@@ -18,7 +18,7 @@ public sealed record HeapStats(long Total, long Gen0, long Gen1, long Gen2, long
 
 /// <summary>
 /// Launches a target process and tracks its descendant tree. Children are discovered from the OS
-/// process table (<c>ps</c>) and marked .NET (hence dumpable) via <see cref="DiagnosticsClient.GetPublishedProcesses"/>.
+/// process table (<c>ps</c>) and marked .NET (dumpable) via <see cref="DiagnosticsClient.GetPublishedProcesses"/>.
 /// </summary>
 public sealed class ProcessSupervisor : IDisposable
 {
@@ -70,9 +70,9 @@ public sealed class ProcessSupervisor : IDisposable
     public string? RootName { get; private set; }
 
     /// <summary>
-    /// The process to address for control requests when no specific pid is given: the single
-    /// live .NET child (the app under a launcher like <c>dotnet run</c>) if there is exactly one,
-    /// else the first live .NET process, else the root. Mirrors how <c>snapshot</c> picks a target.
+    /// The process to address for control requests when no pid is given: the single live .NET child
+    /// (the app under a launcher like <c>dotnet run</c>) if there's exactly one, else the first live
+    /// .NET process, else the root. Mirrors how <c>snapshot</c> picks a target.
     /// </summary>
     public int PrimaryPid
     {
@@ -135,8 +135,7 @@ public sealed class ProcessSupervisor : IDisposable
             psi.Environment["SHERLOCK_PROFILE_OUT"] = _profileTemplate;
 
             // The profiler maintains a per-thread call stack via IL instrumentation and reads its top in
-            // ObjectAllocated (O(1) per allocation), capturing every allocation's full stack without
-            // sampling — always on, no configuration.
+            // ObjectAllocated (O(1) per allocation), capturing every allocation's full stack. Always on.
 
             // Triggers pre-armed at launch (call:/alloc:/gc:/throw:); a hit arrives as a control event.
             if (!string.IsNullOrWhiteSpace(snapshotOn))
@@ -239,8 +238,8 @@ public sealed class ProcessSupervisor : IDisposable
     }
 
     /// <summary>
-    /// If the root process has exited and left a crash dump (and we haven't already
-    /// taken it), returns its path once. Otherwise null.
+    /// If the root process exited and left a crash dump (and we haven't already taken it), returns its
+    /// path once. Otherwise null.
     /// </summary>
     public string? TryPollRootCrashDump()
     {
@@ -249,13 +248,13 @@ public sealed class ProcessSupervisor : IDisposable
             return null;
         }
 
-        _crashPolled = true; // check exactly once after exit
+        _crashPolled = true;
         return _crashDumpPath is not null && File.Exists(_crashDumpPath) ? _crashDumpPath : null;
     }
 
     /// <summary>
     /// The exited root's allocation profile (keyed by pid), or with <c>--children</c> every
-    /// descendant's too. Env-inheritance means each process writes its own file. Returned once.
+    /// descendant's too. Each process writes its own file via env inheritance. Returned once.
     /// </summary>
     public IReadOnlyList<(int Pid, string Path)> PollAllocationProfiles()
     {
@@ -293,7 +292,7 @@ public sealed class ProcessSupervisor : IDisposable
         return Path.Combine(dir, $"{stem}.{pid}{Path.GetExtension(path)}");
     }
 
-    /// <summary>Drains probe hits queued since the last call. Only while the process is alive - a dump needs a live pid.</summary>
+    /// <summary>Drains probe hits queued since the last call. Only while alive, a dump needs a live pid.</summary>
     public IReadOnlyList<(int Pid, string Name)> TryPollProbeSignals()
     {
         if (_root is null || _root.HasExited)
@@ -310,8 +309,8 @@ public sealed class ProcessSupervisor : IDisposable
     }
 
     /// <summary>
-    /// Forces a GC and emits a fresh correlation sidecar for a process, so live addresses settle.
-    /// Dump immediately after, or a later GC moves objects and the address join goes stale.
+    /// Forces a GC and emits a fresh correlation sidecar for a process. Dump immediately after, or a
+    /// later GC moves objects and the address join goes stale.
     /// </summary>
     public (string? Sidecar, long GcAtEmit) RequestCorrelationSnapshot(int pid, TimeSpan timeout)
     {
@@ -344,8 +343,8 @@ public sealed class ProcessSupervisor : IDisposable
         return ok && fields.Length > 0 && long.TryParse(fields[0], out long g) ? g : -1;
     }
 
-    /// <summary>The live managed-heap size of a profiled process, or null if unavailable (no profiler,
-    /// dead pid, or the runtime didn't answer). Cheap enough to poll for the live monitor.</summary>
+    /// <summary>The live managed-heap size of a profiled process, or null if unavailable. Cheap enough
+    /// to poll for the live monitor.</summary>
     public HeapStats? HeapSize(int pid, TimeSpan timeout)
     {
         if (_control is null || !IsAlive(pid))
@@ -513,7 +512,7 @@ public sealed class ProcessSupervisor : IDisposable
 
     public void Dispose()
     {
-        // We do not kill the tree on dispose; the user controls lifetime via `kill`.
+        // We don't kill the tree on dispose; the user controls lifetime via `kill`.
         lock (_logLock)
         {
             _log?.Dispose();

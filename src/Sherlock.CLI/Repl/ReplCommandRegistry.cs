@@ -5,10 +5,7 @@ using Sherlock.CLI.Repl.Commands;
 
 namespace Sherlock.CLI.Repl;
 
-/// <summary>
-/// The set of analysis commands available to the REPL and to <c>--exec</c>,
-/// indexed by name and alias.
-/// </summary>
+/// <summary>The analysis commands available to the REPL and <c>--exec</c>, indexed by name and alias.</summary>
 public sealed class ReplCommandRegistry
 {
     private readonly List<IReplCommand> _commands;

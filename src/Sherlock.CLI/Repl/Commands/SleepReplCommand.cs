@@ -6,11 +6,7 @@ using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
 
-/// <summary>
-/// Pauses for a number of seconds. Mainly for scripts that drive a live target and
-/// need to give it time to reach a state worth snapshotting (e.g. after <c>run</c>,
-/// before <c>correlate</c>).
-/// </summary>
+/// <summary>Pauses for N seconds. For scripts that must let a live target reach a state worth snapshotting.</summary>
 public sealed class SleepReplCommand : IReplCommand
 {
     public string Name => "sleep";

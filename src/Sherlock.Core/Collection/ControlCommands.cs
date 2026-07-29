@@ -1,9 +1,9 @@
 namespace Sherlock.Core.Collection;
 
 /// <summary>
-/// The control-channel command verbs and event names, in one place so the C# server and the
-/// native profiler agree. These are the payloads carried in <c>REQ</c>/<c>EVENT</c> frames;
-/// see the framing in <see cref="ProfilerControlServer"/> and src/native/src/control/channel.cpp.
+/// Control-channel command verbs and event names, so the C# server and the native profiler agree.
+/// These are the payloads carried in <c>REQ</c>/<c>EVENT</c> frames; see the framing in
+/// <see cref="ProfilerControlServer"/> and src/native/src/control/channel.cpp.
 /// </summary>
 public static class ControlCommands
 {

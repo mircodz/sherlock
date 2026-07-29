@@ -30,10 +30,8 @@ public sealed class ThreadAnalyzer(DumpSession session)
         return result;
     }
 
-    /// <summary>
-    /// Decodes the CLR thread-state flags into readable names (the raw value is an opaque
-    /// bitmask). Only single-bit named flags are shown; falls back to hex if none are named.
-    /// </summary>
+    /// <summary>Decodes the CLR thread-state bitmask into readable flag names. Only single-bit named
+    /// flags are shown; falls back to hex if none are named.</summary>
     private static string FormatState(ClrThreadState state)
     {
         long bits = Convert.ToInt64(state);

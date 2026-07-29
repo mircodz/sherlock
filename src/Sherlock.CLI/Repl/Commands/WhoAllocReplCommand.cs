@@ -26,7 +26,7 @@ public sealed class WhoAllocReplCommand : IReplCommand
             return;
         }
 
-        // Object context from the heap (type + size), if the address resolves.
+        // Heap type + size, if the address resolves to a live object.
         ClrObject obj = context.Snapshot.Runtime.Heap.GetObject(address);
         string typeLine = obj.Type is { } t
             ? $"[bold]{Markup.Escape(t.Name ?? "<unknown>")}[/] [grey]({ByteSize.Format((long)obj.Size)})[/]"
@@ -42,12 +42,12 @@ public sealed class WhoAllocReplCommand : IReplCommand
             return;
         }
 
-        // Sidecar stack is folded root->leaf; show it backtrace-style, allocation site first.
+        // Folded stack is root->leaf; show backtrace-style, allocation site first.
         string[] frames = folded.Split(';');
         context.Console.MarkupLine("[grey]allocated at:[/]");
         for (int i = 0; i < frames.Length; i++)
         {
-            string frame = frames[frames.Length - 1 - i]; // reverse to leaf→root
+            string frame = frames[frames.Length - 1 - i]; // leaf->root
             context.Console.MarkupLineInterpolated($"  [aqua]#{i}[/] {frame}");
         }
     }

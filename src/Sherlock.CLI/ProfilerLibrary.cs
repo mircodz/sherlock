@@ -4,9 +4,7 @@ using System.Runtime.InteropServices;
 
 namespace Sherlock.CLI;
 
-/// <summary>
-/// Locates the native CLR allocation profiler library
-/// </summary>
+/// <summary>Locates the native CLR allocation profiler library.</summary>
 public static class ProfilerLibrary
 {
     /// <summary>Platform-specific name of the built shared library.</summary>
@@ -16,9 +14,9 @@ public static class ProfilerLibrary
         "libSherlockProfiler.so";
 
     /// <summary>
-    /// Returns the absolute path to the profiler library, or null if it hasn't been
-    /// built. Honors a <c>SHERLOCK_PROFILER_PATH</c> override, otherwise searches up
-    /// from the executable and working directory for <c>src/native/bin/&lt;lib&gt;</c>.
+    /// Absolute path to the profiler library, or null if it hasn't been built. Honors a
+    /// <c>SHERLOCK_PROFILER_PATH</c> override, otherwise searches up from the executable and
+    /// working directory for <c>src/native/bin/&lt;lib&gt;</c>.
     /// </summary>
     public static string? Locate()
     {
@@ -35,7 +33,7 @@ public static class ProfilerLibrary
             return bundled;
         }
 
-        // Dev tree: built directly under src/native/bin by build.sh / build.cmd.
+        // Dev tree: built under src/native/bin by build.sh / build.cmd.
         foreach (string start in new[] { AppContext.BaseDirectory, Directory.GetCurrentDirectory() })
         {
             for (DirectoryInfo? dir = new(start); dir is not null; dir = dir.Parent)

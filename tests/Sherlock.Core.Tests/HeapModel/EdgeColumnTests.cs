@@ -5,7 +5,7 @@ namespace Sherlock.Core.Tests.HeapModel;
 
 /// <summary>
 /// Verifies <see cref="EdgeColumn"/> resolves global edge positions to the right chunk and returns
-/// correct spans across chunk boundaries — the primitive that lets the edge column exceed the ~2.1B
+/// correct spans across chunk boundaries, the primitive that lets the edge column exceed the ~2.1B
 /// single-array ceiling. Boundary math is off-by-one-prone, so these split a known sequence into
 /// several uneven chunks and assert every sub-run reads back identically to the flat array.
 /// </summary>

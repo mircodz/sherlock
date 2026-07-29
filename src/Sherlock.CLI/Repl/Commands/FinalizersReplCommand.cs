@@ -6,10 +6,7 @@ using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
 
-/// <summary>
-/// Lists objects still registered for finalization, by type - a "forgot to Dispose" heuristic
-/// (a proper Dispose calls GC.SuppressFinalize, which takes the object off this queue).
-/// </summary>
+/// <summary>Objects still registered for finalization, by type (a "forgot to Dispose" heuristic; Dispose calls GC.SuppressFinalize to drop off this queue).</summary>
 public sealed class FinalizersReplCommand : IReplCommand
 {
     private const int DefaultLimit = 20;

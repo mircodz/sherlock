@@ -114,7 +114,7 @@ public sealed class SnapshotStore
         bool owned;
         if (moveIntoStore)
         {
-            // A self-contained bundle folder: heap.dmp plus its provenance.slab.
+            // A self-contained bundle folder: heap.dmp plus provenance.slab.
             string bundleDir = Path.Combine(session.Dir, "snapshots", id);
             Directory.CreateDirectory(bundleDir);
             finalPath = Path.Combine(bundleDir, "heap.dmp");
@@ -146,8 +146,8 @@ public sealed class SnapshotStore
             HasCorrelation = correlated,
         };
 
-        // Attribute the snapshot to the process it came from; the first process seen in a
-        // workspace is its root (a launched run sets its root explicitly, ahead of any snapshot).
+        // Attribute the snapshot to its source process; the first process seen in a workspace is its
+        // root (a launched run sets its root explicitly, ahead of any snapshot).
         ProcessRecord process = session.GetOrAddProcess(
             sourcePid ?? 0, sourceName, isRoot: session.Processes.Count == 0);
         process.Snapshots.Add(entry);
@@ -242,7 +242,7 @@ public sealed class SnapshotStore
             Directory.CreateDirectory(session.Dir);
             File.WriteAllText(Path.Combine(session.Dir, "metadata.json"), JsonSerializer.Serialize(session, JsonOptions));
         }
-        catch { /* best effort — the catalog remains the source of truth */ }
+        catch { /* best effort; the catalog remains the source of truth */ }
     }
 
     private static void TryDeleteDir(string dir)

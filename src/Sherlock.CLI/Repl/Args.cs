@@ -5,7 +5,7 @@ namespace Sherlock.CLI.Repl;
 
 /// <summary>
 /// Argument parsing for REPL commands. Failures throw <see cref="DumpAnalysisException"/>, which the
-/// REPL renders as <c>error: ...</c> - so commands don't repeat validate-and-return boilerplate.
+/// REPL renders as <c>error: ...</c>, so commands don't repeat validate-and-return boilerplate.
 /// </summary>
 public static class Args
 {

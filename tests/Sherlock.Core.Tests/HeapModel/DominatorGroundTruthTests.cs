@@ -8,7 +8,7 @@ namespace Sherlock.Core.Tests.HeapModel;
 /// <summary>
 /// Ground-truth tests for the dominator + retained-size computation, over hand-built graphs whose exact
 /// dominators and retained sizes are known by construction. This pins ABSOLUTE correctness (not just
-/// "matches ClrMD") of <see cref="DominatorAnalyzerV2.Compute"/> — the pure graph math behind the
+/// "matches ClrMD") of <see cref="DominatorAnalyzer.Compute"/>, the pure graph math behind the
 /// biggest-memory-holders analysis.
 /// </summary>
 public sealed class DominatorGroundTruthTests
@@ -42,7 +42,7 @@ public sealed class DominatorGroundTruthTests
     }
 
     // Convenience: retained size of object id `obj` from a computed result (results are RPO-indexed).
-    private static ulong RetainedOf(DominatorAnalyzerV2.DominatorResult r, HeapGraph g, int obj)
+    private static ulong RetainedOf(DominatorAnalyzer.DominatorResult r, HeapGraph g, int obj)
     {
         ulong addr = g.Addresses.Span[obj];
         for (int rpo = 1; rpo < r.Address.Length; rpo++)
@@ -51,7 +51,7 @@ public sealed class DominatorGroundTruthTests
     }
 
     // The RPO index of object id `obj` in a computed result (results are RPO-indexed), or -1.
-    private static int FindRpo(DominatorAnalyzerV2.DominatorResult r, HeapGraph g, int obj)
+    private static int FindRpo(DominatorAnalyzer.DominatorResult r, HeapGraph g, int obj)
     {
         ulong addr = g.Addresses.Span[obj];
         for (int rpo = 1; rpo < r.Address.Length; rpo++)
@@ -60,7 +60,7 @@ public sealed class DominatorGroundTruthTests
     }
 
     // The immediate dominator of object `obj` as an object id, or -1 if it's the synthetic root.
-    private static int IdomObjectOf(DominatorAnalyzerV2.DominatorResult r, HeapGraph g, int obj)
+    private static int IdomObjectOf(DominatorAnalyzer.DominatorResult r, HeapGraph g, int obj)
     {
         int domNode = r.NodeByRpo[r.Idom[FindRpo(r, g, obj)]];
         return domNode == g.Root ? -1 : domNode;
@@ -72,7 +72,7 @@ public sealed class DominatorGroundTruthTests
         // root -> 0 -> 1 -> 2 -> 3 (a linked list). Each node retains itself + everything below it.
         var g = Build(sizes: [10, 20, 30, 40], roots: [0],
             (0, 1), (1, 2), (2, 3));
-        var r = DominatorAnalyzerV2.Compute(g);
+        var r = DominatorAnalyzer.Compute(g);
 
         Assert.Equal(100u, RetainedOf(r, g, 0)); // 10+20+30+40
         Assert.Equal(90u, RetainedOf(r, g, 1));  // 20+30+40
@@ -85,10 +85,10 @@ public sealed class DominatorGroundTruthTests
     public void Diamond_SharedChildDominatedByJoin()
     {
         // root -> A(0); A -> B(1), C(2); B -> D(3); C -> D(3).
-        // Both paths to D pass through A, so A dominates D → D's bytes retained by A, NOT by B or C alone.
+        // Both paths to D pass through A, so A dominates D: D's bytes retained by A, NOT by B or C alone.
         var g = Build(sizes: [10, 20, 30, 40], roots: [0],
             (0, 1), (0, 2), (1, 3), (2, 3));
-        var r = DominatorAnalyzerV2.Compute(g);
+        var r = DominatorAnalyzer.Compute(g);
 
         Assert.Equal(100u, RetainedOf(r, g, 0)); // A retains A+B+C+D = 10+20+30+40
         Assert.Equal(20u, RetainedOf(r, g, 1));  // B retains only itself (D not dominated by B)
@@ -103,7 +103,7 @@ public sealed class DominatorGroundTruthTests
         // Same diamond; verify idom(D) == A (object 0), not B or C.
         var g = Build(sizes: [10, 20, 30, 40], roots: [0],
             (0, 1), (0, 2), (1, 3), (2, 3));
-        var r = DominatorAnalyzerV2.Compute(g);
+        var r = DominatorAnalyzer.Compute(g);
 
         Assert.Equal(0, IdomObjectOf(r, g, 3)); // A dominates D
     }
@@ -116,7 +116,7 @@ public sealed class DominatorGroundTruthTests
         // neither A nor B retains S; it counts only toward total reachable.
         var g = Build(sizes: [10, 20, 30], roots: [0, 1],
             (0, 2), (1, 2));
-        var r = DominatorAnalyzerV2.Compute(g);
+        var r = DominatorAnalyzer.Compute(g);
 
         Assert.Equal(10u, RetainedOf(r, g, 0)); // A retains only itself (not S)
         Assert.Equal(20u, RetainedOf(r, g, 1)); // B retains only itself
@@ -133,7 +133,7 @@ public sealed class DominatorGroundTruthTests
         // root -> A(0); A -> B(1); B -> A(0) (a cycle). Both retained by A via the root path.
         var g = Build(sizes: [10, 20], roots: [0],
             (0, 1), (1, 0));
-        var r = DominatorAnalyzerV2.Compute(g);
+        var r = DominatorAnalyzer.Compute(g);
 
         Assert.Equal(30u, RetainedOf(r, g, 0)); // A retains A+B
         Assert.Equal(20u, RetainedOf(r, g, 1)); // B retains itself
@@ -145,7 +145,7 @@ public sealed class DominatorGroundTruthTests
     {
         // root -> A(0); B(1) is allocated but unreachable from any root.
         var g = Build(sizes: [10, 20], roots: [0]);
-        var r = DominatorAnalyzerV2.Compute(g);
+        var r = DominatorAnalyzer.Compute(g);
 
         Assert.Equal(10u, r.Retained[0]); // only A is reachable; B excluded from the total
         // B has no RPO number, so it never appears in the result address array.

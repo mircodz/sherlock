@@ -59,8 +59,7 @@ public sealed class AnalyzeCommand : Command<AnalyzeCommand.Settings>
             }
         }
 
-        // Interactive when nothing was batched, or when --interactive keeps us in the
-        // REPL after the batch (gdb's `-x script` then a live prompt).
+        // Interactive when nothing was batched, or when --interactive keeps us in the REPL after.
         bool batched = settings.Exec.Length > 0 || settings.Script is not null;
         bool interactive = !batched || settings.Interactive;
         var history = new ReplHistory(interactive ? ReplHistory.DefaultPath : null);

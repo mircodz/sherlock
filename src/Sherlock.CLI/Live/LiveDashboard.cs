@@ -8,22 +8,21 @@ using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using Sherlock.Core.Collection;
 using Sherlock.Core.Store;
-using Tessera.Widgets.Charts;
-using Tessera.Layout;
-using Tessera.Primitives;
-using Tessera.Terminal;
-using Tessera.Text;
-using Tessera.Widgets;
-using Tessera.Widgets.Charts.Trees;
-using Theme = Tessera.Theming.Theme;
+using Cellar.Widgets.Charts;
+using Cellar.Layout;
+using Cellar.Primitives;
+using Cellar.Terminal;
+using Cellar.Text;
+using Cellar.Widgets;
+using Cellar.Widgets.Charts.Trees;
+using Theme = Cellar.Theming.Theme;
 
 namespace Sherlock.CLI.Live;
 
 /// <summary>
-/// The <c>run --live</c> dashboard: a Tessera TUI hosted in-process over a running supervised
-/// target. Shows the live managed-heap size (polled over the profiler control channel) and the
-/// process tree; Enter snapshots the selected process into the library on demand, k kills the tree.
-/// The captured snapshots stay in the store, so you analyze them (here, or later via <c>sl</c>).
+/// The <c>run --live</c> dashboard: a Cellar TUI over a running supervised target. Shows the live
+/// managed-heap size and process tree; Enter snapshots the selected process into the library, k kills
+/// the tree. Captured snapshots stay in the store for analysis here or later via <c>sl</c>.
 /// </summary>
 public static class LiveDashboard
 {
@@ -37,14 +36,12 @@ public static class LiveDashboard
     public static void Run(Workspace workspace, ProcessSupervisor supervisor, RunSpec spec, CancellationToken cancellation)
     {
         var poll = TimeSpan.FromMilliseconds(200); // control-channel request timeout
-        var busy = 0; // 1 while a capture is in flight — pause heap polls so we don't contend on the channel
+        var busy = 0; // 1 while a capture is in flight; pause heap polls so we don't contend on the channel
 
-        // --- widgets ---
         var heap = new Sparkline { BaselineZero = true, Color = Theme.Current.Accent };
         var stat = new Label(StyledText.Empty());
 
-        // The live process tree. Rows are links (click a process to snapshot it); Enter snapshots
-        // the selected one. Children come from the ParentPid links, filtered against the live set.
+        // Live process tree. Rows are links (click to snapshot); Enter snapshots the selected one.
         var procs = new List<SupervisedProcess>();
         var procTree = new TreeView<SupervisedProcess>
         {
@@ -115,16 +112,15 @@ public static class LiveDashboard
             }
         }
 
-        procTree.OnLinkClick = p => Snapshot((int)p);      // click a process row → snapshot it
-        procTree.OnActivate = n => Snapshot(n.Value.Pid);  // Enter on the selected row
+        procTree.OnLinkClick = p => Snapshot((int)p);
+        procTree.OnActivate = n => Snapshot(n.Value.Pid);
 
         var footer = new Stack(Direction.Horizontal)
             .Add(FooterButton("↵", "Snapshot", SnapshotSelected), Constraint.Length(13))
             .Add(FooterButton("k", "Kill", () => { supervisor.Kill(); app.Post(new Status("killed the process tree.", Theme.Current.Warning)); }), Constraint.Length(9))
             .Add(FooterButton("q", "Quit", app.Quit), Constraint.Length(9));
 
-        // A prominent status banner — capture is a blocking, second-or-two operation, so we make it
-        // unmistakable (it repaints immediately, not on the next heap tick).
+        // Capture blocks for a second or two, so the banner repaints immediately, not on the next heap tick.
         var banner = new Label(new StyledText("  ↑/↓ pick a process, then click it or press Enter to capture a heap snapshot.", Theme.Current.MutedStyle));
 
         app.Root = new Stack(Direction.Vertical)
@@ -176,8 +172,7 @@ public static class LiveDashboard
                 case ProcessList pl:
                     procs.Clear();
                     procs.AddRange(pl.Processes);
-                    // Rebuild only when the process set changes — otherwise we'd flicker and reset the
-                    // selection every poll. Roots are IsRoot (or any whose parent isn't in the set).
+                    // Rebuild only when the process set changes, else we'd flicker and reset the selection every poll.
                     HashSet<int> now = pl.Processes.Select(p => p.Pid).ToHashSet();
                     if (!now.SetEquals(pidSet))
                     {
@@ -221,8 +216,7 @@ public static class LiveDashboard
         _ = producer; // detached; cancellation/root-exit ends it
     }
 
-    // A footer shortcut button: "<key> <label>" with the key char bold+warning, transparent normal
-    // background, hover fills the striped-row background. Mirrors the Tessera demo's footer.
+    // A footer shortcut button: "<key> <label>" with the key char bold+warning, hover fills the striped-row background.
     private static Button FooterButton(string key, string label, Action onClick) => new()
     {
         Content = StyledText.Of(key).Bold().Fg(Theme.Current.Warning).Append($" {label}").Fg(Theme.Current.Muted),

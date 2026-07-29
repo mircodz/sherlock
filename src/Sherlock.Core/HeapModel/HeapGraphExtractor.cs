@@ -11,14 +11,14 @@ namespace Sherlock.Core.HeapModel;
 /// <summary>
 /// Builds a <see cref="HeapGraph"/> from a dump, bypassing ClrMD's per-object cost. ClrMD's DAC
 /// (mscordaccore) takes a giant lock and drives <c>EnumerateObjects</c>/<c>EnumerateReferences</c> at
-/// ~1-2M edges/s single-threaded; here we use ClrMD only for the cheap O(types + segments) metadata
-/// (each type's size layout + GC descriptor, the segment ranges, the allocation-context gaps, and the
-/// roots) and do the O(objects + edges) walk ourselves over raw memory:
+/// ~1-2M edges/s single-threaded; we use ClrMD only for the cheap O(types + segments) metadata (each
+/// type's size layout + GC descriptor, segment ranges, alloc-context gaps, roots) and do the
+/// O(objects + edges) walk ourselves over raw memory:
 /// <list type="bullet">
-/// <item>the object walk mirrors <c>ClrHeap.EnumerateObjects</c> exactly (method-table read, size from
-/// the cached type, alignment, allocation-context skip) but reads raw bytes via <see cref="IMemoryReader"/>;</item>
+/// <item>the object walk mirrors <c>ClrHeap.EnumerateObjects</c> (method-table read, size from the
+/// cached type, alignment, allocation-context skip) but reads raw bytes via <see cref="IMemoryReader"/>;</item>
 /// <item>the reference walk applies each type's cached <see cref="GCDesc"/> to the raw object bytes, in
-/// parallel across object ranges — raw reads are not under the DAC lock (the reader reports itself
+/// parallel across object ranges. Raw reads are not under the DAC lock (the reader reports itself
 /// thread-safe), so this scales across cores.</item>
 /// </list>
 /// </summary>
@@ -26,8 +26,8 @@ public sealed class HeapGraphExtractor(DumpSession session)
 {
     private const int MaxWorkers = 16;
 
-    // Edges per on-disk/in-memory chunk. 1<<27 ints = 512 MB — comfortably under the int.MaxValue
-    // element / ~2 GB byte cap on a single array and slab section, so a chunk always fits both.
+    // Edges per chunk. 1<<27 ints = 512 MB, under the int.MaxValue element / ~2 GB byte cap on a single
+    // array and slab section, so a chunk always fits both.
     private const long MaxEdgesPerChunk = 1L << 27;
 
     public HeapGraph Extract(CancellationToken cancellationToken = default)
@@ -74,7 +74,7 @@ public sealed class HeapGraphExtractor(DumpSession session)
                 ref readonly TypeInfo t = ref types[typeIndex];
                 if (t.BaseSize == 0)
                 {
-                    break; // unresolvable method table — stop this segment
+                    break; // unresolvable method table; stop this segment
                 }
 
                 ulong size;
@@ -90,8 +90,8 @@ public sealed class HeapGraphExtractor(DumpSession session)
                 }
                 if (size < minObjSize) size = minObjSize;
 
-                // The object's *reported* size (matches ClrMD's GetObjectSize: clamped, NOT aligned).
-                // Alignment is applied only to advance the walk to the next object, not stored as size.
+                // Reported size matches ClrMD's GetObjectSize: clamped, NOT aligned. Alignment only
+                // advances the walk to the next object, it isn't stored.
                 ulong reportedSize = size;
 
                 if (!t.IsFree)
@@ -102,7 +102,7 @@ public sealed class HeapGraphExtractor(DumpSession session)
                 }
                 else
                 {
-                    freeBytes += reportedSize; // free-space total (fragmentation), not a real object
+                    freeBytes += reportedSize; // free space (fragmentation), not a real object
                     freeCount++;
                 }
 
@@ -198,8 +198,8 @@ public sealed class HeapGraphExtractor(DumpSession session)
         offsets[n] = edge; // synthetic root's edges start here
         offsets[n + 1] = edge + roots.Count;
 
-        // The edge column, node-aligned into ≤~1 GB chunks so it can exceed the 2.1B single-array ceiling.
-        // Segments are the per-worker edge blocks in id order, then the synthetic root's GC-root edges.
+        // Edge column, node-aligned into ≤~1 GB chunks so it can exceed the 2.1B single-array ceiling.
+        // Segments: per-worker edge blocks in id order, then the synthetic root's GC-root edges.
         var edgeSegments = new List<ReadOnlyMemory<int>>(workers + 1);
         foreach (int[] e in blockEdges) edgeSegments.Add(e);
         edgeSegments.Add(roots.ToArray());
@@ -208,8 +208,8 @@ public sealed class HeapGraphExtractor(DumpSession session)
         return new HeapGraph(addresses, sizes, offsets, edges, (ReadOnlyMemory<int>)typeOf, types.Names(), freeBytes, freeCount);
     }
 
-    /// <summary>Cached per-type layout keyed by method table: the size formula inputs, the type name,
-    /// and the GC descriptor used to find reference fields. Resolved from ClrMD once per distinct type.</summary>
+    /// <summary>Cached per-type layout keyed by method table: size-formula inputs, type name, and the
+    /// GC descriptor used to find reference fields. Resolved from ClrMD once per distinct type.</summary>
     private readonly struct TypeInfo(int baseSize, int componentSize, bool isString, bool isFree, GCDesc gcDesc, bool hasPointers, string name)
     {
         public readonly int BaseSize = baseSize;

@@ -3,12 +3,8 @@ using System.Linq;
 
 namespace Sherlock.Core.Profiling;
 
-/// <summary>
-/// A top-down allocation call tree folded from an <see cref="AllocationProfile"/>: each
-/// node aggregates the allocated/survived bytes of every call path passing through it
-/// (inclusive), so you can navigate from the roots down to where allocation concentrates -
-/// far more legible than a flat list keyed by leaf method.
-/// </summary>
+/// <summary>Top-down allocation call tree folded from an <see cref="AllocationProfile"/>: each node
+/// holds the inclusive alloc/survived bytes of every call path through it.</summary>
 public sealed class AllocationTreeNode(string frame)
 {
     private readonly Dictionary<string, AllocationTreeNode> _children = new();
@@ -32,17 +28,15 @@ public sealed class AllocationTreeNode(string frame)
         return child;
     }
 
-    /// <summary>
-    /// Folds an inverted caller tree rooted at <paramref name="method"/>: children are its
-    /// immediate callers, weighted by what allocated while passing through it (back-traces).
-    /// </summary>
+    /// <summary>Folds an inverted caller tree rooted at <paramref name="method"/>: children are its
+    /// immediate callers, weighted by what allocated while passing through it.</summary>
     public static AllocationTreeNode BuildCallers(AllocationProfile profile, string method)
     {
         var root = new AllocationTreeNode(method);
         foreach (AllocationSite site in profile.Sites)
         {
             int at = -1;
-            for (int i = site.Frames.Count - 1; i >= 0; i--) // deepest occurrence
+            for (int i = site.Frames.Count - 1; i >= 0; i--) // deepest occurrence first
             {
                 if (site.Frames[i] == method) { at = i; break; }
             }

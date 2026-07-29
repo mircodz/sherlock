@@ -7,11 +7,7 @@ using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
 
-/// <summary>
-/// Blocks until an armed snapshot trigger fires (and its heap dump is captured), or a
-/// timeout elapses. Makes scripts that arm a trigger and then inspect it deterministic -
-/// no guessing a <c>sleep</c> long enough for the event.
-/// </summary>
+/// <summary>Blocks until an armed snapshot trigger fires (and its dump is captured), or a timeout elapses.</summary>
 public sealed class WaitTriggerReplCommand : IReplCommand
 {
     private const double DefaultTimeoutSeconds = 30;

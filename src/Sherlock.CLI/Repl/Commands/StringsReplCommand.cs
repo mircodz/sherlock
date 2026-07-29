@@ -6,9 +6,7 @@ using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
 
-/// <summary>
-/// String-focused analysis: reports duplicated string values, ordered by wasted memory.
-/// </summary>
+/// <summary>Reports duplicated string values, ordered by wasted memory.</summary>
 public sealed class StringsReplCommand : IReplCommand
 {
     private const int DefaultLimit = 20;
@@ -20,8 +18,7 @@ public sealed class StringsReplCommand : IReplCommand
 
     public void Execute(ReplContext context, string[] args)
     {
-        // Duplicate analysis is the default (and only) mode; a leading count sets the limit.
-        // `--dup`/`-d` is still accepted (and ignored) so older scripts keep working.
+        // Leading count sets the limit; `--dup`/`-d` accepted and ignored for backward compat.
         int limit = DefaultLimit;
         string? countArg = args.FirstOrDefault(a => !a.StartsWith('-'));
         if (countArg is not null && !int.TryParse(countArg, out limit))
