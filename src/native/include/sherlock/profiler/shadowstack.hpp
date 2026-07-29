@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -24,9 +25,10 @@ namespace shadow {
 constexpr std::size_t kMaxShadow = 1024; // frames retained; deeper is counted but not stored
 
 // Per-thread shadow stack. The frame buffer is heap-allocated on first use and only a
-// POINTER is kept in thread_local storage — a large initial-exec TLS array would blow
-// the dlopen static-TLS surplus and make the .so fail to load ("cannot allocate memory
-// in static TLS block").
+// POINTER is kept in thread_local storage — a large in-TLS array would blow the dlopen
+// static-TLS surplus and make the .so fail to load ("cannot allocate memory in static TLS
+// block"). (The whole library is built -ftls-model=initial-exec, so this pointer is read
+// via a direct thread-pointer offset on the hot push/pop path — see CMakeLists.txt.)
 struct ThreadStack {
     FunctionID frames[kMaxShadow];
     std::uint32_t depth = 0; // may exceed kMaxShadow; readers clamp
@@ -64,15 +66,10 @@ class ShadowStackInstrumenter {
 public:
     ShadowStackInstrumenter(ICorProfilerInfo10* info, Logger* logger);
 
-    // Optional case-sensitive substring; when non-empty, only methods whose module name
-    // contains it are instrumented. Used to stage rollout (e.g. "AllocBench") while the
-    // framework-method rewrite is still being hardened.
-    void setModuleFilter(std::string filter) { moduleFilter_ = std::move(filter); }
-
     // --- ReJIT instrumentation (ModuleLoadFinished -> RequestReJIT -> GetReJITParameters) ---
     // Enumerate every method in a freshly loaded module and request a ReJIT for each, so the
     // rewritten IL applies from first call AND is used for inlined bodies (inline-aware) —
-    // letting us keep inlining ON. Skips modules filtered out by setModuleFilter.
+    // letting us keep inlining ON.
     void onModuleLoaded(ModuleID moduleId);
     // Deliver the rewritten IL for one ReJIT request. Returns S_OK regardless (a skip leaves
     // the original IL). Resolves the FunctionID from the token to bake into the push.
@@ -81,6 +78,14 @@ public:
 
     std::uint64_t instrumentedCount() const { return instrumented_; }
     std::uint64_t skippedCount() const { return skipped_; }
+
+    // Circuit breaker. The runtime reports a rewrite the JIT rejected via ReJITError; the profiler routes
+    // it here. After too many, we latch OFF permanently — every subsequent getReJITParameters leaves the
+    // original IL untouched. Rewriting arbitrary framework IL is the profiler's biggest in-process risk
+    // (bad IL corrupts the customer's process), so if our rewrites start failing we stop rather than keep
+    // handing the runtime bodies it dislikes. One-way latch: we never re-enable within a process.
+    void noteReJITError();
+    bool disabled() const { return disabled_; }
 
 private:
     // Per-module standalone sig tokens for the push/pop trampolines (cached).
@@ -92,15 +97,16 @@ private:
     bool buildIL(FunctionID functionId, ModuleID moduleId, mdMethodDef methodToken,
                  std::vector<BYTE>& out);
 
-    // True if this module passes the optional name filter.
-    bool moduleAllowed(ModuleID moduleId);
+    // After this many ReJITErrors we latch the instrumenter off (see noteReJITError).
+    static constexpr std::uint64_t kMaxReJITErrors = 10;
 
     ICorProfilerInfo10* info_;
     Logger* logger_;
-    std::string moduleFilter_;
     std::unordered_map<std::uint64_t, ModuleSigs> sigByModule_;
     std::uint64_t instrumented_ = 0;
     std::uint64_t skipped_ = 0;
+    std::atomic<std::uint64_t> rejitErrors_{0};
+    std::atomic<bool> disabled_{false};
 };
 
 } // namespace Sherlock

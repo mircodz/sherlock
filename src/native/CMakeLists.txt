@@ -95,6 +95,7 @@ set(SOURCES
     src/profiler/profiler.cpp
     src/profiler/aggregator.cpp
     src/profiler/shadowstack.cpp
+    src/profiler/il_writer.cpp
     src/profiler/probe.cpp
     src/profiler/triggers.cpp
     src/control/channel.cpp)

@@ -148,9 +148,8 @@ private:
     bool correlate = false;           // SHERLOCK_CORRELATE: track live objects for snapshot join
     std::string correlationPath;
 
-    // SHERLOCK_SHADOW_STACK: maintain a per-thread shadow stack via IL instrumentation (ReJIT) and
-    // read it in ObjectAllocated to attribute each allocation to its call stack (O(1) per alloc).
-    bool shadowStack = false;
+    // Per-thread shadow stack maintained via IL instrumentation (ReJIT); read in ObjectAllocated to
+    // attribute each allocation to its call stack (O(1) per alloc). Always on — the only provenance source.
     std::unique_ptr<ShadowStackInstrumenter> shadowInstr;
 
     // sl <-> profiler control channel (SHERLOCK_CONTROL_SOCKET). Handles on-demand

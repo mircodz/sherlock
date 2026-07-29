@@ -99,23 +99,17 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
     // lets the REPL arm them live.
     bool triggersEnabled = hasStartupTriggers || controlPresent;
 
-    // SHERLOCK_SHADOW_STACK: capture allocation call stacks via a per-thread shadow stack built
-    // by IL instrumentation, read O(1) in ObjectAllocated instead of walking the stack.
-    const char* shadowEnv = std::getenv("SHERLOCK_SHADOW_STACK");
-    shadowStack = shadowEnv != nullptr && shadowEnv[0] != '\0' && shadowEnv[0] != '0';
-
-    // Allocation tracking (ObjectAllocated) and GC callbacks are always on.
+    // Allocation tracking (ObjectAllocated) and GC callbacks are always on. The shadow stack
+    // (per-thread call stack maintained by ReJIT-injected IL, read O(1) in ObjectAllocated) is
+    // the allocation-stack capture mechanism, so ReJIT + module loads are always enabled too.
     DWORD eventMask = COR_PRF_MONITOR_OBJECT_ALLOCATED |
                       COR_PRF_ENABLE_OBJECT_ALLOCATED |
-                      COR_PRF_MONITOR_GC; // GC callbacks for survivor tracking + gc: triggers
-    if (shadowStack)
-        // Instrument every method via ReJIT: request rewrites at module load; the runtime uses our
-        // IL from first call and for inlined bodies too (inline-aware), so inlining stays ON.
-        eventMask |= COR_PRF_ENABLE_REJIT | COR_PRF_MONITOR_MODULE_LOADS;
+                      COR_PRF_MONITOR_GC | // GC callbacks for survivor tracking + gc: triggers
+                      COR_PRF_ENABLE_REJIT | COR_PRF_MONITOR_MODULE_LOADS;
     if (triggersEnabled)
-        // ReJIT + module loads for call: triggers; exceptions for throw: triggers. No global
-        // inline-disable - call: triggers simply don't fire on inlined/tiny methods (documented).
-        eventMask |= COR_PRF_ENABLE_REJIT | COR_PRF_MONITOR_MODULE_LOADS | COR_PRF_MONITOR_EXCEPTIONS;
+        // Exceptions for throw: triggers. No global inline-disable - call: triggers simply don't
+        // fire on inlined/tiny methods (documented).
+        eventMask |= COR_PRF_MONITOR_EXCEPTIONS;
 
     hr = corProfilerInfo->SetEventMask(eventMask);
     if (FAILED(hr)) {
@@ -131,14 +125,7 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
         sampleInterval = std::strtoull(sample, nullptr, 10);
 
     aggregator = std::make_unique<Aggregator>(corProfilerInfo, logger.get());
-
-    if (shadowStack)
-        shadowInstr = std::make_unique<ShadowStackInstrumenter>(corProfilerInfo, logger.get());
-    if (shadowInstr) {
-        const char* filt = std::getenv("SHERLOCK_SHADOW_MODULE");
-        if (filt != nullptr && filt[0] != '\0')
-            shadowInstr->setModuleFilter(filt);
-    }
+    shadowInstr = std::make_unique<ShadowStackInstrumenter>(corProfilerInfo, logger.get());
 
     const char* correlateEnv = std::getenv("SHERLOCK_CORRELATE");
     correlate = correlateEnv != nullptr && correlateEnv[0] != '\0' && correlateEnv[0] != '0';
@@ -541,6 +528,10 @@ HRESULT STDMETHODCALLTYPE Profiler::ReJITError(ModuleID, mdMethodDef methodId, F
     char buf[16];
     std::snprintf(buf, sizeof buf, "0x%08x", static_cast<unsigned>(hrStatus));
     logger->logError("ReJIT error for token " + std::to_string(methodId) + ": " + buf);
+    // Feed the circuit breaker: enough rewrite rejections latch the shadow-stack instrumenter off so we
+    // stop handing the runtime IL it won't accept (protects the profiled process).
+    if (shadowInstr)
+        shadowInstr->noteReJITError();
     return S_OK;
 }
 HRESULT STDMETHODCALLTYPE Profiler::MovedReferences2(ULONG cRanges, ObjectID oldStarts[], ObjectID newStarts[], SIZE_T lengths[]) {

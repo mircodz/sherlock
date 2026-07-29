@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Sherlock.Core;
 using Sherlock.Core.Analysis;
@@ -83,6 +84,9 @@ public static class SnapshotExplorer
         // background factory completes — the UI never blocks on analysis. Tabs stay lazy, so a lens that
         // is never opened never does the work.
         Widget Lens(Func<Widget> build) => new AsyncContent(_ => build());
+        // Token-aware variant: threads AsyncContent's cancellation (fired when the user navigates away)
+        // into the analysis, so an expensive query like gcroot stops instead of running to completion.
+        Widget LensCt(Func<CancellationToken, Widget> build) => new AsyncContent(ct => build(ct));
 
         Widget Workspace(Snapshot snap, string id) =>
             new Tabs()
@@ -463,11 +467,11 @@ public static class SnapshotExplorer
                 return new Panel(inspect, " Object — click a reference to follow it ") { BorderStyle = BorderStyle.Rounded };
             }
 
-            Widget BuildRoots()
+            Widget BuildRoots(CancellationToken ct)
             {
                 var roots = new TreeView<RootRow> { RenderLabel = RootLabel, ShowGuides = true };
                 roots.OnLinkClick = p => Follow(snap, p);
-                IReadOnlyList<GcRootPath> paths = snap.Roots(address, 3);
+                IReadOnlyList<GcRootPath> paths = snap.Roots(address, 3, ct);
                 if (paths.Count == 0) roots.AddRoot(new RootRow("(not reachable from any GC root — collectable)", null));
                 foreach (GcRootPath path in paths)
                 {
@@ -482,7 +486,7 @@ public static class SnapshotExplorer
 
             var tabs = new Tabs()
                 .Add("Inspect", BuildInspect())
-                .Add("GC roots", () => Lens(BuildRoots));
+                .Add("GC roots", () => LensCt(BuildRoots));
 
             if (snap.HasCorrelation && snap.WhoAllocated(address) is { } stack)
             {

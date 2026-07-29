@@ -11,4 +11,8 @@
     <PackageReference Include="Microsoft.Diagnostics.Runtime" Version="4.0.726401" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Sherlock.Core.Tests" />
+  </ItemGroup>
+
 </Project>

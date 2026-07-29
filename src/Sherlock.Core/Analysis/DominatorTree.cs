@@ -126,6 +126,37 @@ public sealed class DominatorTree
     private DominatorNode NodeAt(int rpo) =>
         new(_address[rpo], TypeNameAt(rpo), _ownSize[rpo], _retained[rpo]);
 
+    /// <summary>
+    /// The retention path for <paramref name="address"/>: the chain of immediate dominators from the
+    /// object up to (and including) the outermost object still held by a GC root, ordered <b>root-most
+    /// first, target last</b>. Every object on this path must stay alive for the target to stay alive, so
+    /// it answers "why is this object still alive" in O(path length) — a walk of the already-computed
+    /// <c>idom</c> chain, with no heap traversal. Returns null if the object isn't reachable from any GC
+    /// root (i.e. it is collectable).
+    /// </summary>
+    /// <remarks>
+    /// This is the <i>dominator</i> path (the chain of necessary holders), not necessarily the shortest
+    /// arbitrary reference chain a root-to-target BFS would find. It is exact for "what retains this",
+    /// which is what the gcroot/"why it's alive" view wants; true shortest/multi-path search needs a
+    /// persisted reverse-edge column (a later tier).
+    /// </remarks>
+    public IReadOnlyList<(ulong Address, string TypeName)>? RetentionPath(ulong address)
+    {
+        if (!_rpoOf.TryGetValue(address, out int rpo))
+        {
+            return null; // not reachable from any root — collectable
+        }
+
+        var chain = new List<(ulong, string)>();
+        // Climb the immediate-dominator chain, which strictly decreases toward the synthetic root at 0.
+        for (int cur = rpo; cur != 0; cur = _idom[cur])
+        {
+            chain.Add((_address[cur], TypeNameAt(cur)));
+        }
+        chain.Reverse(); // root-most first, target last
+        return chain;
+    }
+
     private string TypeNameAt(int rpo) =>
         _typeNameByAddress?.Invoke(_address[rpo]) ?? _heap.GetObject(_address[rpo]).Type?.Name ?? "<unknown>";
 }

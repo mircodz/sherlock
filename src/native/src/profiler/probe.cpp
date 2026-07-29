@@ -1,6 +1,7 @@
 #include "sherlock/profiler/probe.hpp"
 
 #include "sherlock/common/logger.hpp"
+#include "sherlock/profiler/il_writer.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -24,33 +25,6 @@ std::vector<WCHAR> widen(const std::string& s) {
     w.push_back(0);
     return w;
 }
-
-// Little-endian writers into a growing byte buffer.
-void put16(std::vector<BYTE>& b, std::uint16_t v) {
-    b.push_back(v & 0xFF);
-    b.push_back((v >> 8) & 0xFF);
-}
-void put32(std::vector<BYTE>& b, std::uint32_t v) {
-    for (int i = 0; i < 4; ++i) b.push_back((v >> (8 * i)) & 0xFF);
-}
-void put64(std::vector<BYTE>& b, std::uint64_t v) {
-    for (int i = 0; i < 8; ++i) b.push_back((v >> (8 * i)) & 0xFF);
-}
-
-std::uint16_t rd16(const BYTE* p) { return p[0] | (p[1] << 8); }
-std::uint32_t rd32(const BYTE* p) { return p[0] | (p[1] << 8) | (p[2] << 16) | (static_cast<std::uint32_t>(p[3]) << 24); }
-
-// A normalized exception-handling clause (offsets are absolute into the code).
-struct EHClause {
-    std::uint32_t flags;
-    std::uint32_t tryOffset;
-    std::uint32_t tryLength;
-    std::uint32_t handlerOffset;
-    std::uint32_t handlerLength;
-    std::uint32_t classTokenOrFilter;
-};
-
-constexpr std::uint32_t kClauseFilter = 0x0001; // COR_ILEXCEPTION_CLAUSE_FILTER
 
 } // namespace
 
@@ -213,71 +187,34 @@ HRESULT ProbeManager::getReJITParameters(ModuleID moduleId, mdMethodDef methodId
         maxStack = 8;
         code = p + 1;
     } else if (fmt == CorILMethod_FatFormat) {
-        std::uint16_t flags = rd16(p);
+        std::uint16_t flags = il::rd16(p);
         std::uint16_t hdrDwords = flags >> 12;
         initLocals = (flags & CorILMethod_InitLocals) != 0;
         moreSects = (flags & CorILMethod_MoreSects) != 0;
-        maxStack = rd16(p + 2);
-        codeSize = rd32(p + 4);
-        localSig = rd32(p + 8);
+        maxStack = il::rd16(p + 2);
+        codeSize = il::rd32(p + 4);
+        localSig = il::rd32(p + 8);
         code = p + hdrDwords * 4;
     } else {
         return S_OK; // unknown format — don't touch it
     }
 
     // The prologue we splice in: ldc.i4 <probeId>; ldc.i8 <&trampoline>; conv.i; calli <sig>.
-    std::vector<BYTE> prefix;
-    prefix.push_back(0x20); put32(prefix, static_cast<std::uint32_t>(probeId)); // ldc.i4
-    prefix.push_back(0x21); put64(prefix, reinterpret_cast<std::uint64_t>(&Sherlock_ProbeEnter)); // ldc.i8
-    prefix.push_back(0xD3); // conv.i
-    prefix.push_back(0x29); put32(prefix, static_cast<std::uint32_t>(sigTok)); // calli
+    il::ILStream pre;
+    pre.ldc_i4(static_cast<std::uint32_t>(probeId));
+    pre.ldc_i8(reinterpret_cast<std::uint64_t>(&Sherlock_ProbeEnter));
+    pre.conv_i();
+    pre.calli(sigTok);
+    const std::vector<BYTE>& prefix = pre.bytes();
     const std::uint32_t prefixLen = static_cast<std::uint32_t>(prefix.size());
 
     // Collect + relocate EH clauses (offsets are absolute, so they shift by prefixLen).
-    std::vector<EHClause> clauses;
-    if (moreSects) {
-        const BYTE* s = code + codeSize;
-        // sections begin at the next 4-byte boundary after the code.
-        std::size_t off = (s - header);
-        s = header + ((off + 3) & ~static_cast<std::size_t>(3));
-        bool more = true;
-        while (more) {
-            BYTE kind = s[0];
-            bool fatSect = (kind & CorILMethod_Sect_FatFormat) != 0;
-            more = (kind & CorILMethod_Sect_MoreSects) != 0;
-            if ((kind & CorILMethod_Sect_KindMask) != CorILMethod_Sect_EHTable)
-                break; // unknown section kind — stop (keeps us safe)
-
-            const BYTE* clause;
-            int n;
-            std::size_t sectLen;
-            if (fatSect) {
-                std::uint32_t dataSize = s[1] | (s[2] << 8) | (s[3] << 16);
-                n = static_cast<int>((dataSize - 4) / 24);
-                clause = s + 4;
-                sectLen = dataSize;
-                for (int i = 0; i < n; ++i) {
-                    const BYTE* c = clause + i * 24;
-                    EHClause e{rd32(c), rd32(c + 4), rd32(c + 8), rd32(c + 12), rd32(c + 16), rd32(c + 20)};
-                    e.tryOffset += prefixLen; e.handlerOffset += prefixLen;
-                    if (e.flags & kClauseFilter) e.classTokenOrFilter += prefixLen;
-                    clauses.push_back(e);
-                }
-            } else {
-                std::uint32_t dataSize = s[1];
-                n = static_cast<int>((dataSize - 4) / 12);
-                clause = s + 4;
-                sectLen = dataSize;
-                for (int i = 0; i < n; ++i) {
-                    const BYTE* c = clause + i * 12;
-                    EHClause e{rd16(c), rd16(c + 2), c[4], rd16(c + 5), c[7], rd32(c + 8)};
-                    e.tryOffset += prefixLen; e.handlerOffset += prefixLen;
-                    if (e.flags & kClauseFilter) e.classTokenOrFilter += prefixLen;
-                    clauses.push_back(e);
-                }
-            }
-            s += (sectLen + 3) & ~static_cast<std::size_t>(3);
-        }
+    std::vector<il::EHClause> clauses;
+    il::parseEHClauses(header, code, codeSize, moreSects, clauses);
+    for (il::EHClause& e : clauses) {
+        e.tryOffset += prefixLen;
+        e.handlerOffset += prefixLen;
+        if (e.flags & il::kClauseFilter) e.classTokenOrFilter += prefixLen;
     }
 
     // Emit a fat method: header + prefix + original code (+ relocated EH as fat section).
@@ -285,10 +222,10 @@ HRESULT ProbeManager::getReJITParameters(ModuleID moduleId, mdMethodDef methodId
     std::uint16_t newFlags = CorILMethod_FatFormat;
     if (initLocals) newFlags |= CorILMethod_InitLocals;
     if (!clauses.empty()) newFlags |= CorILMethod_MoreSects;
-    put16(out, static_cast<std::uint16_t>((newFlags & 0xFFF) | (3 << 12))); // flags + 3-dword header
-    put16(out, std::max<std::uint16_t>(maxStack, 2));
-    put32(out, codeSize + prefixLen);
-    put32(out, localSig);
+    il::put16(out, static_cast<std::uint16_t>((newFlags & 0xFFF) | (3 << 12))); // flags + 3-dword header
+    il::put16(out, std::max<std::uint16_t>(maxStack, 2));
+    il::put32(out, codeSize + prefixLen);
+    il::put32(out, localSig);
     out.insert(out.end(), prefix.begin(), prefix.end());
     out.insert(out.end(), code, code + codeSize);
 
@@ -299,9 +236,9 @@ HRESULT ProbeManager::getReJITParameters(ModuleID moduleId, mdMethodDef methodId
         out.push_back(dataSize & 0xFF);
         out.push_back((dataSize >> 8) & 0xFF);
         out.push_back((dataSize >> 16) & 0xFF);
-        for (const EHClause& e : clauses) {
-            put32(out, e.flags); put32(out, e.tryOffset); put32(out, e.tryLength);
-            put32(out, e.handlerOffset); put32(out, e.handlerLength); put32(out, e.classTokenOrFilter);
+        for (const il::EHClause& e : clauses) {
+            il::put32(out, e.flags); il::put32(out, e.tryOffset); il::put32(out, e.tryLength);
+            il::put32(out, e.handlerOffset); il::put32(out, e.handlerLength); il::put32(out, e.classTokenOrFilter);
         }
     }
 

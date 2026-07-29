@@ -124,9 +124,6 @@ void ControlChannel::serve() {
             sendAll(framed);
         }
     }
-    if (logger_) {
-        logger_->logDebug("control channel disconnected");
-    }
 #endif
 }
 

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using System.Threading;
 using Microsoft.Diagnostics.Runtime;
 using Sherlock.Core.Analysis;
 using Sherlock.Core.Diagnostics;
@@ -41,7 +42,10 @@ public sealed class Snapshot(DumpSession dump, SnapshotEntry? entry = null) : ID
 
     // Parameterized queries.
     public ObjectDetail Inspect(ulong address) => new ObjectInspector(dump).Inspect(address);
-    public IReadOnlyList<GcRootPath> Roots(ulong address, int maxPaths = 1) => new RootAnalyzer(dump).FindRoots(address, maxPaths);
+    // V2 pipeline: gcroot over the persisted dominator tree (DAC-free, O(path length)) instead of a
+    // ClrMD BFS outward from every root. Same "why it's alive" answer, no multi-minute heap walk.
+    public IReadOnlyList<GcRootPath> Roots(ulong address, int maxPaths = 1, CancellationToken cancellationToken = default) =>
+        new RootAnalyzerV2(dump).FindRoots(address, maxPaths, cancellationToken);
     public InstanceListing Instances(string filter, int limit = 20) => new HeapAnalyzer(dump).ListInstances(filter, limit);
     public IReadOnlyList<DuplicateString> DuplicateStrings(int limit = 20) => new HeapAnalyzer(dump).FindDuplicateStrings(limit);
 

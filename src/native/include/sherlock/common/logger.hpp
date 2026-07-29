@@ -6,15 +6,14 @@
 
 namespace Sherlock {
 
-/// Minimal thread-safe logger. Writes to stderr at one of four severity levels;
+/// Minimal thread-safe logger. Writes to stderr at one of three severity levels;
 /// messages below the configured level are dropped.
 class Logger {
 public:
     enum class LogLevel {
-        Debug = 0,
-        Info = 1,
-        Warning = 2,
-        Error = 3,
+        Info = 0,
+        Warning = 1,
+        Error = 2,
     };
 
     Logger() = default;
@@ -27,7 +26,6 @@ public:
     void setLogLevel(LogLevel level) { min_level_.store(level, std::memory_order_relaxed); }
     LogLevel getLogLevel() const { return min_level_.load(std::memory_order_relaxed); }
 
-    void logDebug(const std::string& message) { log(LogLevel::Debug, message); }
     void logInfo(const std::string& message) { log(LogLevel::Info, message); }
     void logWarning(const std::string& message) { log(LogLevel::Warning, message); }
     void logError(const std::string& message) { log(LogLevel::Error, message); }
