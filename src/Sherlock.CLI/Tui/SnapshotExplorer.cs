@@ -58,8 +58,8 @@ public static class SnapshotExplorer
 
         Color[] palette =
         [
-            Colors.Hex("#6a9fb5"), Colors.Hex("#90a959"), Colors.Hex("#f4bf75"),
-            Colors.Hex("#aa759f"), Colors.Hex("#d28445"), Colors.Hex("#75b5aa"),
+            Color.Hex("#6a9fb5"), Color.Hex("#90a959"), Color.Hex("#f4bf75"),
+            Color.Hex("#aa759f"), Color.Hex("#d28445"), Color.Hex("#75b5aa"),
         ];
 
         // The one router: a link payload (or an Enter on a row) says where to go; we nest a focused page.
@@ -68,8 +68,7 @@ public static class SnapshotExplorer
             switch (payload)
             {
                 case ObjTarget o: nav.Push(new Page($"0x{o.Address:x}", InstancePage(snap, o.Address, o.Tab))); break;
-                case TypeTarget t: nav.Push(new Page(Short(t.Type), InstancesPage(snap, t.Type))); break;
-                case TypeAllocTarget ta: nav.Push(new Page(Short(ta.Type), TypeAllocPage(snap, ta.Type))); break;
+                case TypeTarget t: nav.Push(new Page(Short(t.Type), TypeDetailPage(snap, t.Type, t.Tab))); break;
                 case MethodTarget m: nav.Push(new Page(Short(m.Method), MethodPage(snap, m.Method))); break;
             }
         }
@@ -215,19 +214,36 @@ public static class SnapshotExplorer
         }
 
         // Types: histogram with a per-row share bar; Enter (or a click) drills into a type's instances.
+        // A `/` filter prompt narrows the list live (case-insensitive substring on the type name).
         Widget TypesTab(Snapshot snap)
         {
             List<HeapTypeStat> hist = snap.Histogram.OrderByDescending(s => s.TotalSize).ToList();
-            long total = Math.Max(1, hist.Sum(s => (long)s.TotalSize));
             Table t = MakeTable(("Type", Constraint.Fill(3), false), ("Count", Constraint.Length(11), true),
                 ("Bytes", Constraint.Length(11), true), ("%", Constraint.Length(6), true), ("share", Constraint.Length(14), false));
-            foreach (HeapTypeStat s in hist)
+
+            void Populate(string query)
             {
-                double pct = 100.0 * (long)s.TotalSize / total;
-                t.Rows.Add([s.TypeName, s.Count.ToString("N0", CultureInfo.InvariantCulture), ByteFormat.Human((long)s.TotalSize), pct.ToString("0.0", CultureInfo.InvariantCulture), Bar(pct, 12)]);
+                query = query.Trim();
+                List<HeapTypeStat> rows = query.Length == 0
+                    ? hist
+                    : hist.Where(s => s.TypeName.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
+                long total = Math.Max(1, rows.Sum(s => (long)s.TotalSize));
+                t.Rows.Clear();
+                foreach (HeapTypeStat s in rows)
+                {
+                    double pct = 100.0 * (long)s.TotalSize / total;
+                    t.Rows.Add([s.TypeName, s.Count.ToString("N0", CultureInfo.InvariantCulture), ByteFormat.Human((long)s.TotalSize), pct.ToString("0.0", CultureInfo.InvariantCulture), Bar(pct, 12)]);
+                }
+                t.SelectedIndex = t.Rows.Count > 0 ? 0 : -1;
+                t.ScrollOffset = 0;
             }
+            Populate("");
             t.OnActivate = i => Follow(snap, new TypeTarget(t.Rows[i][0]));
-            return Hinted(new Panel(t, " Types ") { BorderStyle = BorderStyle.Rounded }, "Enter → instances  ·  s sort  ·  Backspace back");
+
+            var filter = new Input { Placeholder = "/ to filter types by name…", OnChange = Populate };
+            var body = new FilterStack(filter, t);
+            return Hinted(new Panel(body, " Types ") { BorderStyle = BorderStyle.Rounded },
+                "Enter → instances  ·  / filter  ·  Esc unfocus  ·  s sort  ·  Backspace back");
         }
 
         // Retention: the dominator tree. Roots ARE the top dominator objects; children come lazily from
@@ -299,7 +315,7 @@ public static class SnapshotExplorer
         // By type: what was allocated, largest churn first, with the survived share and how concentrated
         // the origin is. At the top level, Enter → that type's call tree (where it came from).
         Widget ByTypeTab(Snapshot snap, AllocationProfile profile) =>
-            Hinted(new Panel(TypeTable(snap, profile, name => new TypeAllocTarget(name)), " Allocations by type — what the program allocated ") { BorderStyle = BorderStyle.Rounded },
+            Hinted(new Panel(TypeTable(snap, profile, name => new TypeTarget(name, "Call tree")), " Allocations by type — what the program allocated ") { BorderStyle = BorderStyle.Rounded },
                 "Enter → where this type came from  ·  s sort  ·  Backspace back");
 
         // A type-breakdown table over a profile (the whole profile, or one method's inclusive slice):
@@ -323,12 +339,25 @@ public static class SnapshotExplorer
             return t;
         }
 
+        // A type's detail page: its live Instances and the Call tree of where it was allocated —
+        // dotMemory's two-panel type view, as lazy tabs. `tab` picks which one a link wanted to land on.
+        Widget TypeDetailPage(Snapshot snap, string typeName, string tab = "Instances")
+        {
+            var tabs = new Tabs()
+                .Add("Instances", () => InstancesPage(snap, typeName))
+                .Add("Call tree", () => TypeAllocTab(snap, typeName));
+            tabs.ActiveIndex = tab == "Call tree" ? 1 : 0;
+            return Hinted(tabs, "Tab / ←→ switch view  ·  Enter drill in  ·  Backspace back");
+        }
+
         // Where a given type was allocated: the call tree of just that type's sites.
-        Widget TypeAllocPage(Snapshot snap, string typeName)
+        Widget TypeAllocTab(Snapshot snap, string typeName)
         {
             if (snap.Allocations is not { } profile)
             {
-                return Hinted(new Panel(new Padding(new Label(new StyledText("No allocation profile in this snapshot.", Theme.Current.MutedStyle)), new Thickness(1)), " Allocations ") { BorderStyle = BorderStyle.Rounded }, "Backspace back");
+                return new Panel(new Padding(new Label(new StyledText(
+                    "No allocation profile in this snapshot. Capture with `run --profile` or `run --correlate`.", Theme.Current.MutedStyle)), new Thickness(1)),
+                    " Call tree ") { BorderStyle = BorderStyle.Rounded };
             }
             AllocationTreeNode root = AllocationTreeNode.Build(profile.OfType(typeName));
             return Hinted(new Panel(AllocTreeTable(snap, root.Children, root.AllocBytes), $" Where {Short(typeName)} came from — {ByteFormat.Human(root.AllocBytes)} ") { BorderStyle = BorderStyle.Rounded },
@@ -364,7 +393,7 @@ public static class SnapshotExplorer
             }
             tree.OnLinkClick = p => Follow(snap, p);
             tree.OnActivate = n => Follow(snap, new MethodTarget(n.Value.Frame));
-            tree.Invalidate();
+            tree.MarkDirty();
             return tree;
         }
 
@@ -430,7 +459,7 @@ public static class SnapshotExplorer
                 else if (detail.IsArray) { obj.AddChild($"length : int = {detail.ElementCount}"); foreach (string el in detail.Elements.Take(64)) obj.AddChild($"[] = {el}"); }
                 else foreach (FieldValue f in detail.Fields) obj.AddChild($"{f.Name} : {Short(f.TypeName)} = {f.Value}");
                 obj.ExpandAll();
-                inspect.Invalidate();
+                inspect.MarkDirty();
                 return new Panel(inspect, " Object — click a reference to follow it ") { BorderStyle = BorderStyle.Rounded };
             }
 
@@ -447,13 +476,13 @@ public static class SnapshotExplorer
                     foreach (GcRootNode step in path.Path) node = node.AddChild(new RootRow(Short(step.TypeName), step.Address));
                     root.ExpandAll();
                 }
-                roots.Invalidate();
+                roots.MarkDirty();
                 return new Panel(roots, " Why it's alive — click a holder to inspect it ") { BorderStyle = BorderStyle.Rounded };
             }
 
             var tabs = new Tabs()
                 .Add("Inspect", BuildInspect())
-                .Add("GC roots", BuildRoots);
+                .Add("GC roots", () => Lens(BuildRoots));
 
             if (snap.HasCorrelation && snap.WhoAllocated(address) is { } stack)
             {
@@ -613,7 +642,7 @@ public static class SnapshotExplorer
             var t = new Table { ShowHeader = true, SelectedIndex = 0, Striped = true, ShowScrollbar = true, Sortable = true };
             foreach ((string header, Constraint width, bool right) in columns)
             {
-                t.Columns.Add(new Column(header, width, right ? Alignment.Right : Alignment.Left) { SortKey = right ? s => ParseNum(s) : null });
+                t.Columns.Add(new Column(header, width, right ? Justify.Right : Justify.Left) { SortKey = right ? s => ParseNum(s) : null });
             }
             return t;
         }
@@ -697,7 +726,65 @@ public static class SnapshotExplorer
 }
 
 file sealed record ObjTarget(ulong Address, string Tab = "Inspect");
-file sealed record TypeTarget(string Type);           // → that type's live instances
-file sealed record TypeAllocTarget(string Type);      // → where that type was allocated (call tree)
+file sealed record TypeTarget(string Type, string Tab = "Instances"); // → that type's detail (Instances / Call tree)
 file sealed record MethodTarget(string Method);
 file sealed record RootRow(string Text, ulong? Address);
+
+// A filter prompt above a table: `/` focuses the input, Esc returns focus to the table. The table
+// is focused by default so ↑/↓/Enter drive the list without a detour through the prompt. Both the
+// input and the table render through an inner Stack; this wrapper only steers focus and keys.
+file sealed class FilterStack : Tessera.Widgets.Widget
+{
+    private readonly Tessera.Widgets.Input _input;
+    private readonly Tessera.Widgets.Widget _body;
+    private readonly Tessera.Widgets.Stack _stack;
+
+    public FilterStack(Tessera.Widgets.Input input, Tessera.Widgets.Widget body)
+    {
+        _input = input;
+        _body = body;
+        _stack = new Tessera.Widgets.Stack(Tessera.Layout.Direction.Vertical)
+            .Add(input, Tessera.Layout.Constraint.Length(1))
+            .Add(body, Tessera.Layout.Constraint.Fill());
+    }
+
+    public override bool IsFocusable => true;
+
+    public override bool HasFocus
+    {
+        get => _stack.HasFocus;
+        set
+        {
+            _stack.HasFocus = value;
+            if (value && !_input.HasFocus && !_body.HasFocus) _body.HasFocus = true;
+        }
+    }
+
+    protected override void VisitChildren(System.Action<Tessera.Widgets.Widget> visit) => visit(_stack);
+
+    public override Tessera.Primitives.Size Measure(Tessera.Primitives.Size available) => _stack.Measure(available);
+
+    public override void Render(Tessera.Rendering.Surface surface, Tessera.Primitives.Rect area) => _stack.Render(surface, area);
+
+    public override bool OnEvent(Tessera.Terminal.InputEvent e)
+    {
+        if (e is Tessera.Terminal.KeyEvent key)
+        {
+            // `/` opens the filter (unless the input already has it, so you can type a literal slash).
+            if (!_input.HasFocus && key.IsChar && key.Rune.Value == '/')
+            {
+                _body.HasFocus = false;
+                _input.HasFocus = true;
+                return true;
+            }
+            // Esc leaves the filter and hands the arrows/Enter back to the table.
+            if (_input.HasFocus && key.Key == Tessera.Terminal.Key.Escape)
+            {
+                _input.HasFocus = false;
+                _body.HasFocus = true;
+                return true;
+            }
+        }
+        return _stack.OnEvent(e);
+    }
+}

@@ -1,10 +1,25 @@
+using System;
 using System.Runtime.InteropServices;
+using Sherlock.Core.Profiling;
 using Sherlock.Core.Storage;
+using Sherlock.Core.Tests.Common;
 
-namespace Sherlock.Core.Tests.Storage;
+namespace Sherlock.Core.Tests.Profiling;
 
-public class ProvenanceTests
+public class ProvenanceTests : IDisposable
 {
+    private readonly TempDir _tmp = new();
+
+    public void Dispose() => _tmp.Dispose();
+
+    // Serializes a provenance writer to a temp .slab and opens it (exercises the real mmap + Column path).
+    private SlabFile Write(ProvenanceWriter w)
+    {
+        var cw = new ContainerWriter();
+        w.WriteTo(cw);
+        return _tmp.WriteSlab(cw);
+    }
+
     [Fact]
     public void AllocationRecordLayoutMatchesNative()
     {
@@ -21,12 +36,11 @@ public class ProvenanceTests
         w.AddAllocation(s1, allocBytes: 2000, allocCount: 50, survivedBytes: 1600, survivedCount: 40);
         w.AddAllocation(s2, allocBytes: 512, allocCount: 8, survivedBytes: 0, survivedCount: 0);
 
-        var cw = new ContainerWriter();
-        w.WriteTo(cw);
-        var r = new ProvenanceReader(new ContainerReader(cw.ToArray()));
+        using SlabFile slab = Write(w);
+        var r = new ProvenanceReader(slab);
 
-        var recs = r.Allocations;
-        Assert.Equal(2, recs.Length);
+        Column<AllocationRecord> recs = r.Allocations;
+        Assert.Equal(2L, recs.Length);
 
         Assert.Equal(s1, recs[0].StackId);
         Assert.Equal(2000ul, recs[0].AllocBytes);
@@ -63,20 +77,16 @@ public class ProvenanceTests
         w.AddObject(0x1000, s1);
         w.AddObject(0x2000, s1);
 
-        var cw = new ContainerWriter();
-        w.WriteTo(cw);
-        var r = new ProvenanceReader(new ContainerReader(cw.ToArray()));
+        using SlabFile slab = Write(w);
+        var r = new ProvenanceReader(slab);
 
-        var corr = r.Correlation;
-        Assert.Equal(3, corr.Length);
-        Assert.Equal(0x1000ul, corr[0].Address); // sorted ascending
-        Assert.Equal(0x2000ul, corr[1].Address);
-        Assert.Equal(0x3000ul, corr[2].Address);
+        Assert.Equal(3L, r.CorrelationCount);
 
         Assert.True(r.TryGetStack(0x2000, out uint sid));
         Assert.Equal(s1, sid);
         Assert.Equal("Program.Main;Registry.Add", r.StackFor(0x2000));
         Assert.Equal("Program.Main;List.Resize", r.StackFor(0x3000));
+        Assert.Equal("Program.Main;Registry.Add", r.StackFor(0x1000));
         Assert.False(r.TryGetStack(0x1500, out _)); // untracked
         Assert.Null(r.StackFor(0x1500));
     }
@@ -86,10 +96,9 @@ public class ProvenanceTests
     {
         var w = new ProvenanceWriter();
         w.AddAllocation(w.InternStack(["A"]), 100, 1, 100, 1);
-        var cw = new ContainerWriter();
-        w.WriteTo(cw); // no AddObject → no Correlation section
-        var r = new ProvenanceReader(new ContainerReader(cw.ToArray()));
-        Assert.True(r.Correlation.IsEmpty);
+        using SlabFile slab = Write(w); // no AddObject → no Correlation section
+        var r = new ProvenanceReader(slab);
+        Assert.Equal(0L, r.CorrelationCount);
         Assert.Null(r.StackFor(0x1000));
     }
 }

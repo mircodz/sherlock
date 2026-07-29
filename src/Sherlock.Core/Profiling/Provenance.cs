@@ -1,8 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using Sherlock.Core.Storage;
 
-namespace Sherlock.Core.Storage;
+namespace Sherlock.Core.Profiling;
 
 /// <summary>An allocation site: a stack plus its alloc/survived byte+object counters. Mirrors native <c>AllocationRecord</c>.</summary>
 [StructLayout(LayoutKind.Sequential)]
@@ -79,49 +80,54 @@ public sealed class ProvenanceWriter
         if (_corr.Count > 0)
         {
             // Sort by address so the reader can binary-search; emitted only when there's provenance.
+            // Chunked (N sections) to match the native writer and to stay under the reader's per-section
+            // cap: one 16-byte record per live object overflows a single section past ~134M objects.
             _corr.Sort(static (a, b) => a.Address.CompareTo(b.Address));
-            w.AddRecords<CorrelationRecord>(SectionType.Correlation, ProfileFormat.Version, CollectionsMarshal.AsSpan(_corr));
+            w.AddChunkedRecords<CorrelationRecord>(SectionType.Correlation, ProfileFormat.Version, CollectionsMarshal.AsSpan(_corr));
         }
     }
 }
 
-/// <summary>Read-only view over a provenance container: allocation + correlation records, plus the stack table to resolve their ids.</summary>
+/// <summary>Read-only view over a provenance container: allocation + correlation columns, plus the
+/// stack table to resolve their ids. Backed by a <see cref="SlabFile"/> (owned by the caller): the
+/// correlation column may span many chunk sections and exceed 2&nbsp;GB, and is indexed by <c>long</c>,
+/// so <c>whoalloc</c> works past ~134M live objects without a single-section ceiling.</summary>
 public sealed class ProvenanceReader
 {
-    private readonly ReadOnlyMemory<byte> _allocs;
-    private readonly ReadOnlyMemory<byte> _corr;
+    private readonly Column<CorrelationRecord> _corr;
 
     public StackTable Stacks { get; }
+
+    /// <summary>The allocation sites (one per distinct call-stack + type). Long-indexed, but bounded by
+    /// call-site cardinality in practice.</summary>
+    public Column<AllocationRecord> Allocations { get; }
 
     /// <summary>Version of the Allocations section; >= 2 means each record carries a real <c>TypeId</c>.</summary>
     public ushort AllocationsVersion { get; }
 
-    public ProvenanceReader(ContainerReader container)
+    public ProvenanceReader(SlabFile slab)
     {
-        Stacks = StackTable.Read(container);
-        if (container.TryGetSection(SectionType.Allocations, out Section a))
-        {
-            _allocs = a.Data;
-            AllocationsVersion = a.Version;
-        }
-        _corr = container.TryGetSection(SectionType.Correlation, out Section c) ? c.Data : default;
+        Stacks = StackTable.Read(slab);
+        Allocations = slab.GetColumn<AllocationRecord>(SectionType.Allocations);
+        AllocationsVersion = slab.SectionVersion(SectionType.Allocations);
+        _corr = slab.GetColumn<CorrelationRecord>(SectionType.Correlation);
     }
 
-    public ReadOnlySpan<AllocationRecord> Allocations => MemoryMarshal.Cast<byte, AllocationRecord>(_allocs.Span);
-    public ReadOnlySpan<CorrelationRecord> Correlation => MemoryMarshal.Cast<byte, CorrelationRecord>(_corr.Span);
+    /// <summary>The number of tracked live objects (correlation records).</summary>
+    public long CorrelationCount => _corr.Length;
 
-    /// <summary>Binary-searches the sorted correlation records for an object's allocating stack id.</summary>
+    /// <summary>Binary-searches the address-sorted correlation column for an object's allocating stack id.
+    /// Long-indexed and chunk-transparent: the column may be several on-disk sections.</summary>
     public bool TryGetStack(ulong address, out uint stackId)
     {
-        ReadOnlySpan<CorrelationRecord> recs = Correlation;
-        int lo = 0, hi = recs.Length - 1;
+        long lo = 0, hi = _corr.Length - 1;
         while (lo <= hi)
         {
-            int mid = (int)(((uint)lo + (uint)hi) >> 1);
-            ulong a = recs[mid].Address;
+            long mid = lo + ((hi - lo) >> 1);
+            ulong a = _corr[mid].Address;
             if (a == address)
             {
-                stackId = recs[mid].StackId;
+                stackId = _corr[mid].StackId;
                 return true;
             }
             if (a < address)

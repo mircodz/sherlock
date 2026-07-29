@@ -37,7 +37,7 @@ public:
 
     // A unique (allocation stack, allocated type) pair and what it has allocated. The same call
     // site can allocate more than one type, so sites are keyed by both - this gives per-type
-    // attribution for free. `frames` is stored leaf -> root (the order DoStackSnapshot yields).
+    // attribution for free. `frames` is stored root -> leaf (the order the shadow stack yields).
     struct Site {
         std::vector<FunctionID> frames;
         ClassID classId = 0;  // the allocated type; resolved to a name at dump time
@@ -64,8 +64,8 @@ public:
     Aggregator(ICorProfilerInfo10* info, Logger* logger);
     ~Aggregator();
 
-    /// Hot path. `frames` is the captured stack (leaf -> root), a view over the caller's fixed
-    /// capture buffer (no allocation); `addr` is the object's address; `classId` is its type (stored,
+    /// Hot path. `frames` is the captured stack (root -> leaf), a view over the caller's shadow
+    /// stack storage (no allocation); `addr` is the object's address; `classId` is its type (stored,
     /// resolved to a name only at dump time). Lock-free: touches only the calling thread's shard.
     void record(std::span<const FunctionID> frames, std::uint64_t bytes, ObjectID addr, ClassID classId);
 
@@ -140,6 +140,10 @@ private:
 
     ICorProfilerInfo10* info_;
     Logger* logger_;
+
+    // Unique per-instance id, used to tag the per-thread shard cache so a new Aggregator
+    // sharing a thread (or a stack address) with a destroyed one never reuses its freed shard.
+    std::uint64_t instanceId_;
 
     // Lock-free shard registry: a thread claims a slot once via fetch_add. Iterated
     // by the GC thread without locking (the world is stopped, so no races), with a

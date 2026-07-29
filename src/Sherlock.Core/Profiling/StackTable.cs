@@ -1,8 +1,9 @@
 using System;
 using System.Runtime.InteropServices;
 using System.Text;
+using Sherlock.Core.Storage;
 
-namespace Sherlock.Core.Storage;
+namespace Sherlock.Core.Profiling;
 
 /// <summary>A frame: a slice of the Strings blob. frameId is this record's index. Mirrors the native FrameRecord.</summary>
 [StructLayout(LayoutKind.Sequential)]
@@ -42,15 +43,14 @@ public sealed class StackTable
         _frameCache = new string?[FrameCount];
     }
 
-    public static StackTable Read(ContainerReader c)
-    {
-        ReadOnlyMemory<byte> Get(SectionType t) => c.TryGetSection(t, out Section s) ? s.Data : default;
-        return new StackTable(
-            Get(SectionType.Strings),
-            Get(SectionType.Frames),
-            Get(SectionType.Stacks),
-            Get(SectionType.StackFrames));
-    }
+    /// <summary>Reads the stack table from a <see cref="SlabFile"/>. The four sub-sections (strings pool,
+    /// frame/stack records, frame-id pool) are bounded by call-site cardinality (tens of thousands), so
+    /// they're small single-section blobs — no chunking needed here.</summary>
+    public static StackTable Read(SlabFile slab) =>
+        new(slab.Blob(SectionType.Strings),
+            slab.Blob(SectionType.Frames),
+            slab.Blob(SectionType.Stacks),
+            slab.Blob(SectionType.StackFrames));
 
     public int FrameCount => _frames.Length / Marshal.SizeOf<FrameRecord>();
     public int StackCount => _stacks.Length / Marshal.SizeOf<StackRecord>();

@@ -199,35 +199,33 @@ ShadowStackInstrumenter::ModuleSigs& ShadowStackInstrumenter::ensureSigs(ModuleI
     return sigByModule_.emplace(moduleId, sigs).first->second;
 }
 
-void ShadowStackInstrumenter::instrument(FunctionID functionId, ModuleID moduleId, mdMethodDef methodToken) {
-    // Instrument each method body at most once. Tiered compilation JITs a method multiple
-    // times; on the 2nd+ pass GetILFunctionBody returns our already-wrapped IL, and
-    // re-wrapping nests the try/finally into invalid IL.
-    std::uint64_t key = static_cast<std::uint64_t>(moduleId) * 1099511628211ull +
-                        static_cast<std::uint32_t>(methodToken);
-    if (!done_.insert(key).second)
-        return;
+bool ShadowStackInstrumenter::moduleAllowed(ModuleID moduleId) {
+    if (moduleFilter_.empty())
+        return true;
+    WCHAR nameBuf[512];
+    ULONG nameLen = 0;
+    LPCBYTE base = nullptr;
+    AssemblyID asmId = 0;
+    if (FAILED(info_->GetModuleInfo(moduleId, &base, 512, &nameLen, nameBuf, &asmId)))
+        return false;
+    std::string modName;
+    for (ULONG i = 0; i < nameLen && nameBuf[i] != 0; ++i)
+        modName.push_back(nameBuf[i] < 128 ? static_cast<char>(nameBuf[i]) : '?');
+    return modName.find(moduleFilter_) != std::string::npos;
+}
 
-    // Optional module-name filter for staged rollout.
-    if (!moduleFilter_.empty()) {
-        WCHAR nameBuf[512];
-        ULONG nameLen = 0;
-        LPCBYTE base = nullptr;
-        AssemblyID asmId = 0;
-        if (FAILED(info_->GetModuleInfo(moduleId, &base, 512, &nameLen, nameBuf, &asmId))) { skipped_++; return; }
-        std::string modName;
-        for (ULONG i = 0; i < nameLen && nameBuf[i] != 0; ++i)
-            modName.push_back(nameBuf[i] < 128 ? static_cast<char>(nameBuf[i]) : '?');
-        if (modName.find(moduleFilter_) == std::string::npos) { skipped_++; return; }
-    }
-
+// Core IL rewrite shared by the JIT and ReJIT paths. Fills `out` with a fully assembled
+// method body (fat header + try/finally-wrapped code + EH section) and returns true; returns
+// false to skip (caller leaves the original IL untouched). Never sets the body itself.
+bool ShadowStackInstrumenter::buildIL(FunctionID functionId, ModuleID moduleId,
+                                      mdMethodDef methodToken, std::vector<BYTE>& out) {
     ModuleSigs& sigs = ensureSigs(moduleId);
-    if (sigs.push == mdSignatureNil || sigs.pop == mdSignatureNil) { skipped_++; return; }
+    if (sigs.push == mdSignatureNil || sigs.pop == mdSignatureNil) { return false; }
 
     LPCBYTE header = nullptr;
     ULONG headerSize = 0;
     if (FAILED(info_->GetILFunctionBody(moduleId, methodToken, &header, &headerSize)) || header == nullptr) {
-        skipped_++; return;
+        return false;
     }
 
     const BYTE* p = header;
@@ -252,7 +250,7 @@ void ShadowStackInstrumenter::instrument(FunctionID functionId, ModuleID moduleI
         localSigTok = rd32(p + 8);
         code = p + hdrDwords * 4;
     } else {
-        skipped_++; return;
+        return false;
     }
 
     // ---- decode the body ----
@@ -305,7 +303,7 @@ void ShadowStackInstrumenter::instrument(FunctionID functionId, ModuleID moduleI
         insns.push_back(in);
         o += in.len;
     }
-    if (!ok || insns.empty() || unsafeToWrap) { skipped_++; return; }
+    if (!ok || insns.empty() || unsafeToWrap) { return false; }
 
     // ---- determine return type: extract the RetType blob from the method sig, so we
     // can add a local to stash the returned value before `leave`. Void => no local. ----
@@ -320,21 +318,21 @@ void ShadowStackInstrumenter::instrument(FunctionID functionId, ModuleID moduleI
                 if (sp < send) {
                     BYTE cc = *sp++;                      // calling convention
                     std::uint32_t tmp;
-                    if (cc & IMAGE_CEE_CS_CALLCONV_GENERIC) { if (!uncompress(sp, send, tmp)) { md->Release(); skipped_++; return; } }
-                    if (!uncompress(sp, send, tmp)) { md->Release(); skipped_++; return; } // param count
+                    if (cc & IMAGE_CEE_CS_CALLCONV_GENERIC) { if (!uncompress(sp, send, tmp)) { md->Release(); return false; } }
+                    if (!uncompress(sp, send, tmp)) { md->Release(); return false; } // param count
                     // RetType begins here. Parse just enough to measure its length; skip on anything exotic.
                     const BYTE* rtStart = sp;
                     // custom mods
                     while (sp < send && (*sp == ELEMENT_TYPE_CMOD_OPT || *sp == ELEMENT_TYPE_CMOD_REQD)) {
-                        sp++; std::uint32_t t; if (!uncompress(sp, send, t)) { md->Release(); skipped_++; return; }
+                        sp++; std::uint32_t t; if (!uncompress(sp, send, t)) { md->Release(); return false; }
                     }
-                    if (sp >= send) { md->Release(); skipped_++; return; }
+                    if (sp >= send) { md->Release(); return false; }
                     BYTE et = *sp++;
                     if (et == ELEMENT_TYPE_VOID) {
                         nonVoid = false;
                     } else if (et == ELEMENT_TYPE_BYREF || et == ELEMENT_TYPE_TYPEDBYREF) {
                         // ref returns / typedref: skip (uncommon, tricky).
-                        md->Release(); skipped_++; return;
+                        md->Release(); return false;
                     } else {
                         // Simple value/ref element types we can size to one byte, plus CLASS/VALUETYPE
                         // (+token) and SZARRAY-of-simple. Anything else: skip.
@@ -347,12 +345,12 @@ void ShadowStackInstrumenter::instrument(FunctionID functionId, ModuleID moduleI
                             case ELEMENT_TYPE_STRING: case ELEMENT_TYPE_OBJECT:
                                 simple = true; break;
                             case ELEMENT_TYPE_CLASS: case ELEMENT_TYPE_VALUETYPE: {
-                                std::uint32_t t; if (!uncompress(sp, send, t)) { md->Release(); skipped_++; return; }
+                                std::uint32_t t; if (!uncompress(sp, send, t)) { md->Release(); return false; }
                                 simple = true; break;
                             }
                             default: break;
                         }
-                        if (!simple) { md->Release(); skipped_++; return; }
+                        if (!simple) { md->Release(); return false; }
                         nonVoid = true;
                         retTypeBlob.assign(rtStart, sp);
                     }
@@ -376,7 +374,7 @@ void ShadowStackInstrumenter::instrument(FunctionID functionId, ModuleID moduleI
                 if (SUCCEEDED(mdi->GetSigFromToken(static_cast<mdSignature>(localSigTok), &ls, &lsLen)) && lsLen >= 2) {
                     const BYTE* lp = ls; const BYTE* lend = ls + lsLen;
                     lp++; // LOCAL_SIG (0x07)
-                    if (!uncompress(lp, lend, origLocalCount)) { if (mdi) mdi->Release(); skipped_++; return; }
+                    if (!uncompress(lp, lend, origLocalCount)) { if (mdi) mdi->Release(); return false; }
                     origLocalsBody.assign(lp, lend);
                 }
                 mdi->Release();
@@ -392,7 +390,7 @@ void ShadowStackInstrumenter::instrument(FunctionID functionId, ModuleID moduleI
             mde->GetTokenFromSig(newSig.data(), static_cast<ULONG>(newSig.size()), &newLocalTok);
             mde->Release();
         } else {
-            skipped_++; return;
+            return false;
         }
     }
 
@@ -472,7 +470,7 @@ void ShadowStackInstrumenter::instrument(FunctionID functionId, ModuleID moduleI
             put32(body, n);
             std::uint32_t after = here + 5 + n * 4;
             for (std::uint32_t t : in.swTargets) {
-                std::uint32_t tn; if (!mapOff(t, tn)) { skipped_++; return; }
+                std::uint32_t tn; if (!mapOff(t, tn)) { return false; }
                 put32(body, static_cast<std::uint32_t>(static_cast<std::int32_t>(tn) - static_cast<std::int32_t>(after)));
             }
             continue;
@@ -481,7 +479,7 @@ void ShadowStackInstrumenter::instrument(FunctionID functionId, ModuleID moduleI
             BYTE op = in.shortBr ? shortToLong(in.op0) : in.op0;
             body.push_back(op);
             std::uint32_t after = here + 5;
-            std::uint32_t tn; if (!mapOff(in.brTarget, tn)) { skipped_++; return; }
+            std::uint32_t tn; if (!mapOff(in.brTarget, tn)) { return false; }
             put32(body, static_cast<std::uint32_t>(static_cast<std::int32_t>(tn) - static_cast<std::int32_t>(after)));
             continue;
         }
@@ -519,7 +517,7 @@ void ShadowStackInstrumenter::instrument(FunctionID functionId, ModuleID moduleI
                 for (int i = 0; i < n; ++i) {
                     const BYTE* c = clause + i * 24;
                     auto e = relocate(EHClause{rd32(c), rd32(c + 4), rd32(c + 8), rd32(c + 12), rd32(c + 16), rd32(c + 20)});
-                    if (!e) { skipped_++; return; }
+                    if (!e) { return false; }
                     clauses.push_back(*e);
                 }
             } else {
@@ -528,7 +526,7 @@ void ShadowStackInstrumenter::instrument(FunctionID functionId, ModuleID moduleI
                 for (int i = 0; i < n; ++i) {
                     const BYTE* c = clause + i * 12;
                     auto e = relocate(EHClause{rd16(c), rd16(c + 2), c[4], rd16(c + 5), c[7], rd32(c + 8)});
-                    if (!e) { skipped_++; return; }
+                    if (!e) { return false; }
                     clauses.push_back(*e);
                 }
             }
@@ -545,7 +543,7 @@ void ShadowStackInstrumenter::instrument(FunctionID functionId, ModuleID moduleI
 
     // ---- assemble the full method ----
     std::uint32_t newCodeSize = static_cast<std::uint32_t>(prologue.size() + body.size() + finallyBody.size() + endSeq.size());
-    std::vector<BYTE> out;
+    out.clear();
     std::uint16_t newFlags = CorILMethod_FatFormat | CorILMethod_MoreSects;
     if (initLocals) newFlags |= CorILMethod_InitLocals;
     put16(out, static_cast<std::uint16_t>((newFlags & 0xFFF) | (3 << 12)));
@@ -567,19 +565,80 @@ void ShadowStackInstrumenter::instrument(FunctionID functionId, ModuleID moduleI
         put32(out, e.handlerOffset); put32(out, e.handlerLength); put32(out, e.classTokenOrFilter);
     }
 
-    // ---- allocate via IMethodMalloc (JIT-path requires the runtime's allocator) ----
-    IMethodMalloc* malloc = nullptr;
-    if (FAILED(info_->GetILFunctionBodyAllocator(moduleId, &malloc)) || malloc == nullptr) { skipped_++; return; }
-    void* mem = malloc->Alloc(static_cast<ULONG>(out.size()));
-    malloc->Release();
-    if (mem == nullptr) { skipped_++; return; }
-    std::memcpy(mem, out.data(), out.size());
-    HRESULT hr = info_->SetILFunctionBody(moduleId, methodToken, static_cast<LPCBYTE>(mem));
-    if (FAILED(hr)) {
-        skipped_++;
+    return true;
+}
+
+// --- ReJIT path --------------------------------------------------------------------------
+void ShadowStackInstrumenter::onModuleLoaded(ModuleID moduleId) {
+    if (!moduleAllowed(moduleId))
         return;
+
+    IMetaDataImport* md = nullptr;
+    if (FAILED(info_->GetModuleMetaData(moduleId, ofRead, IID_IMetaDataImport, (IUnknown**)&md)) || md == nullptr)
+        return;
+
+    // Enumerate every method defined in this module and request a ReJIT for each. The rewritten
+    // IL is supplied later from getReJITParameters (called by the runtime before first use, and
+    // used for inlined bodies too — so we can leave inlining ON). EnumMethods needs a concrete
+    // typedef, so walk all type defs first (plus the module's <Module> global-methods pseudo-type).
+    std::vector<ModuleID> reMods;
+    std::vector<mdMethodDef> reToks;
+
+    auto enumTypeMethods = [&](mdTypeDef td) {
+        HCORENUM hm = nullptr;
+        mdMethodDef toks[256];
+        ULONG n = 0;
+        while (SUCCEEDED(md->EnumMethods(&hm, td, toks, 256, &n)) && n > 0) {
+            for (ULONG i = 0; i < n; ++i) {
+                reMods.push_back(moduleId);
+                reToks.push_back(toks[i]);
+            }
+            if (n < 256) break;
+        }
+        md->CloseEnum(hm);
+    };
+
+    // Global methods live under the special token 0x02000001 (<Module>).
+    enumTypeMethods(static_cast<mdTypeDef>(0x02000001));
+
+    HCORENUM hTypes = nullptr;
+    mdTypeDef types[256];
+    ULONG tn = 0;
+    while (SUCCEEDED(md->EnumTypeDefs(&hTypes, types, 256, &tn)) && tn > 0) {
+        for (ULONG i = 0; i < tn; ++i)
+            enumTypeMethods(types[i]);
+        if (tn < 256) break;
+    }
+    md->CloseEnum(hTypes);
+    md->Release();
+
+    if (reToks.empty())
+        return;
+    HRESULT hr = info_->RequestReJIT(static_cast<ULONG>(reToks.size()), reMods.data(), reToks.data());
+    if (logger_) {
+        char buf[16];
+        std::snprintf(buf, sizeof buf, "0x%08x", static_cast<unsigned>(hr));
+        logger_->logInfo("shadow ReJIT requested " + std::to_string(reToks.size()) +
+                         " method(s), hr=" + buf);
+    }
+}
+
+HRESULT ShadowStackInstrumenter::getReJITParameters(ModuleID moduleId, mdMethodDef methodToken,
+                                                    ICorProfilerFunctionControl* control) {
+    // Resolve the FunctionID so buildIL can bake it into the push. GetFunctionFromToken gives the
+    // canonical (non-generic) FunctionID; generic instantiations share this body's IL, which is
+    // fine — the shadow frame just identifies the method, resolved to a name at dump time.
+    FunctionID functionId = 0;
+    if (FAILED(info_->GetFunctionFromToken(moduleId, methodToken, &functionId)))
+        functionId = 0; // still emit; a 0 frame resolves to <unknown> but keeps depth correct
+
+    std::vector<BYTE> out;
+    if (!buildIL(functionId, moduleId, methodToken, out)) { skipped_++; return S_OK; }
+    if (FAILED(control->SetILFunctionBody(static_cast<ULONG>(out.size()), out.data()))) {
+        skipped_++; return S_OK;
     }
     instrumented_++;
+    return S_OK;
 }
 
 } // namespace Sherlock

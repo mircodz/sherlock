@@ -5,18 +5,14 @@ using System.IO.MemoryMappedFiles;
 namespace Sherlock.Core.Storage;
 
 /// <summary>
-/// A read-only view of a file mapped in fixed-size chunks, so files (and individual reads) larger than
-/// 2&nbsp;GiB work — the <see cref="Memory{T}"/>/<see cref="Span{T}"/> and single-view APIs are all
-/// <c>int</c>-length-bounded, which caps a single mapping at ~2&nbsp;GiB. Here the file is mapped as N
-/// views of at most <see cref="ChunkSize"/> bytes each (allocation-granularity aligned), and a global
-/// <c>long</c> offset resolves to <c>(chunk, offsetInChunk)</c>. Callers read via <see cref="CopyTo"/>,
-/// which stitches a range that straddles a chunk boundary.
+/// Read-only view of a file mapped in ≤1&nbsp;GiB chunks, so files and reads larger than an int-length
+/// span still work. A global <c>long</c> offset resolves to <c>(chunk, offsetInChunk)</c>; reads that
+/// straddle a chunk boundary are stitched by <see cref="CopyTo"/>.
 /// </summary>
 public sealed unsafe class ChunkedMmap : IDisposable
 {
-    /// <summary>Bytes per mapped view. 1&nbsp;GiB — safely under <see cref="int.MaxValue"/> and a
-    /// multiple of every platform's mmap allocation granularity (64&nbsp;KiB), so chunk starts are
-    /// always view-aligned.</summary>
+    /// <summary>Bytes per view. 1&nbsp;GiB: under <see cref="int.MaxValue"/> and a multiple of the
+    /// 64&nbsp;KiB mmap granularity, so chunk starts stay view-aligned.</summary>
     public const long ChunkSize = 1L << 30;
 
     private readonly MemoryMappedFile _file;
@@ -53,7 +49,7 @@ public sealed unsafe class ChunkedMmap : IDisposable
         {
             for (int i = 0; i < chunkCount; i++)
             {
-                long offset = (long)i * ChunkSize;
+                long offset = i * ChunkSize;
                 long len = Math.Min(ChunkSize, size - offset);
                 MemoryMappedViewAccessor view = file.CreateViewAccessor(offset, len, MemoryMappedFileAccess.Read);
                 byte* p = null;
@@ -116,7 +112,8 @@ public sealed unsafe class ChunkedMmap : IDisposable
         {
             int chunk = (int)(offset / ChunkSize);
             int inChunk = (int)(offset % ChunkSize);
-            if (inChunk + length <= _lengths[chunk])
+            // offset == Length lands one past the last chunk; guard the array index.
+            if (chunk < _lengths.Length && inChunk + length <= _lengths[chunk])
             {
                 pointer = (nint)(_pointers[chunk] + inChunk);
                 return true;

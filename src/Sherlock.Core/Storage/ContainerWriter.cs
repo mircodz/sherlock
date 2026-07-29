@@ -25,6 +25,23 @@ public sealed class ContainerWriter
     public void AddRecords<T>(SectionType type, ushort version, ReadOnlySpan<T> records) where T : struct
         => AddSection(type, version, (ushort)Unsafe.SizeOf<T>(), MemoryMarshal.AsBytes(records), (ulong)records.Length);
 
+    /// <summary>Adds a large fixed-width column as one or more same-typed sections, each at most
+    /// <paramref name="chunkBytes"/> bytes and holding a uniform element count (last is short). Mirrors
+    /// the native <c>addChunkedRecords</c> layout so <see cref="Column{T}"/> reassembles either side's
+    /// output. A single section is capped near 2&nbsp;GB by the reader, so a per-object column (one record
+    /// per live object) must be split. Any sort must already be applied — chunking is a pure partition.</summary>
+    public void AddChunkedRecords<T>(SectionType type, ushort version, ReadOnlySpan<T> records,
+                                     long chunkBytes = ContainerFormat.DefaultChunkBytes) where T : struct
+    {
+        int width = Unsafe.SizeOf<T>();
+        int elemsPerChunk = (int)Math.Max(1, chunkBytes / width);
+        for (int i = 0; i < records.Length; i += elemsPerChunk)
+        {
+            int n = Math.Min(elemsPerChunk, records.Length - i);
+            AddRecords(type, version, records.Slice(i, n));
+        }
+    }
+
     /// <summary>Adds a section whose payload is supplied as several byte-chunks written contiguously —
     /// so a section larger than <see cref="int.MaxValue"/> bytes can be emitted without concatenating
     /// into one array. <paramref name="count"/> is the logical record count across all chunks.</summary>

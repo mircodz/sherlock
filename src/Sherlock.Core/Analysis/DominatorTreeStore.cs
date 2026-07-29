@@ -33,22 +33,21 @@ public static class DominatorTreeStore
     /// doesn't match the graph — meaning the caller should recompute.</summary>
     public static DominatorAnalyzerV2.DominatorResult? Load(string path, HeapGraph graph)
     {
-        using ContainerReader container = ContainerReader.Open(path);
-        if (!container.TryGetSection(SectionType.DomMeta, out Section meta) ||
-            !container.TryGetSection(SectionType.DomNodeByRpo, out Section nodeByRpoSec) ||
-            !container.TryGetSection(SectionType.DomRetained, out Section retainedSec) ||
-            !container.TryGetSection(SectionType.DomIdom, out Section idomSec))
+        using SlabFile slab = SlabFile.Open(path);
+        if (!slab.Has(SectionType.DomMeta) || !slab.Has(SectionType.DomNodeByRpo) ||
+            !slab.Has(SectionType.DomRetained) || !slab.Has(SectionType.DomIdom))
         {
             return null;
         }
-        if (meta.Version != Version || meta.Count < 1 || meta.AsRecords<ulong>()[0] != graph.ContentHash)
+        Column<ulong> metaCol = slab.GetColumn<ulong>(SectionType.DomMeta);
+        if (slab.SectionVersion(SectionType.DomMeta) != Version || metaCol.Length < 1 || metaCol[0] != graph.ContentHash)
         {
             return null; // stale format or a different graph — recompute
         }
 
-        int[] nodeByRpo = nodeByRpoSec.AsRecords<int>().ToArray();
-        ulong[] retained = retainedSec.AsRecords<ulong>().ToArray();
-        int[] idom = idomSec.AsRecords<int>().ToArray();
+        int[] nodeByRpo = ToArray(slab.GetColumn<int>(SectionType.DomNodeByRpo));
+        ulong[] retained = ToArray(slab.GetColumn<ulong>(SectionType.DomRetained));
+        int[] idom = ToArray(slab.GetColumn<int>(SectionType.DomIdom));
 
         // Reconstruct the RPO-indexed address + own-size columns from the graph (no re-storage).
         int m = nodeByRpo.Length;
@@ -68,5 +67,14 @@ public static class DominatorTreeStore
         }
 
         return new DominatorAnalyzerV2.DominatorResult(address, own, retained, idom, nodeByRpo);
+    }
+
+    // These derived columns are small (bounded by reachable node count, comfortably int-sized), so
+    // materializing them into an array is fine — the analysis indexes them densely.
+    private static T[] ToArray<T>(Column<T> col) where T : unmanaged
+    {
+        var arr = new T[checked((int)col.Length)];
+        col.CopyTo(0, arr);
+        return arr;
     }
 }

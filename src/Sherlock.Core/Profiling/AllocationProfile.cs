@@ -62,17 +62,19 @@ public static class AllocationProfileReader
 {
     public static AllocationProfile Read(string path)
     {
-        using ContainerReader container = ContainerReader.Open(path);
-        return From(new ProvenanceReader(container));
+        using SlabFile slab = SlabFile.Open(path);
+        return From(new ProvenanceReader(slab));
     }
 
     /// <summary>Materializes the profile from an already-open provenance reader.</summary>
     public static AllocationProfile From(ProvenanceReader reader)
     {
         bool hasType = reader.AllocationsVersion >= 2; // v1 slabs have no per-record type
-        var sites = new List<AllocationSite>();
-        foreach (AllocationRecord rec in reader.Allocations)
+        Column<AllocationRecord> allocs = reader.Allocations;
+        var sites = new List<AllocationSite>(checked((int)allocs.Length));
+        for (long i = 0; i < allocs.Length; i++)
         {
+            AllocationRecord rec = allocs[i];
             string[] frames = reader.Stacks.FrameNames(rec.StackId); // root -> leaf
             string? typeName = hasType ? reader.Stacks.Frame(rec.TypeId) : null;
             sites.Add(new AllocationSite(

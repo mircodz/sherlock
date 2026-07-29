@@ -12,7 +12,6 @@
 #include "sherlock/profiler/aggregator.hpp"
 #include "sherlock/profiler/probe.hpp"
 #include "sherlock/profiler/shadowstack.hpp"
-#include "sherlock/profiler/trace.hpp"
 #include "sherlock/profiler/triggers.hpp"
 
 namespace Sherlock {
@@ -138,10 +137,6 @@ private:
     std::unique_ptr<Logger> logger;
     std::unique_ptr<Aggregator> aggregator;
 
-    bool traceCalls = false;          // SHERLOCK_TRACE: per-method call tracing via ELT hooks
-    std::string tracePath;
-    std::unique_ptr<TraceCollector> trace;
-
     std::unique_ptr<ProbeManager> probes;      // call: triggers via ReJIT
     std::unique_ptr<SnapshotTriggers> triggers; // alloc:/gc:/throw: triggers via callbacks
     // Highest generation condemned by the in-flight GC. Written in GarbageCollectionStarted and read
@@ -153,8 +148,8 @@ private:
     bool correlate = false;           // SHERLOCK_CORRELATE: track live objects for snapshot join
     std::string correlationPath;
 
-    // SHERLOCK_SHADOW_STACK: maintain a per-thread shadow stack via IL instrumentation and
-    // read it in ObjectAllocated instead of calling DoStackSnapshot (O(1) vs O(depth)).
+    // SHERLOCK_SHADOW_STACK: maintain a per-thread shadow stack via IL instrumentation (ReJIT) and
+    // read it in ObjectAllocated to attribute each allocation to its call stack (O(1) per alloc).
     bool shadowStack = false;
     std::unique_ptr<ShadowStackInstrumenter> shadowInstr;
 

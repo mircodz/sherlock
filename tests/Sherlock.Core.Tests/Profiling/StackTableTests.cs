@@ -1,10 +1,19 @@
+using System;
 using System.Runtime.InteropServices;
+using Sherlock.Core.Profiling;
 using Sherlock.Core.Storage;
+using Sherlock.Core.Tests.Common;
 
-namespace Sherlock.Core.Tests.Storage;
+namespace Sherlock.Core.Tests.Profiling;
 
-public class StackTableTests
+public class StackTableTests : IDisposable
 {
+    private readonly TempDir _tmp = new();
+
+    public void Dispose() => _tmp.Dispose();
+
+    private SlabFile Write(ContainerWriter w) => _tmp.WriteSlab(w);
+
     [Fact]
     public void RecordLayoutsMatchNative()
     {
@@ -37,7 +46,8 @@ public class StackTableTests
 
         var w = new ContainerWriter();
         b.WriteTo(w);
-        var table = StackTable.Read(new ContainerReader(w.ToArray()));
+        using SlabFile slab = Write(w);
+        var table = StackTable.Read(slab);
 
         Assert.Equal(3, table.FrameCount);
         Assert.Equal("Program.Main", table.Frame(main));
@@ -53,7 +63,8 @@ public class StackTableTests
     {
         var w = new ContainerWriter();
         new StackTableBuilder().WriteTo(w);
-        var table = StackTable.Read(new ContainerReader(w.ToArray()));
+        using SlabFile slab = Write(w);
+        var table = StackTable.Read(slab);
         Assert.Equal(0, table.FrameCount);
         Assert.Equal(0, table.StackCount);
     }

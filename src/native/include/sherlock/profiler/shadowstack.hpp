@@ -3,7 +3,6 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include "profilercommon.h"
@@ -70,10 +69,15 @@ public:
     // framework-method rewrite is still being hardened.
     void setModuleFilter(std::string filter) { moduleFilter_ = std::move(filter); }
 
-    // Called from JITCompilationStarted. Rewrites the method body in place via
-    // GetILFunctionBodyAllocator/SetILFunctionBody. Best-effort: on any parse
-    // difficulty it leaves the original IL untouched.
-    void instrument(FunctionID functionId, ModuleID moduleId, mdMethodDef methodToken);
+    // --- ReJIT instrumentation (ModuleLoadFinished -> RequestReJIT -> GetReJITParameters) ---
+    // Enumerate every method in a freshly loaded module and request a ReJIT for each, so the
+    // rewritten IL applies from first call AND is used for inlined bodies (inline-aware) —
+    // letting us keep inlining ON. Skips modules filtered out by setModuleFilter.
+    void onModuleLoaded(ModuleID moduleId);
+    // Deliver the rewritten IL for one ReJIT request. Returns S_OK regardless (a skip leaves
+    // the original IL). Resolves the FunctionID from the token to bake into the push.
+    HRESULT getReJITParameters(ModuleID moduleId, mdMethodDef methodToken,
+                               ICorProfilerFunctionControl* control);
 
     std::uint64_t instrumentedCount() const { return instrumented_; }
     std::uint64_t skippedCount() const { return skipped_; }
@@ -83,14 +87,18 @@ private:
     struct ModuleSigs { mdSignature push = mdSignatureNil; mdSignature pop = mdSignatureNil; };
     ModuleSigs& ensureSigs(ModuleID moduleId);
 
+    // Core IL rewrite: builds the try/finally-wrapped body with push/pop into `out`. Returns
+    // true on success (out filled), false to skip (leave original IL). Shared by both paths.
+    bool buildIL(FunctionID functionId, ModuleID moduleId, mdMethodDef methodToken,
+                 std::vector<BYTE>& out);
+
+    // True if this module passes the optional name filter.
+    bool moduleAllowed(ModuleID moduleId);
+
     ICorProfilerInfo10* info_;
     Logger* logger_;
     std::string moduleFilter_;
     std::unordered_map<std::uint64_t, ModuleSigs> sigByModule_;
-    // (moduleId, methodToken) already instrumented — guards against re-wrapping when the
-    // runtime JITs a method more than once (tiered compilation), which would nest our
-    // try/finally and produce invalid IL.
-    std::unordered_set<std::uint64_t> done_;
     std::uint64_t instrumented_ = 0;
     std::uint64_t skipped_ = 0;
 };

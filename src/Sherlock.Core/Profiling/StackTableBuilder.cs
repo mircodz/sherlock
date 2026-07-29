@@ -2,8 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
+using Sherlock.Core.Storage;
 
-namespace Sherlock.Core.Storage;
+namespace Sherlock.Core.Profiling;
 
 /// <summary>Interns frames + stacks and emits the Strings/Frames/Stacks/StackFrames sections. Managed mirror of the native <c>StackInterner</c>.</summary>
 public sealed class StackTableBuilder
@@ -60,9 +61,9 @@ public sealed class StackTableBuilder
         }
 
         w.AddSection(SectionType.Strings, StackTableFormat.Version, 0, CollectionsMarshal.AsSpan(strings), (ulong)strings.Count);
-        w.AddRecords<FrameRecord>(SectionType.Frames, StackTableFormat.Version, frames);
-        w.AddRecords<StackRecord>(SectionType.Stacks, StackTableFormat.Version, stackRecs);
-        w.AddRecords<uint>(SectionType.StackFrames, StackTableFormat.Version, CollectionsMarshal.AsSpan(pool));
+        w.AddRecords(SectionType.Frames, StackTableFormat.Version, frames);
+        w.AddRecords(SectionType.Stacks, StackTableFormat.Version, stackRecs);
+        w.AddRecords(SectionType.StackFrames, StackTableFormat.Version, CollectionsMarshal.AsSpan(pool));
     }
 }
 

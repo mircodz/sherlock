@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using Microsoft.Diagnostics.Runtime;
 using Sherlock.Core.Analysis;
 using Sherlock.Core.Diagnostics;
@@ -17,23 +18,21 @@ namespace Sherlock.Core;
 public sealed class Snapshot(DumpSession dump, SnapshotEntry? entry = null) : IDisposable
 {
     public ClrRuntime Runtime => dump.Runtime;
-    public string DumpPath => dump.DumpPath;
 
-    // Dump analyses, lazy + cached.
-    private DumpInfo? _info;
-    public DumpInfo Info => _info ??= new DumpInspector(dump).Inspect();
+    [field: AllowNull, MaybeNull]
+    public DumpInfo Info => field ??= new DumpInspector(dump).Inspect();
 
-    private IReadOnlyList<ModuleInfo>? _modules;
-    public IReadOnlyList<ModuleInfo> Modules => _modules ??= new RuntimeAnalyzer(dump).GetModules();
+    [field: AllowNull, MaybeNull]
+    public IReadOnlyList<ModuleInfo> Modules => field ??= new RuntimeAnalyzer(dump).GetModules();
 
-    private IReadOnlyList<SegmentInfo>? _segments;
-    public IReadOnlyList<SegmentInfo> Segments => _segments ??= new RuntimeAnalyzer(dump).GetSegments();
+    [field: AllowNull, MaybeNull]
+    public IReadOnlyList<SegmentInfo> Segments => field ??= new RuntimeAnalyzer(dump).GetSegments();
 
-    private IReadOnlyList<ThreadInfo>? _threads;
-    public IReadOnlyList<ThreadInfo> Threads => _threads ??= new ThreadAnalyzer(dump).GetThreads();
+    [field: AllowNull, MaybeNull]
+    public IReadOnlyList<ThreadInfo> Threads => field ??= new ThreadAnalyzer(dump).GetThreads();
 
-    private IReadOnlyList<ExceptionInfo>? _exceptions;
-    public IReadOnlyList<ExceptionInfo> Exceptions => _exceptions ??= new ExceptionAnalyzer(dump).FindExceptions();
+    [field: AllowNull, MaybeNull]
+    public IReadOnlyList<ExceptionInfo> Exceptions => field ??= new ExceptionAnalyzer(dump).FindExceptions();
 
     public IReadOnlyList<HeapTypeStat> Histogram => dump.GetHistogram();
     // V2 pipeline: dominators over the persisted, DAC-bypassing heap graph (extracted once, cached on
@@ -58,30 +57,29 @@ public sealed class Snapshot(DumpSession dump, SnapshotEntry? entry = null) : ID
     public bool HasProvenance => entry?.ProvenancePath is not null;
     public bool HasCorrelation => entry?.HasCorrelation ?? false;
 
-    private ContainerReader? _container;
-    private ProvenanceReader? _provenance;
+    private SlabFile? _slab;
+
     private ProvenanceReader? Provenance
     {
         get
         {
-            if (_provenance is null && entry?.ProvenancePath is { } path)
+            if (field is null && entry?.ProvenancePath is { } path)
             {
-                _container = ContainerReader.Open(path);
-                _provenance = new ProvenanceReader(_container);
+                _slab = SlabFile.Open(path);
+                field = new ProvenanceReader(_slab);
             }
-            return _provenance;
+            return field;
         }
     }
 
-    private AllocationProfile? _allocations;
-    public AllocationProfile? Allocations => Provenance is { } p ? _allocations ??= AllocationProfileReader.From(p) : null;
+    public AllocationProfile? Allocations => Provenance is { } p ? field ??= AllocationProfileReader.From(p) : null;
 
     /// <summary>The allocation stack for an object address, or null if untracked or unprofiled.</summary>
     public string? WhoAllocated(ulong address) => HasCorrelation ? Provenance?.StackFor(address) : null;
 
     public void Dispose()
     {
-        _container?.Dispose();
+        _slab?.Dispose();
         dump.Dispose();
     }
 }

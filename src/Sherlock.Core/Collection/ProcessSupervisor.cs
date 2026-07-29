@@ -134,11 +134,26 @@ public sealed class ProcessSupervisor : IDisposable
                 : Path.Combine(Path.GetTempPath(), $"sherlock-alloc-{Guid.NewGuid():n}.slab");
             psi.Environment["SHERLOCK_PROFILE_OUT"] = _profileTemplate;
 
-            // Sampling: the profiler walks the stack on every sampled allocation, so sampling every
-            // ~N bytes (instead of every object) is the single biggest throughput lever. For plain
-            // profiling we sample; correlation needs per-object provenance, so it stays exact there.
-            // A user-set SHERLOCK_SAMPLE_BYTES (inherited) always wins.
-            if (!correlate && Environment.GetEnvironmentVariable("SHERLOCK_SAMPLE_BYTES") is null)
+            // Shadow-stack mode (default ON): the profiler maintains a per-thread call stack via IL
+            // instrumentation and reads its top in ObjectAllocated, instead of DoStackSnapshot. This
+            // is O(1) per allocation vs O(stack depth) for the walk (~150x -> ~5x under load) and lets
+            // us capture EVERY allocation's full stack without sampling. A user-set SHERLOCK_SHADOW_STACK
+            // (incl. "0" to force the classic walk) always wins.
+            bool shadowStack =
+                Environment.GetEnvironmentVariable("SHERLOCK_SHADOW_STACK") is { } sv
+                    ? sv is not ("" or "0")
+                    : true;
+            if (Environment.GetEnvironmentVariable("SHERLOCK_SHADOW_STACK") is null)
+            {
+                psi.Environment["SHERLOCK_SHADOW_STACK"] = "1";
+            }
+
+            // Sampling: only relevant to the DoStackSnapshot path (each sampled allocation pays for a
+            // stack walk). Shadow-stack reads are O(1), so we sample every allocation there for full
+            // fidelity. For the classic walk path we sample every ~N bytes as the main throughput lever;
+            // correlation needs per-object provenance, so it stays exact. A user-set value always wins.
+            if (!shadowStack && !correlate &&
+                Environment.GetEnvironmentVariable("SHERLOCK_SAMPLE_BYTES") is null)
             {
                 psi.Environment["SHERLOCK_SAMPLE_BYTES"] = "102400"; // 100 KB between stack walks
             }

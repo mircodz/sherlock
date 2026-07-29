@@ -2,11 +2,20 @@ using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using Sherlock.Core.Storage;
+using Sherlock.Core.Tests.Common;
 
 namespace Sherlock.Core.Tests.Storage;
 
-public class ContainerTests
+// Container-format tests. The writer's byte layout is pinned by the GoldenBytes fixture; reading is
+// exercised through SlabFile (the memory-mapped reader we actually use) + Column<T>.
+public class ContainerTests : IDisposable
 {
+    private readonly TempDir _tmp = new();
+
+    public void Dispose() => _tmp.Dispose();
+
+    private SlabFile Open(ContainerWriter w) => _tmp.WriteSlab(w);
+
     // The canonical cross-language fixture: one Frames section, version 1, blob (recordSize 0),
     // count 2, data {1,2,3,4}. The exact same expected bytes are asserted in the native test
     // (src/native/tests/container.cpp, Container.GoldenBytesMatchSpec) — if either side's layout
@@ -41,13 +50,13 @@ public class ContainerTests
     [Fact]
     public void Reader_ParsesGoldenBytes()
     {
-        var r = new ContainerReader(GoldenBytes);
+        string path = Path.Combine(_tmp.Path, "golden.slab");
+        File.WriteAllBytes(path, GoldenBytes);
+        using var r = SlabFile.Open(path);
         Assert.Equal(ContainerFormat.FormatVersion, r.Version);
-        Assert.True(r.TryGetSection(SectionType.Frames, out Section s));
-        Assert.Equal((ushort)1, s.Version);
-        Assert.Equal((ushort)0, s.RecordSize);
-        Assert.Equal(2ul, s.Count);
-        Assert.Equal(new byte[] { 1, 2, 3, 4 }, s.Data.ToArray());
+        Assert.True(r.Has(SectionType.Frames));
+        Assert.Equal((ushort)1, r.SectionVersion(SectionType.Frames));
+        Assert.Equal(new byte[] { 1, 2, 3, 4 }, r.Blob(SectionType.Frames));
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -58,30 +67,27 @@ public class ContainerTests
     }
 
     [Fact]
-    public void RoundTrips_RecordSection_ZeroCopy()
+    public void RoundTrips_RecordSection()
     {
         var recs = new[] { new Rec { A = 1, B = 2 }, new Rec { A = 3, B = 4 } };
         var w = new ContainerWriter();
         w.AddRecords(SectionType.Allocations, version: 3, recs);
 
-        var r = new ContainerReader(w.ToArray());
-        Assert.True(r.TryGetSection(SectionType.Allocations, out Section s));
-        Assert.Equal((ushort)3, s.Version);
-
-        ReadOnlySpan<Rec> got = s.AsRecords<Rec>();
-        Assert.Equal(2, got.Length);
+        using var r = Open(w);
+        Assert.Equal((ushort)3, r.SectionVersion(SectionType.Allocations));
+        Column<Rec> got = r.GetColumn<Rec>(SectionType.Allocations);
+        Assert.Equal(2L, got.Length);
         Assert.Equal(1u, got[0].A);
         Assert.Equal(4ul, got[1].B);
     }
 
     [Fact]
-    public void AsRecords_Throws_OnSizeMismatch()
+    public void GetColumn_Throws_OnSizeMismatch()
     {
         var w = new ContainerWriter();
         w.AddSection(SectionType.Correlation, version: 1, recordSize: 4, new byte[] { 0, 0, 0, 0 }, count: 1);
-        var r = new ContainerReader(w.ToArray());
-        Assert.True(r.TryGetSection(SectionType.Correlation, out Section s));
-        Assert.Throws<InvalidDataException>(() => s.AsRecords<Rec>().Length);
+        using var r = Open(w);
+        Assert.Throws<InvalidDataException>(() => r.GetColumn<Rec>(SectionType.Correlation));
     }
 
     [Fact]
@@ -89,8 +95,6 @@ public class ContainerTests
     {
         byte[] bytes = new ContainerWriter().ToArray();
         Assert.Equal(ContainerFormat.HeaderSize, bytes.Length);
-        var r = new ContainerReader(bytes);
-        Assert.Empty(r.Sections);
     }
 
     [Fact]
@@ -102,49 +106,36 @@ public class ContainerTests
         w.AddSection(SectionType.Strings, 1, 0, new byte[] { 1, 2, 3 }, 3);
         w.AddSection(SectionType.Frames, 1, 0, new byte[] { 4, 5, 6 }, 3);
 
-        var r = new ContainerReader(w.ToArray());
-        Assert.True(r.TryGetSection(SectionType.Strings, out Section a));
-        Assert.True(r.TryGetSection(SectionType.Frames, out Section b));
-        Assert.Equal(new byte[] { 1, 2, 3 }, a.Data.ToArray());
-        Assert.Equal(new byte[] { 4, 5, 6 }, b.Data.ToArray());
+        using var r = Open(w);
+        Assert.Equal(new byte[] { 1, 2, 3 }, r.Blob(SectionType.Strings));
+        Assert.Equal(new byte[] { 4, 5, 6 }, r.Blob(SectionType.Frames));
     }
 
     [Fact]
     public void Rejects_BadMagic()
     {
-        byte[] bad = new byte[16];
-        Assert.Throws<InvalidDataException>(() => new ContainerReader(bad));
+        string path = Path.Combine(_tmp.Path, "bad.slab");
+        File.WriteAllBytes(path, new byte[16]);
+        Assert.Throws<InvalidDataException>(() => SlabFile.Open(path));
     }
 
     [Fact]
     public void Rejects_Truncation()
     {
-        Assert.Throws<InvalidDataException>(() => new ContainerReader(new byte[] { 0x53, 0x48, 0x52 }));
+        string path = Path.Combine(_tmp.Path, "trunc.slab");
+        File.WriteAllBytes(path, new byte[] { 0x53, 0x48, 0x52 });
+        Assert.Throws<InvalidDataException>(() => SlabFile.Open(path));
     }
 
     [Fact]
     public void Open_MemoryMapsAFile_AndReadsZeroCopy()
     {
         var w = new ContainerWriter();
-        w.AddSection(SectionType.Frames, 1, 0, new byte[] { 9, 8, 7, 6 }, 4);
-        string path = Path.GetTempFileName();
-        try
+        w.AddRecords(SectionType.Frames, 1, new uint[] { 9, 8, 7, 6 });
+        using (var r = Open(w))
         {
-            File.WriteAllBytes(path, w.ToArray());
-            using (ContainerReader r = ContainerReader.Open(path))
-            {
-                Assert.True(r.TryGetSection(SectionType.Frames, out Section s));
-                Assert.Equal(new byte[] { 9, 8, 7, 6 }, s.Data.ToArray());
-            }
-            // After disposal the mapping is released and the file is no longer locked.
-            File.Delete(path);
-        }
-        finally
-        {
-            if (File.Exists(path))
-            {
-                File.Delete(path);
-            }
+            Column<uint> col = r.GetColumn<uint>(SectionType.Frames);
+            Assert.Equal(new uint[] { 9, 8, 7, 6 }, col.AsMemory().ToArray());
         }
     }
 }

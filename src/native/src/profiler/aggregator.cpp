@@ -17,10 +17,21 @@ namespace Sherlock {
 
 namespace {
 
-// One shard pointer per thread. There is a single Aggregator per process, so a
-// file-scope thread_local is sufficient (and keeps the hot path branch-free
-// after the first allocation on a thread).
-thread_local Aggregator::Shard* t_shard = nullptr;
+// One shard pointer per thread, tagged with its owning Aggregator's unique id.
+// Production has a single Aggregator per process, so after the first allocation on a
+// thread this is a single compare+branch on the hot path. The tag exists so a *new*
+// Aggregator on the same thread (tests, or any re-init) allocates a fresh shard instead
+// of reusing the previous aggregator's — whose shards were freed in its destructor,
+// which would otherwise be a use-after-free. We key on a monotonic instance id rather
+// than the `this` pointer because a stack-allocated Aggregator can be reborn at the same
+// address a just-destroyed one occupied, aliasing the pointer.
+struct ThreadShard {
+    std::uint64_t ownerId = 0;
+    Aggregator::Shard* shard = nullptr;
+};
+thread_local ThreadShard t_shard;
+
+std::atomic<std::uint64_t> g_nextAggregatorId{1};
 
 // FNV-1a over the frame ids - cheap and good enough to key distinct stacks.
 std::uint64_t hashFrames(std::span<const FunctionID> frames) {
@@ -46,7 +57,8 @@ std::string narrow(const WCHAR* s, ULONG len) {
 } // namespace
 
 Aggregator::Aggregator(ICorProfilerInfo10* info, Logger* logger)
-    : info_(info), logger_(logger) {
+    : info_(info), logger_(logger),
+      instanceId_(g_nextAggregatorId.fetch_add(1, std::memory_order_relaxed)) {
 }
 
 Aggregator::~Aggregator() {
@@ -64,7 +76,7 @@ constexpr std::size_t kPendingReserve = 2048;  // sampled objects awaiting their
 } // namespace
 
 Aggregator::Shard& Aggregator::localShard() {
-    if (t_shard == nullptr) {
+    if (t_shard.ownerId != instanceId_) {
         auto* shard = new Shard();
         shard->sites.reserve(kSitesReserve);
         shard->pending.reserve(kPendingReserve);
@@ -72,9 +84,9 @@ Aggregator::Shard& Aggregator::localShard() {
         if (idx < kMaxShards)
             shards_[idx] = shard;       // registered; GC sweep & dump will see it
         // else: too many threads - shard still works locally, just isn't dumped.
-        t_shard = shard;
+        t_shard = {instanceId_, shard};
     }
-    return *t_shard;
+    return *t_shard.shard;
 }
 
 void Aggregator::record(std::span<const FunctionID> frames, std::uint64_t bytes, ObjectID addr, ClassID classId) {
@@ -369,9 +381,8 @@ std::unordered_map<std::uint64_t, Aggregator::Site> Aggregator::mergeShards() {
 std::uint32_t Aggregator::internSiteStack(storage::ProvenanceWriter& pw, const Site& site) {
     std::vector<std::string_view> names;
     names.reserve(site.frames.size());
-    for (std::size_t i = site.frames.size(); i-- > 0;) { // stored leaf->root; intern root->leaf
-        names.push_back(resolveMethodName(site.frames[i]));
-    }
+    for (const FunctionID f : site.frames) // stored root->leaf; intern in the same order
+        names.push_back(resolveMethodName(f));
     return pw.internStack(names);
 }
 

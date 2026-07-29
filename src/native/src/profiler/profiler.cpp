@@ -42,41 +42,8 @@ std::string withPid(const std::string& path) {
     return path.substr(0, dot) + suffix + path.substr(dot);
 }
 
-// Filled by captureStack during a walk (leaf -> root), read right after. A fixed inline array in
-// thread-local storage (no heap buffer, no allocation, cache-hot) — thread-local so concurrent
-// allocating threads don't clobber each other. `t_frameCount` is the number of frames captured.
-thread_local FunctionID t_frames[kMaxFrames];
-thread_local std::uint32_t t_frameCount = 0;
-
 // Bytes allocated on this thread since the last sample was taken.
 thread_local std::uint64_t t_bytesSinceSample = 0;
-
-// DoStackSnapshot callback: collect managed frames (funcId == 0 marks native /
-// runtime frames, which we skip) up to kMaxFrames.
-HRESULT __stdcall captureStack(FunctionID funcId, UINT_PTR, COR_PRF_FRAME_INFO, ULONG32, BYTE[], void*) {
-    if (funcId != 0) {
-        t_frames[t_frameCount++] = funcId;
-        if (t_frameCount >= kMaxFrames)
-            return E_ABORT; // got enough depth; any non-S_OK ends the walk
-    }
-    return S_OK;
-}
-
-// Single tracer per process; the ELT hooks are global function pointers with no
-// client data, so they reach it through this.
-TraceCollector* g_trace = nullptr;
-
-// ELT2 hooks - the canonical CoreCLR slow-path variant (the runtime saves/restores
-// registers around these, so they can be plain C functions). We only use funcId.
-void STDMETHODCALLTYPE EnterHook(FunctionID funcId, UINT_PTR, COR_PRF_FRAME_INFO, COR_PRF_FUNCTION_ARGUMENT_INFO*) {
-    if (g_trace) g_trace->onEnter(funcId);
-}
-void STDMETHODCALLTYPE LeaveHook(FunctionID funcId, UINT_PTR, COR_PRF_FRAME_INFO, COR_PRF_FUNCTION_ARGUMENT_RANGE*) {
-    if (g_trace) g_trace->onLeave(funcId);
-}
-void STDMETHODCALLTYPE TailcallHook(FunctionID funcId, UINT_PTR, COR_PRF_FRAME_INFO) {
-    if (g_trace) g_trace->onLeave(funcId); // a tailcall leaves the current frame
-}
 
 } // namespace
 
@@ -124,9 +91,6 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
         return hr;
     }
 
-    const char* traceEnv = std::getenv("SHERLOCK_TRACE");
-    traceCalls = traceEnv != nullptr && traceEnv[0] != '\0' && traceEnv[0] != '0';
-
     const char* triggerEnv = std::getenv("SHERLOCK_SNAPSHOT_ON");
     bool hasStartupTriggers = triggerEnv != nullptr && triggerEnv[0] != '\0';
     const char* ctlSocketEnv = std::getenv("SHERLOCK_CONTROL_SOCKET");
@@ -135,29 +99,19 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
     // lets the REPL arm them live.
     bool triggersEnabled = hasStartupTriggers || controlPresent;
 
-    // SHERLOCK_SHADOW_STACK: replace the per-allocation DoStackSnapshot with a shadow stack
-    // built by IL instrumentation. Experimental; off by default.
+    // SHERLOCK_SHADOW_STACK: capture allocation call stacks via a per-thread shadow stack built
+    // by IL instrumentation, read O(1) in ObjectAllocated instead of walking the stack.
     const char* shadowEnv = std::getenv("SHERLOCK_SHADOW_STACK");
     shadowStack = shadowEnv != nullptr && shadowEnv[0] != '\0' && shadowEnv[0] != '0';
 
-    // Allocation tracking is always on; tracing adds ELT on top when requested.
+    // Allocation tracking (ObjectAllocated) and GC callbacks are always on.
     DWORD eventMask = COR_PRF_MONITOR_OBJECT_ALLOCATED |
                       COR_PRF_ENABLE_OBJECT_ALLOCATED |
-                      COR_PRF_ENABLE_STACK_SNAPSHOT |
                       COR_PRF_MONITOR_GC; // GC callbacks for survivor tracking + gc: triggers
-    if (traceCalls)
-        eventMask |= COR_PRF_MONITOR_ENTERLEAVE;
-    if (shadowStack) {
-        // Instrument every method at first JIT. We disable inlining so callee frames aren't lost
-        // from the shadow stack: when the JIT inlines B into A it uses B's ORIGINAL IL (our rewrite
-        // only applies when B is JITted as itself), so an inlined B never runs its push/pop. ReJIT
-        // would be inline-aware and avoid this; for now DISABLE_INLINING is the correctness lever.
-        // SHERLOCK_SHADOW_KEEP_INLINING=1 lets us measure the cost (frames will be lossy).
-        eventMask |= COR_PRF_MONITOR_JIT_COMPILATION;
-        const char* keepInline = std::getenv("SHERLOCK_SHADOW_KEEP_INLINING");
-        if (!(keepInline != nullptr && keepInline[0] != '\0' && keepInline[0] != '0'))
-            eventMask |= COR_PRF_DISABLE_INLINING;
-    }
+    if (shadowStack)
+        // Instrument every method via ReJIT: request rewrites at module load; the runtime uses our
+        // IL from first call and for inlined bodies too (inline-aware), so inlining stays ON.
+        eventMask |= COR_PRF_ENABLE_REJIT | COR_PRF_MONITOR_MODULE_LOADS;
     if (triggersEnabled)
         // ReJIT + module loads for call: triggers; exceptions for throw: triggers. No global
         // inline-disable - call: triggers simply don't fire on inlined/tiny methods (documented).
@@ -192,21 +146,6 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
         aggregator->enableCorrelation();
         const char* corrOut = std::getenv("SHERLOCK_CORRELATE_OUT");
         correlationPath = withPid((corrOut != nullptr && corrOut[0] != '\0') ? corrOut : "sherlock-correlation.txt");
-    }
-
-
-    if (traceCalls) {
-        const char* traceOut = std::getenv("SHERLOCK_TRACE_OUT");
-        tracePath = (traceOut != nullptr && traceOut[0] != '\0') ? traceOut : "sherlock-trace.txt";
-        trace = std::make_unique<TraceCollector>(logger.get());
-        g_trace = trace.get();
-        trace->start();
-        hr = corProfilerInfo->SetEnterLeaveFunctionHooks2(EnterHook, LeaveHook, TailcallHook);
-        if (FAILED(hr)) {
-            char buf[16];
-            std::snprintf(buf, sizeof buf, "0x%08x", static_cast<unsigned>(hr));
-            logger->logError(std::string("SetEnterLeaveFunctionHooks2 failed ") + buf);
-        }
     }
 
     if (triggersEnabled) {
@@ -253,17 +192,15 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
 
     isInitialized = true;
 
-    logger->logInfo(traceCalls
-        ? "profiler initialized; allocations by call stack + per-method tracing"
-        : "profiler initialized; aggregating allocations by call stack");
+    logger->logInfo("profiler initialized; aggregating allocations by call stack");
     return S_OK;
 }
 
 HRESULT STDMETHODCALLTYPE Profiler::InitializeForAttach(IUnknown*, void*, UINT) {
-    // Attach is unsupported: allocation tracking needs COR_PRF_MONITOR_OBJECT_ALLOCATED (and tracing
-    // needs COR_PRF_MONITOR_ENTERLEAVE), both of which are IMMUTABLE flags — SetEventMask rejects them
-    // on attach (CORPROF_E_IMMUTABLE_FLAGS_SET), so there is no useful degraded mode. Fail clearly at
-    // load time rather than half-initialize. Sherlock attaches at process start via CORECLR_PROFILER.
+    // Attach is unsupported: allocation tracking needs COR_PRF_MONITOR_OBJECT_ALLOCATED, an
+    // IMMUTABLE flag that SetEventMask rejects on attach (CORPROF_E_IMMUTABLE_FLAGS_SET), so there
+    // is no useful degraded mode. Fail clearly at load time rather than half-initialize. Sherlock
+    // attaches at process start via CORECLR_PROFILER.
     if (logger)
         logger->logError("Sherlock must be set at startup (CORECLR_PROFILER); runtime attach is not supported.");
     return E_NOTIMPL;
@@ -385,10 +322,6 @@ HRESULT STDMETHODCALLTYPE Profiler::Shutdown() {
         aggregator->countPendingAsSurvived(); // anything uncollected at exit is still live
         aggregator->dump(outputPath);
     }
-    if (trace) {
-        trace->stop();
-        trace->dump(tracePath, [this](FunctionID f) { return aggregator->resolveMethodName(f); });
-    }
     return S_OK;
 }
 
@@ -431,26 +364,14 @@ HRESULT STDMETHODCALLTYPE Profiler::ObjectAllocated(ObjectID objectId, ClassID c
         if (!take)
             return S_OK;
 
-        if (shadowStack) {
-            // Read the maintained shadow stack instead of walking. It's stored root->leaf;
-            // record()/internSiteStack expect leaf->root (like DoStackSnapshot), so reverse
-            // into the same thread-local scratch buffer captureStack uses.
-            std::uint32_t d = shadow::storedDepth();
-            if (d > kMaxFrames) d = kMaxFrames;
-            const FunctionID* sf = shadow::frames();
-            std::uint32_t sd = shadow::storedDepth();
-            for (std::uint32_t i = 0; i < d; ++i)
-                t_frames[i] = sf[sd - 1 - i]; // leaf first
-            aggregator->record(std::span<const FunctionID>(t_frames, d), objectSize, objectId, classId);
-            return S_OK;
-        }
-
-        // Capture the call stack (leaf -> root) and attribute the allocation to it.
-        t_frameCount = 0;
-        corProfilerInfo->DoStackSnapshot(0 /* current thread */, captureStack,
-                                         COR_PRF_SNAPSHOT_DEFAULT, this, nullptr, 0);
-
-        aggregator->record(std::span<const FunctionID>(t_frames, t_frameCount), objectSize, objectId, classId);
+        // Attribute the allocation to the maintained shadow stack. It's stored root->leaf; we
+        // hand record() a span directly into that storage — no copy, no stack walk. When deeper
+        // than kMaxFrames, keep the leaf-most frames (innermost callers nearest the allocation),
+        // which are the contiguous tail of the root->leaf buffer.
+        const std::uint32_t depth = shadow::storedDepth();
+        const std::uint32_t n = depth < kMaxFrames ? depth : static_cast<std::uint32_t>(kMaxFrames);
+        const FunctionID* sf = shadow::frames();
+        aggregator->record(std::span<const FunctionID>(sf + (depth - n), n), objectSize, objectId, classId);
     } catch (...) {
         // Swallow — a throw crossing back into the runtime would be undefined behavior.
     }
@@ -470,6 +391,12 @@ HRESULT STDMETHODCALLTYPE Profiler::ModuleLoadStarted(ModuleID) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ModuleLoadFinished(ModuleID moduleId, HRESULT hrStatus) {
     if (probes && SUCCEEDED(hrStatus))
         probes->onModuleLoaded(moduleId);
+    if (shadowInstr && SUCCEEDED(hrStatus)) {
+        try {
+            shadowInstr->onModuleLoaded(moduleId);
+        } catch (...) {
+        }
+    }
     return S_OK;
 }
 HRESULT STDMETHODCALLTYPE Profiler::ModuleUnloadStarted(ModuleID) { return S_OK; }
@@ -480,25 +407,7 @@ HRESULT STDMETHODCALLTYPE Profiler::ClassLoadFinished(ClassID, HRESULT) { return
 HRESULT STDMETHODCALLTYPE Profiler::ClassUnloadStarted(ClassID) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ClassUnloadFinished(ClassID, HRESULT) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::FunctionUnloadStarted(FunctionID) { return S_OK; }
-HRESULT STDMETHODCALLTYPE Profiler::JITCompilationStarted(FunctionID functionId, BOOL) {
-    if (shadowInstr && isInitialized.load() && !isShuttingDown.load()) {
-        // Resolve (module, token) for this function and rewrite its IL to push/pop the
-        // shadow stack. Best-effort; the instrumenter leaves the body untouched on any
-        // difficulty. Never let anything escape into the runtime.
-        try {
-            ClassID classId = 0; ModuleID moduleId = 0; mdToken token = 0;
-            if (SUCCEEDED(corProfilerInfo->GetFunctionInfo(functionId, &classId, &moduleId, &token)) &&
-                moduleId != 0 && token != 0) {
-                shadowInstr->instrument(functionId, moduleId, static_cast<mdMethodDef>(token));
-            }
-        } catch (const std::exception& e) {
-            logger->logError(std::string("shadow instrument threw: ") + e.what());
-        } catch (...) {
-            logger->logError("shadow instrument threw (unknown)");
-        }
-    }
-    return S_OK;
-}
+HRESULT STDMETHODCALLTYPE Profiler::JITCompilationStarted(FunctionID, BOOL) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::JITCompilationFinished(FunctionID, HRESULT, BOOL) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::JITCachedFunctionSearchStarted(FunctionID, BOOL*) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::JITCachedFunctionSearchFinished(FunctionID, COR_PRF_JIT_CACHE) { return S_OK; }
@@ -618,6 +527,11 @@ HRESULT STDMETHODCALLTYPE Profiler::ProfilerAttachComplete() { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ProfilerDetachSucceeded() { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ReJITCompilationStarted(FunctionID, ReJITID, BOOL) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::GetReJITParameters(ModuleID moduleId, mdMethodDef methodId, ICorProfilerFunctionControl* pFunctionControl) {
+    // Shadow-stack instrumentation wraps the whole body; when active it owns every token (a probe's
+    // prologue-only splice would be lost inside our try/finally anyway). Probes handle the rest only
+    // when shadow-stack isn't running.
+    if (shadowInstr)
+        return shadowInstr->getReJITParameters(moduleId, methodId, pFunctionControl);
     if (probes)
         return probes->getReJITParameters(moduleId, methodId, pFunctionControl);
     return S_OK;

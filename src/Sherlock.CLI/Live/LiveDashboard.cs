@@ -64,7 +64,7 @@ public static class LiveDashboard
 
         var snapTable = new Table { ShowHeader = true, Striped = true, ShowScrollbar = true };
         snapTable.Columns.Add(new Column("Snapshot", Constraint.Length(10)));
-        snapTable.Columns.Add(new Column("Size", Constraint.Length(10), Alignment.Right));
+        snapTable.Columns.Add(new Column("Size", Constraint.Length(10), Justify.Right));
         snapTable.Columns.Add(new Column("Captured", Constraint.Fill(2)));
 
         string title = string.Join(' ', spec.Command);
@@ -187,7 +187,7 @@ public static class LiveDashboard
                         {
                             procTree.AddRoot(p, parent => procs.Where(x => x.ParentPid == parent.Pid)).ExpandAll();
                         }
-                        procTree.Invalidate();
+                        procTree.MarkDirty();
                     }
                     break;
                 case Captured c:

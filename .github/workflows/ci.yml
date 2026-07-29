@@ -47,6 +47,19 @@ jobs:
           name: native-${{ matrix.rid }}
           path: dist/
 
+  test:
+    name: managed tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Test (Release)
+        run: dotnet test tests/Sherlock.Core.Tests/Sherlock.Core.Tests.csproj -c Release
+
   pack:
     name: pack dotnet tool
     needs: native
