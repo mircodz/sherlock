@@ -508,7 +508,8 @@ HRESULT STDMETHODCALLTYPE Profiler::ReJITCompilationStarted(FunctionID, ReJITID,
 HRESULT STDMETHODCALLTYPE Profiler::GetReJITParameters(ModuleID moduleId, mdMethodDef methodId, ICorProfilerFunctionControl* pFunctionControl) {
     // Shadow-stack instrumentation wraps the whole body; when active it owns every token (a probe's
     // prologue-only splice would be lost inside our try/finally anyway). Probes handle the rest only
-    // when shadow-stack isn't running.    if (shadowInstr)
+    // when shadow-stack isn't running.
+    if (shadowInstr)
         return shadowInstr->getReJITParameters(moduleId, methodId, pFunctionControl);
     if (probes)
         return probes->getReJITParameters(moduleId, methodId, pFunctionControl);

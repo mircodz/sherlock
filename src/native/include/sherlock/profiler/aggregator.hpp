@@ -89,8 +89,6 @@ public:
 
     /// Resolves a ClassID to "Ns.Type" (cached). Used by allocation/exception triggers.
     const std::string& resolveTypeName(ClassID classId);
-
-    /// Test-only: the current live tracked set as (address, id) pairs, in live_ order (sorted by
     /// address). Lets unit tests drive record()/GC callbacks and assert the live set without going
     /// through emitCorrelation's file I/O.
     std::vector<std::pair<std::uint64_t, std::uint64_t>> liveSetForTest() const {
@@ -115,6 +113,7 @@ private:
     };
 
     Shard& localShard();
+    std::string resolveTypeNameUncached(ClassID classId); // array/nested-aware, ClrMD-compatible spelling
     bool survived(ObjectID addr) const;    // is addr in this GC's survivor spans?
     bool condemned(ObjectID addr) const;   // is addr in a generation this GC collected?
     bool inLargeObjectHeap(ObjectID addr) const; // is addr on the LOH/POH (gen 3/4)?

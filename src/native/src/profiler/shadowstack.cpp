@@ -297,12 +297,21 @@ bool ShadowStackInstrumenter::buildIL(FunctionID functionId, ModuleID moduleId,
     {
         std::vector<il::EHClause> original;
         il::parseEHClauses(header, code, codeSize, moreSects, original);
+        // EH region END offsets need a different end-of-body mapping than branch targets: the whole
+        // original body lives inside our outer try [tryStart, tryEnd), so an original EH region that
+        // ended at codeSize (end of body) must end at tryEnd — NOT endLabel (which is past our own
+        // finally). Mapping it to endLabel makes the original handler straddle our try boundary =>
+        // illegal non-nested EH => InvalidProgramException. Interior offsets use the normal lookup.
+        auto mapEnd = [&](std::uint32_t oldOff, std::uint32_t& res) -> bool {
+            if (oldOff == codeSize) { res = tryEnd; return true; }
+            return mapOff(oldOff, res);
+        };
         auto relocate = [&](il::EHClause e) -> std::optional<il::EHClause> {
             std::uint32_t ts, te, hs, he;
             if (!mapOff(e.tryOffset, ts)) return std::nullopt;
-            if (!mapOff(e.tryOffset + e.tryLength, te)) return std::nullopt;
+            if (!mapEnd(e.tryOffset + e.tryLength, te)) return std::nullopt;
             if (!mapOff(e.handlerOffset, hs)) return std::nullopt;
-            if (!mapOff(e.handlerOffset + e.handlerLength, he)) return std::nullopt;
+            if (!mapEnd(e.handlerOffset + e.handlerLength, he)) return std::nullopt;
             e.tryOffset = ts; e.tryLength = te - ts;
             e.handlerOffset = hs; e.handlerLength = he - hs;
             if (e.flags & il::kClauseFilter) { std::uint32_t f; if (!mapOff(e.classTokenOrFilter, f)) return std::nullopt; e.classTokenOrFilter = f; }

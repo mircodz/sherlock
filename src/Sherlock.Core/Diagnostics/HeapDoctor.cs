@@ -37,7 +37,7 @@ public sealed class HeapDoctor(DumpSession session)
         }
         catch (Exception ex)
         {
-            findings.Add(new Finding(FindingSeverity.Info, "inspector-error", "An inspector failed to run", ex.Message));
+            findings.Add(new Finding(FindingSeverity.Warning, "inspector-error", "An inspector failed to run", ex.Message));
         }
     }
 

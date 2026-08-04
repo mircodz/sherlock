@@ -26,6 +26,7 @@ public sealed class RootAnalyzerV2(DumpSession session)
     public IReadOnlyList<GcRootPath> FindRoots(ulong targetAddress, int maxPaths = 1, CancellationToken cancellationToken = default)
     {
         DominatorTree dom = session.GetDominatorTree(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
 
         IReadOnlyList<(ulong Address, string TypeName)>? chain = dom.RetentionPath(targetAddress);
         if (chain is null || chain.Count == 0)

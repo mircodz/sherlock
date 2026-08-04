@@ -50,6 +50,55 @@ std::string narrow(const WCHAR* s, ULONG len) {
     return out;
 }
 
+// The BCL name for a primitive array element, so a Double[] reads "System.Double[]" as ClrMD spells
+// it. Empty for anything not a primitive element type (the caller resolves those via the class id).
+const char* primitiveElementName(CorElementType t) {
+    switch (t) {
+        case ELEMENT_TYPE_BOOLEAN: return "System.Boolean";
+        case ELEMENT_TYPE_CHAR:    return "System.Char";
+        case ELEMENT_TYPE_I1:      return "System.SByte";
+        case ELEMENT_TYPE_U1:      return "System.Byte";
+        case ELEMENT_TYPE_I2:      return "System.Int16";
+        case ELEMENT_TYPE_U2:      return "System.UInt16";
+        case ELEMENT_TYPE_I4:      return "System.Int32";
+        case ELEMENT_TYPE_U4:      return "System.UInt32";
+        case ELEMENT_TYPE_I8:      return "System.Int64";
+        case ELEMENT_TYPE_U8:      return "System.UInt64";
+        case ELEMENT_TYPE_R4:      return "System.Single";
+        case ELEMENT_TYPE_R8:      return "System.Double";
+        case ELEMENT_TYPE_STRING:  return "System.String";
+        case ELEMENT_TYPE_I:       return "System.IntPtr";
+        case ELEMENT_TYPE_U:       return "System.UIntPtr";
+        case ELEMENT_TYPE_OBJECT:  return "System.Object";
+        default:                   return "";
+    }
+}
+
+// A typeDef's name, joining enclosing types with '+' as ClrMD does (e.g. "System.Collections.
+// Generic.List`1+Enumerator"). GetTypeDefProps gives a nested type only its leaf name, so we climb
+// GetNestedClassProps to the outermost, which carries the namespace. Generic arity stays as the
+// metadata backtick suffix, matching ClrMD.
+std::string typeDefName(IMetaDataImport* md, mdTypeDef typeDef) {
+    std::string name;
+    mdTypeDef cur = typeDef;
+    for (;;) {
+        WCHAR buf[512];
+        ULONG len = 0;
+        DWORD flags = 0;
+        if (FAILED(md->GetTypeDefProps(cur, buf, 512, &len, &flags, nullptr)))
+            break;
+        std::string part = narrow(buf, len);
+        name = name.empty() ? part : part + "+" + name;
+        if (!IsTdNested(flags))
+            break;
+        mdTypeDef enclosing = 0;
+        if (FAILED(md->GetNestedClassProps(cur, &enclosing)) || enclosing == cur)
+            break;
+        cur = enclosing;
+    }
+    return name;
+}
+
 } // namespace
 
 Aggregator::Aggregator(ICorProfilerInfo10* info, Logger* logger)
@@ -483,24 +532,48 @@ const std::string& Aggregator::resolveTypeName(ClassID classId) {
     if (cached != typeNameCache_.end())
         return cached->second;
 
-    std::string name = "<unknown>";
-    if (classId != 0 && info_ != nullptr) {
-        ModuleID moduleId = 0;
-        mdTypeDef typeDef = 0;
-        if (SUCCEEDED(info_->GetClassIDInfo(classId, &moduleId, &typeDef))) {
-            IMetaDataImport* md = nullptr;
-            if (SUCCEEDED(info_->GetModuleMetaData(moduleId, ofRead, IID_IMetaDataImport, (IUnknown**)&md)) && md != nullptr) {
-                WCHAR typeName16[512];
-                ULONG typeLen = 0;
-                DWORD typeFlags = 0;
-                if (SUCCEEDED(md->GetTypeDefProps(typeDef, typeName16, 512, &typeLen, &typeFlags, nullptr)))
-                    name = narrow(typeName16, typeLen);
-                md->Release();
-            }
-        }
+    std::string name = resolveTypeNameUncached(classId);
+    return typeNameCache_.emplace(classId, std::move(name)).first->second;
+}
+
+std::string Aggregator::resolveTypeNameUncached(ClassID classId) {
+    if (classId == 0 || info_ == nullptr)
+        return "<unknown>";
+
+    // Arrays have no typeDef; the runtime describes them via IsArrayClass. Format the element name
+    // plus one bracket group per dimension ("System.Double[]", "System.Int32[,]"), as ClrMD spells
+    // them. The element is itself resolved (recursively for jagged arrays).
+    CorElementType elementType{};
+    ClassID elementClass = 0;
+    ULONG rank = 0;
+    if (info_->IsArrayClass(classId, &elementType, &elementClass, &rank) == S_OK) {
+        std::string element;
+        if (const char* prim = primitiveElementName(elementType); prim[0] != '\0')
+            element = prim;
+        else if (elementClass != 0)
+            element = resolveTypeName(elementClass);
+        else
+            element = "System.Object";
+
+        std::string brackets = "[";
+        for (ULONG i = 1; i < rank; ++i)
+            brackets += ',';
+        brackets += ']';
+        return element + brackets;
     }
 
-    return typeNameCache_.emplace(classId, std::move(name)).first->second;
+    ModuleID moduleId = 0;
+    mdTypeDef typeDef = 0;
+    if (FAILED(info_->GetClassIDInfo(classId, &moduleId, &typeDef)) || typeDef == 0)
+        return "<unknown>";
+
+    IMetaDataImport* md = nullptr;
+    if (FAILED(info_->GetModuleMetaData(moduleId, ofRead, IID_IMetaDataImport, (IUnknown**)&md)) || md == nullptr)
+        return "<unknown>";
+
+    std::string name = typeDefName(md, typeDef);
+    md->Release();
+    return name.empty() ? "<unknown>" : name;
 }
 
 } // namespace Sherlock

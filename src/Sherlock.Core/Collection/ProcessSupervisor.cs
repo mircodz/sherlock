@@ -319,7 +319,7 @@ public sealed class ProcessSupervisor : IDisposable
             return (null, -1);
         }
 
-        (bool ok, string[] fields) = _control.RequestAsync(pid, ControlCommands.EmitCorrelation, timeout).GetAwaiter().GetResult();
+        (bool ok, string[] fields) = Request(pid, ControlCommands.EmitCorrelation, timeout);
         if (!ok)
         {
             return (null, -1);
@@ -339,7 +339,7 @@ public sealed class ProcessSupervisor : IDisposable
             return -1;
         }
 
-        (bool ok, string[] fields) = _control.RequestAsync(pid, ControlCommands.GcCount, timeout).GetAwaiter().GetResult();
+        (bool ok, string[] fields) = Request(pid, ControlCommands.GcCount, timeout);
         return ok && fields.Length > 0 && long.TryParse(fields[0], out long g) ? g : -1;
     }
 
@@ -352,7 +352,7 @@ public sealed class ProcessSupervisor : IDisposable
             return null;
         }
 
-        (bool ok, string[] fields) = _control.RequestAsync(pid, ControlCommands.HeapSize, timeout).GetAwaiter().GetResult();
+        (bool ok, string[] fields) = Request(pid, ControlCommands.HeapSize, timeout);
         if (!ok || fields.Length < 6)
         {
             return null;
@@ -380,7 +380,7 @@ public sealed class ProcessSupervisor : IDisposable
         {
             return (false, "no live profiler");
         }
-        (bool ok, string[] fields) = _control.RequestAsync(pid, ControlCommands.ArmTrigger, timeout, spec).GetAwaiter().GetResult();
+        (bool ok, string[] fields) = Request(pid, ControlCommands.ArmTrigger, timeout, spec);
         return (ok, fields.Length > 0 ? fields[0] : (ok ? "armed" : "failed"));
     }
 
@@ -395,7 +395,7 @@ public sealed class ProcessSupervisor : IDisposable
             return null;
         }
 
-        (bool ok, string[] fields) = _control.RequestAsync(pid, ControlCommands.FlushAllocations, timeout).GetAwaiter().GetResult();
+        (bool ok, string[] fields) = Request(pid, ControlCommands.FlushAllocations, timeout);
         string path = fields.Length > 0 ? fields[0] : "";
         return ok && File.Exists(path) ? path : null;
     }
@@ -497,6 +497,11 @@ public sealed class ProcessSupervisor : IDisposable
         }
         return map;
     }
+
+    // Control requests come from synchronous REPL/monitor call sites; the channel is async, so we block
+    // here. _control is non-null and the pid alive at every caller (checked above).
+    private (bool Ok, string[] Fields) Request(int pid, string cmd, TimeSpan timeout, params string[] args) =>
+        _control!.RequestAsync(pid, cmd, timeout, args).GetAwaiter().GetResult();
 
     private static bool IsAlive(int pid)
     {
