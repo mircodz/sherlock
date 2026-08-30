@@ -10,50 +10,39 @@ using System.Threading.Tasks;
 
 namespace Sherlock.Core.Collection;
 
-/// <summary>
-/// The sl side of the control channel: a Unix-domain-socket server the in-process profilers connect
-/// back to. A whole supervised subtree shares one socket, so it's multi-client, each connection
-/// identifies itself by pid in its HELLO. Handles the HELLO handshake, request/response, and
-/// unsolicited events (probe hits, tagged with the firing pid).
-/// </summary>
-public sealed class ProfilerControlServer : IDisposable
+/// <summary>Control connection shared by every profiled process in a run.</summary>
+internal sealed class ProfilerControl : IDisposable
 {
     private const int MaxFrameBytes = 16 * 1024 * 1024;
+    internal const string EmitCorrelation = "emit-correlation";
+    internal const string FlushAllocations = "flush-allocations";
+    internal const string ArmTrigger = "arm-trigger";
+    internal const string GcCount = "gc-count";
+    internal const string HeapSize = "heap-size";
+    internal const string SnapshotTrigger = "snapshot-trigger";
 
     private readonly Socket _listener;
     private readonly string _path;
     private readonly CancellationTokenSource _cts = new();
     private readonly ConcurrentDictionary<int, Client> _clients = new(); // pid → connection
 
-    /// <summary>A single connected profiler process.</summary>
     private sealed class Client
     {
         public required Socket Socket { get; init; }
-        public string? Version { get; set; }
         public IReadOnlyList<string> Features { get; set; } = [];
         public readonly ConcurrentDictionary<int, TaskCompletionSource<string[]>> Pending = new();
         public readonly SemaphoreSlim SendLock = new(1, 1);
         public int NextId;
     }
 
-    /// <summary>Path of the socket the profiler connects to (passed via SHERLOCK_CONTROL_SOCKET).</summary>
     public string SocketPath => _path;
 
-    /// <summary>Pids of every profiler currently connected.</summary>
-    public IReadOnlyCollection<int> ConnectedPids => _clients.Keys.ToArray();
-
-    /// <summary>Union of capabilities advertised by all connected profilers.</summary>
     public IReadOnlyList<string> Features =>
         _clients.Values.SelectMany(c => c.Features).Distinct().ToArray();
 
-    /// <summary>Capabilities a specific profiler advertised, or empty if it isn't connected.</summary>
-    public IReadOnlyList<string> FeaturesFor(int pid) =>
-        _clients.TryGetValue(pid, out Client? c) ? c.Features : [];
-
-    /// <summary>Raised for each EVENT frame, tagged with the pid that sent it.</summary>
     public event Action<int, string[]>? EventReceived;
 
-    public ProfilerControlServer(string path)
+    public ProfilerControl(string path)
     {
         _path = path;
         if (File.Exists(path))
@@ -74,7 +63,6 @@ public sealed class ProfilerControlServer : IDisposable
         _ = Task.Run(AcceptLoopAsync);
     }
 
-    /// <summary>Sends a request to a specific process and awaits its response.</summary>
     public async Task<(bool Ok, string[] Fields)> RequestAsync(int pid, string cmd, TimeSpan timeout, params string[] args)
     {
         Client? client = await WaitForClientAsync(pid, timeout);
@@ -121,7 +109,6 @@ public sealed class ProfilerControlServer : IDisposable
         }
     }
 
-    /// <summary>Waits (up to <paramref name="timeout"/>) for a process to connect and say HELLO.</summary>
     private async Task<Client?> WaitForClientAsync(int pid, TimeSpan timeout)
     {
         DateTime deadline = DateTime.UtcNow + timeout;
@@ -207,14 +194,12 @@ public sealed class ProfilerControlServer : IDisposable
         }
     }
 
-    /// <summary>Handles one frame from a client; returns the (possibly newly-learned) client pid.</summary>
     private int Dispatch(Client client, int pid, string payload)
     {
         string[] fields = payload.Split('\t');
         switch (fields[0])
         {
             case "HELLO":
-                client.Version = fields.Length > 1 ? fields[1] : null;
                 client.Features = fields.Length > 2
                     ? fields[2].Split(',', StringSplitOptions.RemoveEmptyEntries)
                     : [];

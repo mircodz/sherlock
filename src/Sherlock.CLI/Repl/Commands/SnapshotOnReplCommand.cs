@@ -33,8 +33,8 @@ public sealed class SnapshotOnReplCommand : IReplCommand
         string spec = args[0];
 
         // Arm on the most recent live run with a control channel.
-        ProcessSupervisor? target = context.Workspace.Targets
-            .LastOrDefault(t => !t.RootExited && t.ProfilerFeatures.Contains("snapshot-triggers"));
+        RunTarget? target = context.Workspace.Targets
+            .LastOrDefault(t => !t.HasExited && t.Features.Contains("snapshot-triggers"));
         if (target is null)
         {
             context.Console.MarkupLine(
@@ -45,12 +45,12 @@ public sealed class SnapshotOnReplCommand : IReplCommand
 
         int armPid = target.PrimaryPid; // the app (child under a launcher, if any)
         (bool ok, string detail) = context.Console.Status()
-            .Start($"Arming snapshot-on {spec}…", _ => target.ArmSnapshotTrigger(armPid, spec, TimeSpan.FromSeconds(10)));
+            .Start($"Arming snapshot-on {spec}…", _ => target.ArmTrigger(armPid, spec, TimeSpan.FromSeconds(10)));
 
         if (ok)
         {
             context.Console.MarkupLineInterpolated(
-                $"[green]armed[/] snapshot-on [bold]{spec}[/] [grey]on[/] {target.RootName} [grey](pid {target.RootPid}). A snapshot lands when it fires.[/]");
+                $"[green]armed[/] snapshot-on [bold]{spec}[/] [grey]on[/] {target.Name} [grey](pid {target.Pid}). A snapshot lands when it fires.[/]");
         }
         else
         {

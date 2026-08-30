@@ -61,7 +61,6 @@ public sealed class ReplCommandRegistry
             new RmReplCommand(),
             new LabelReplCommand(),
             new RunReplCommand(),
-            new CollectReplCommand(),
             new PsReplCommand(),
             new SnapshotOnReplCommand(),
             new WaitTriggerReplCommand(),

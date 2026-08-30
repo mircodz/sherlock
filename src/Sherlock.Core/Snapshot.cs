@@ -35,6 +35,7 @@ public sealed class Snapshot(DumpSession dump, SnapshotEntry? entry = null) : ID
     public IReadOnlyList<ExceptionInfo> Exceptions => field ??= new ExceptionAnalyzer(dump).FindExceptions();
 
     public IReadOnlyList<HeapTypeStat> Histogram => dump.GetHistogram();
+
     // Dominators over the persisted DAC-bypassing heap graph, cached on disk so reopening skips recompute.
     public DominatorTree Dominators => dump.GetDominatorTree();
 
@@ -44,6 +45,7 @@ public sealed class Snapshot(DumpSession dump, SnapshotEntry? entry = null) : ID
     // every root. Same answer, no multi-minute heap walk.
     public IReadOnlyList<GcRootPath> Roots(ulong address, int maxPaths = 1, CancellationToken cancellationToken = default) =>
         new RootAnalyzerV2(dump).FindRoots(address, maxPaths, cancellationToken);
+
     public InstanceListing Instances(string filter, int limit = 20) => new HeapAnalyzer(dump).ListInstances(filter, limit);
     public IReadOnlyList<DuplicateString> DuplicateStrings(int limit = 20) => new HeapAnalyzer(dump).FindDuplicateStrings(limit);
 

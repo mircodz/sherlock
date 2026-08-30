@@ -17,7 +17,7 @@ public sealed class LogsReplCommand : IReplCommand
 
     public void Execute(ReplContext context, string[] args)
     {
-        IReadOnlyList<ProcessSupervisor> targets = context.Workspace.Targets;
+        IReadOnlyList<RunTarget> targets = context.Workspace.Targets;
         if (targets.Count == 0)
         {
             context.Console.MarkupLine("[grey]No run targets. Launch one with[/] run <path>[grey].[/]");
@@ -42,8 +42,8 @@ public sealed class LogsReplCommand : IReplCommand
             }
         }
 
-        ProcessSupervisor? target = pid is int p
-            ? targets.FirstOrDefault(t => t.RootPid == p)
+        RunTarget? target = pid is int p
+            ? targets.FirstOrDefault(t => t.Pid == p)
             : targets[^1];
 
         if (target is null)
@@ -59,7 +59,7 @@ public sealed class LogsReplCommand : IReplCommand
             return;
         }
 
-        context.Console.MarkupLineInterpolated($"[grey]── {target.RootName} (pid {target.RootPid}), last {lines.Count} lines ──[/]");
+        context.Console.MarkupLineInterpolated($"[grey]── {target.Name} (pid {target.Pid}), last {lines.Count} lines ──[/]");
         foreach (string line in lines)
         {
             context.Console.WriteLine(line);

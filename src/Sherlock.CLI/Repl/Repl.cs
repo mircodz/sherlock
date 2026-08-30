@@ -116,7 +116,6 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
         return true;
     }
 
-    /// <summary>Auto-imports crash dumps from run-targets that have exited.</summary>
     private void PollTargets()
     {
         if (_workspace is null)
@@ -124,19 +123,13 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
             return;
         }
 
-        foreach (Sherlock.Core.Store.SnapshotEntry entry in _workspace.PollExitedCrashDumps())
-        {
-            console.MarkupLineInterpolated(
-                $"[yellow]· crash dump captured as[/] [bold]{entry.Id}[/] [grey]— load {entry.Id} to analyze[/]");
-        }
-
-        foreach (Sherlock.Core.Store.Session session in _workspace.PollExitedAllocationProfiles())
+        foreach (Core.Store.Session session in _workspace.PollExitedAllocationProfiles())
         {
             console.MarkupLineInterpolated(
                 $"[yellow]· allocation profile captured for session[/] [bold]{session.Id}[/] [grey]({session.Command})[/]");
         }
 
-        foreach (TriggeredCaptureResult capture in _workspace.PollProbeSnapshots())
+        foreach (TriggeredCaptureResult capture in _workspace.PollTriggeredSnapshots())
         {
             if (capture.Entry is { } entry)
             {

@@ -766,19 +766,19 @@ file sealed record RootRow(string Text, ulong? Address);
 
 // A filter prompt above a table: `/` focuses the input, Esc returns focus to the table. The table
 // is focused by default so ↑/↓/Enter drive the list without a detour through the prompt.
-file sealed class FilterStack : Cellar.Widgets.Widget
+file sealed class FilterStack : Widget
 {
-    private readonly Cellar.Widgets.Input _input;
-    private readonly Cellar.Widgets.Widget _body;
-    private readonly Cellar.Widgets.Stack _stack;
+    private readonly Input _input;
+    private readonly Widget _body;
+    private readonly Stack _stack;
 
-    public FilterStack(Cellar.Widgets.Input input, Cellar.Widgets.Widget body)
+    public FilterStack(Input input, Widget body)
     {
         _input = input;
         _body = body;
-        _stack = new Cellar.Widgets.Stack(Cellar.Layout.Direction.Vertical)
-            .Add(input, Cellar.Layout.Constraint.Length(1))
-            .Add(body, Cellar.Layout.Constraint.Fill());
+        _stack = new Stack(Direction.Vertical)
+            .Add(input, Constraint.Length(1))
+            .Add(body, Constraint.Fill());
     }
 
     public override bool IsFocusable => true;
@@ -796,15 +796,15 @@ file sealed class FilterStack : Cellar.Widgets.Widget
         }
     }
 
-    protected override void VisitChildren(System.Action<Cellar.Widgets.Widget> visit) => visit(_stack);
+    protected override void VisitChildren(Action<Widget> visit) => visit(_stack);
 
-    public override Cellar.Primitives.Size Measure(Cellar.Primitives.Size available) => _stack.Measure(available);
+    public override Size Measure(Size available) => _stack.Measure(available);
 
-    public override void Render(Cellar.Rendering.Surface surface, Cellar.Primitives.Rect area) => _stack.Render(surface, area);
+    public override void Render(Cellar.Rendering.Surface surface, Rect area) => _stack.Render(surface, area);
 
-    public override bool OnEvent(Cellar.Terminal.InputEvent e)
+    public override bool OnEvent(InputEvent e)
     {
-        if (e is Cellar.Terminal.KeyEvent key)
+        if (e is KeyEvent key)
         {
             // `/` opens the filter (unless the input already has it, so you can type a literal slash).
             if (!_input.HasFocus && key.IsChar && key.Rune.Value == '/')
@@ -814,7 +814,7 @@ file sealed class FilterStack : Cellar.Widgets.Widget
                 return true;
             }
             // Esc leaves the filter and hands the arrows/Enter back to the table.
-            if (_input.HasFocus && key.Key == Cellar.Terminal.Key.Escape)
+            if (_input.HasFocus && key.Key == Key.Escape)
             {
                 _input.HasFocus = false;
                 _body.HasFocus = true;

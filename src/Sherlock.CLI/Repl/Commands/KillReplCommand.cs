@@ -18,7 +18,7 @@ public sealed class KillReplCommand : IReplCommand
 
     public void Execute(ReplContext context, string[] args)
     {
-        IReadOnlyList<ProcessSupervisor> targets = context.Workspace.Targets;
+        IReadOnlyList<RunTarget> targets = context.Workspace.Targets;
         if (targets.Count == 0)
         {
             context.Console.MarkupLine("[grey]No run targets.[/]");
@@ -28,7 +28,7 @@ public sealed class KillReplCommand : IReplCommand
         bool snapshot = !args.Contains("--no-snapshot");
         string? pidArg = args.FirstOrDefault(a => !a.StartsWith('-'));
 
-        ProcessSupervisor? target;
+        RunTarget? target;
         if (pidArg is not null)
         {
             if (!int.TryParse(pidArg, out int pid))
@@ -36,7 +36,7 @@ public sealed class KillReplCommand : IReplCommand
                 context.Console.MarkupLineInterpolated($"[red]error:[/] '{pidArg}' is not a pid.");
                 return;
             }
-            target = targets.FirstOrDefault(t => t.RootPid == pid);
+            target = targets.FirstOrDefault(t => t.Pid == pid);
             if (target is null)
             {
                 context.Console.MarkupLineInterpolated($"[red]error:[/] no run target with pid {pid}.");
@@ -49,13 +49,13 @@ public sealed class KillReplCommand : IReplCommand
         }
 
         // Snapshot while it's still alive, then kill.
-        if (snapshot && !target.RootExited)
+        if (snapshot && !target.HasExited)
         {
             try
             {
                 SnapshotEntry entry = context.Console.Status().Start(
-                    $"Snapshotting pid {target.RootPid} before kill…",
-                    _ => context.Workspace.Capture(target.RootPid, load: false).Entry);
+                    $"Snapshotting pid {target.Pid} before kill…",
+                    _ => context.Workspace.Capture(target.Pid, load: false).Entry);
                 string contents = entry.HasAllocations ? "heap + allocations" : "heap only";
                 context.Console.MarkupLineInterpolated(
                     $"[green]saved[/] [bold]{entry.Id}[/] [grey]({contents}, {ByteSize.Format(entry.TotalSizeBytes)}) — load {entry.Id} to analyze[/]");
@@ -67,6 +67,6 @@ public sealed class KillReplCommand : IReplCommand
         }
 
         target.Kill();
-        context.Console.MarkupLineInterpolated($"[grey]killed[/] {target.RootName} [grey](pid {target.RootPid})[/]");
+        context.Console.MarkupLineInterpolated($"[grey]killed[/] {target.Name} [grey](pid {target.Pid})[/]");
     }
 }

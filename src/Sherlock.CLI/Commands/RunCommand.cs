@@ -1,5 +1,7 @@
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using Sherlock.Core.Collection;
@@ -9,11 +11,7 @@ using Spectre.Console.Cli;
 
 namespace Sherlock.CLI.Commands;
 
-/// <summary>
-/// Launches a process under supervision, runs it to completion while capturing triggered snapshots
-/// and exit-time artifacts (crash dump, allocation profile) into the library, then exits. For
-/// interactive, on-demand snapshotting use the REPL's <c>run</c> instead.
-/// </summary>
+/// <summary>Runs a process and captures its requested artifacts.</summary>
 public sealed class RunCommand : Command<RunCommand.Settings>
 {
     public sealed class Settings : CommandSettings
@@ -42,10 +40,6 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         [Description("Open a live TUI: heap usage + process tree; snapshot a process on demand.")]
         public bool Live { get; init; }
 
-        [CommandOption("--no-crash-dump")]
-        [Description("Do not auto-write a dump if a process crashes.")]
-        public bool NoCrashDump { get; init; }
-
         [CommandOption("--snapshot-on <EVENT>")]
         [Description("Capture a snapshot when an event fires, e.g. throw:My.Namespace.Exception.")]
         public string? SnapshotOn { get; init; }
@@ -71,42 +65,42 @@ public sealed class RunCommand : Command<RunCommand.Settings>
             return 1;
         }
 
-        var spec = new RunSpec(settings.Profile, settings.Correlate, settings.Children, !settings.NoCrashDump, settings.SnapshotOn, command, settings.Live);
+        var options = new RunOptions { Command = command, Profile = settings.Profile, Correlate = settings.Correlate, CollectChildren = settings.Children, SnapshotOn = settings.SnapshotOn };
 
-        if (spec.Live && !spec.NeedsProfiler)
+        if (settings.Live && !options.NeedsProfiler)
         {
             console.MarkupLine("[yellow]--live needs the profiler for the heap graph[/] — add [bold]--profile[/] (or [bold]--correlate[/]).");
             return 1;
         }
 
         using Workspace workspace = ReplHost.CreateWorkspace();
-        if (RunLauncher.Launch(workspace, console, spec) is not { } launched)
+        if (RunLauncher.Launch(workspace, console, options) is not { } launched)
         {
             return 1;
         }
 
-        (ProcessSupervisor supervisor, Session session) = launched;
+        (RunTarget target, Session session) = launched;
         console.WriteLine();
 
-        if (spec.Live)
+        if (settings.Live)
         {
-            Live.LiveDashboard.Run(workspace, supervisor, spec, cancellation);
+            Live.LiveDashboard.Run(workspace, target, options.Command, cancellation);
         }
         else
         {
-            SupervisedRun.Drain(workspace, console, supervisor, cancellation, waitForArtifacts: spec.NeedsProfiler);
+            Drain(workspace, console, target, cancellation, waitForArtifacts: options.NeedsProfiler);
         }
 
-        Summarize(console, workspace, session, supervisor);
+        Summarize(console, workspace, session, target);
         return 0;
     }
 
-    private static void Summarize(IAnsiConsole console, Workspace workspace, Session session, ProcessSupervisor supervisor)
+    private static void Summarize(IAnsiConsole console, Workspace workspace, Session session, RunTarget target)
     {
         console.WriteLine();
         Session current = workspace.Store.GetSession(session.Id) ?? session;
         List<SnapshotEntry> snapshots = current.Snapshots.ToList();
-        string exit = supervisor.RootExitCode is int code ? $"exit code {code}" : "still running";
+        string exit = target.ExitCode is int code ? $"exit code {code}" : "still running";
 
         console.MarkupLineInterpolated($"[bold]{current.Id}[/] [grey]({exit}) — {snapshots.Count} snapshot(s)[/]");
         foreach (SnapshotEntry snapshot in snapshots)
@@ -121,6 +115,93 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         else
         {
             console.MarkupLine("[grey]No snapshots captured. Try[/] --snapshot-on <event> [grey]or[/] --correlate[grey].[/]");
+        }
+    }
+
+    private static void Drain(
+        Workspace workspace,
+        IAnsiConsole console,
+        RunTarget target,
+        CancellationToken cancellation,
+        bool waitForArtifacts)
+    {
+        long logPosition = 0;
+        while (!target.HasExited && !cancellation.IsCancellationRequested)
+        {
+            logPosition = StreamLog(target, logPosition);
+            PumpCaptures(workspace, console);
+            Thread.Sleep(120);
+        }
+
+        if (cancellation.IsCancellationRequested)
+        {
+            target.Kill();
+            console.MarkupLine("[grey](interrupted)[/]");
+        }
+
+        logPosition = StreamLog(target, logPosition);
+        if (waitForArtifacts)
+        {
+            for (int i = 0; i < 20 && !cancellation.IsCancellationRequested; i++)
+            {
+                PumpCaptures(workspace, console);
+                Thread.Sleep(150);
+            }
+        }
+        StreamLog(target, logPosition);
+    }
+
+    private static void PumpCaptures(Workspace workspace, IAnsiConsole console)
+    {
+        foreach (Session session in workspace.PollExitedAllocationProfiles())
+        {
+            console.MarkupLineInterpolated(
+                $"[yellow]· allocation profile captured for[/] [bold]{session.Id}[/]");
+        }
+        foreach (TriggeredCaptureResult capture in workspace.PollTriggeredSnapshots())
+        {
+            if (capture.Entry is { } entry)
+            {
+                string contents = entry.HasAllocations ? "heap + allocations" : "heap only";
+                console.MarkupLineInterpolated(
+                    $"[yellow]●[/] [bold]{capture.Probe}[/] [yellow]fired → snapshot[/] [bold]{entry.Id}[/] [grey]({contents})[/]");
+            }
+            else
+            {
+                console.MarkupLineInterpolated(
+                    $"[red]●[/] [bold]{capture.Probe}[/] [red]fired but capture failed:[/] {capture.Error}");
+            }
+        }
+    }
+
+    private static long StreamLog(RunTarget target, long position)
+    {
+        string? path = target.LogPath;
+        if (path is null || !File.Exists(path))
+        {
+            return position;
+        }
+
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            if (stream.Length <= position)
+            {
+                return position;
+            }
+            stream.Seek(position, SeekOrigin.Begin);
+            using var reader = new StreamReader(stream);
+            Console.Out.Write(reader.ReadToEnd());
+            Console.Out.Flush();
+            return stream.Length;
+        }
+        catch (IOException)
+        {
+            return position;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return position;
         }
     }
 }

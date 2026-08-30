@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Sherlock.CLI.Rendering;
+using Sherlock.Core;
 using Sherlock.Core.Collection;
 using Sherlock.Core.Profiling;
 using Spectre.Console;
@@ -57,10 +58,10 @@ public sealed class AllocationsReplCommand : IReplCommand
         }
 
         // Profile source, in priority order: explicit path > snapshot bundle > run session > run target.
-        ProcessSupervisor? runTarget = context.Workspace.Targets.LastOrDefault(t => t.ProfileOutPath is not null);
+        RunTarget? runTarget = context.Workspace.Targets.LastOrDefault(t => t.AllocationPath is not null);
         path ??= context.Workspace.CurrentEntry?.ProvenancePath
                ?? context.Workspace.CurrentSession?.Processes.FirstOrDefault(p => p.HasAllocations)?.AllocationsPath
-               ?? runTarget?.ProfileOutPath;
+               ?? runTarget?.AllocationPath;
         if (path is null)
         {
             context.Console.MarkupLine("[yellow]No allocation profile.[/] Pass a path, or run something with [bold]run --profile[/].");
@@ -70,19 +71,20 @@ public sealed class AllocationsReplCommand : IReplCommand
         {
             // Aggregate profile is only written at exit; if the target is still live
             // with a control channel, ask the profiler to flush now.
-            ProcessSupervisor? live = context.Workspace.Targets.FirstOrDefault(
-                t => !t.RootExited && (t.ProfileOutPath == path || t.SessionId == context.Workspace.CurrentSession?.Id));
+            RunTarget? live = context.Workspace.Targets.FirstOrDefault(
+                t => !t.HasExited && t.AllocationPath == path)
+                ?? context.Workspace.FindTarget(context.Workspace.CurrentSession);
             if (live is not null)
             {
-                string? flushed = context.Console.Status()
-                    .Start("Flushing live allocation profile…", _ => live.FlushAllocations(live.PrimaryPid, TimeSpan.FromSeconds(10)));
-                if (flushed is null)
+                try
                 {
-                    context.Console.MarkupLineInterpolated(
-                        $"[yellow]Couldn't flush[/] — [bold]{live.RootName}[/] (pid {live.RootPid}) didn't answer (no/old profiler?). It's written at exit regardless.");
+                    path = context.Console.Status().Start("Flushing live allocation profile…", _ => live.CaptureAllocations(live.PrimaryPid, TimeSpan.FromSeconds(10)));
+                }
+                catch (DumpAnalysisException ex)
+                {
+                    context.Console.MarkupLineInterpolated($"[yellow]Couldn't flush[/] — {ex.Message}");
                     return;
                 }
-                path = flushed;
             }
             else
             {

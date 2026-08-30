@@ -2,15 +2,10 @@ using Sherlock.Core.Store;
 
 namespace Sherlock.Core;
 
-/// <summary>
-/// Read-only access to the snapshot catalog: resolves an id/label to an open <see cref="Snapshot"/>.
-/// Shared by the CLI and MCP server so both open snapshots the same way.
-/// </summary>
 public sealed class SnapshotLibrary(SnapshotStore store)
 {
     public SnapshotStore Store => store;
 
-    /// <summary>Opens a snapshot by id or label. The caller owns (and disposes) the result.</summary>
     public Snapshot Open(string idOrLabel)
     {
         if (store.FindSnapshot(idOrLabel) is not (_, { } entry))

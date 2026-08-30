@@ -26,7 +26,7 @@ public sealed class WaitTriggerReplCommand : IReplCommand
             timeout = t;
         }
 
-        bool anyLive = context.Workspace.Targets.Any(target => !target.RootExited);
+        bool anyLive = context.Workspace.Targets.Any(target => !target.HasExited);
         if (!anyLive)
         {
             context.Console.MarkupLine("[yellow]No live target to wait on.[/]");
@@ -38,7 +38,7 @@ public sealed class WaitTriggerReplCommand : IReplCommand
         {
             while (DateTime.UtcNow < deadline)
             {
-                IReadOnlyList<TriggeredCaptureResult> caught = context.Workspace.PollProbeSnapshots();
+                IReadOnlyList<TriggeredCaptureResult> caught = context.Workspace.PollTriggeredSnapshots();
                 if (caught.Count > 0)
                 {
                     foreach (TriggeredCaptureResult capture in caught)

@@ -14,10 +14,10 @@ public sealed class PsReplCommand : IReplCommand
 
     public void Execute(ReplContext context, string[] args)
     {
-        var rows = new List<SupervisedProcess>();
-        foreach (ProcessSupervisor supervisor in context.Workspace.Targets)
+        var rows = new List<RunProcess>();
+        foreach (RunTarget target in context.Workspace.Targets)
         {
-            rows.AddRange(supervisor.List());
+            rows.AddRange(target.Processes());
         }
 
         if (rows.Count == 0)
@@ -26,7 +26,7 @@ public sealed class PsReplCommand : IReplCommand
             return;
         }
 
-        foreach (SupervisedProcess process in rows)
+        foreach (RunProcess process in rows)
         {
             string role = process.IsRoot ? "[bold]root [/]" : "child";
             string net = process.IsDotnet ? "[green].NET   [/]" : "[grey]native[/]";

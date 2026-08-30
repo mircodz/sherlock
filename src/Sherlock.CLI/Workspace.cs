@@ -10,32 +10,35 @@ using Sherlock.Core.Store;
 
 namespace Sherlock.CLI;
 
-/// <summary>
-/// The session library plus the one loaded snapshot that analysis commands operate on. Loading a
-/// snapshot swaps the live <see cref="DumpSession"/> and disposes the previous one.
-/// </summary>
+/// <summary>Owns active runs, the snapshot library, and the loaded snapshot.</summary>
 public sealed class Workspace(SnapshotStore store) : IDisposable
 {
     public SnapshotStore Store { get; } = store;
 
-    private readonly List<ProcessSupervisor> _targets = [];
+    private readonly List<RunTarget> _targets = [];
+    private readonly Dictionary<RunTarget, string> _targetSessions = [];
     private readonly Lock _captureGate = new();
 
-    /// <summary>Processes launched with <c>run</c> during this session.</summary>
-    public IReadOnlyList<ProcessSupervisor> Targets => _targets;
+    public IReadOnlyList<RunTarget> Targets => _targets;
 
-    public void AddTarget(ProcessSupervisor supervisor) => _targets.Add(supervisor);
+    public void AddTarget(RunTarget target, Session session)
+    {
+        _targets.Add(target);
+        _targetSessions[target] = session.Id;
+    }
 
-    /// <summary>The currently-loaded snapshot (dump + provenance), or null if nothing is loaded.</summary>
+    public RunTarget? FindTarget(Session? session) =>
+        session is null
+            ? null
+            : _targets.LastOrDefault(
+                target => _targetSessions.GetValueOrDefault(target) == session.Id);
+
     public Snapshot? Current { get; private set; }
 
-    /// <summary>The catalog entry backing <see cref="Current"/>, if it came from the library.</summary>
     public SnapshotEntry? CurrentEntry { get; private set; }
 
-    /// <summary>The session that owns <see cref="CurrentEntry"/>.</summary>
     public Session? CurrentSession { get; private set; }
 
-    /// <summary>Short label for the prompt (snapshot id, or a file name for transient loads).</summary>
     public string? CurrentName { get; private set; }
 
     /// <summary>Loads a catalogued snapshot as the current target.</summary>
@@ -50,32 +53,13 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
         Swap(new Snapshot(DumpSession.Open(path)), session: null, entry: null, Path.GetFileName(path));
     }
 
-    /// <summary>Imports crash dumps left by exited run-targets, each attached to its run's session.</summary>
-    public IReadOnlyList<SnapshotEntry> PollExitedCrashDumps()
-    {
-        List<SnapshotEntry>? imported = null;
-        foreach (ProcessSupervisor target in _targets)
-        {
-            string? path = target.TryPollRootCrashDump();
-            if (path is null)
-            {
-                continue;
-            }
-
-            Session session = SessionFor(target, SessionKind.Crash);
-            (imported ??= []).Add(Store.AddSnapshot(session, path, moveIntoStore: true,
-                sourcePid: target.RootPid, sourceName: target.RootName, reason: "crash"));
-        }
-        return (IReadOnlyList<SnapshotEntry>?)imported ?? [];
-    }
-
     /// <summary>Marks exit-time allocation profiles from exited <c>run --profile</c> targets.</summary>
     public IReadOnlyList<Session> PollExitedAllocationProfiles()
     {
         List<Session>? marked = null;
-        foreach (ProcessSupervisor target in _targets)
+        foreach (RunTarget target in _targets)
         {
-            if (target.SessionId is null || Store.GetSession(target.SessionId) is not { } session)
+            if (FindSession(target) is not { } session)
             {
                 continue;
             }
@@ -96,14 +80,13 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
         return (IReadOnlyList<Session>?)marked ?? [];
     }
 
-    /// <summary>For each probe that has signalled, dumps the firing process into its run's session, labelled with the probe.</summary>
-    public IReadOnlyList<TriggeredCaptureResult> PollProbeSnapshots()
+    public IReadOnlyList<TriggeredCaptureResult> PollTriggeredSnapshots()
     {
         List<TriggeredCaptureResult>? captured = null;
-        foreach (ProcessSupervisor target in _targets)
+        foreach (RunTarget target in _targets)
         {
-            IReadOnlyList<(int Pid, string Name)> signals = target.TryPollProbeSignals();
-            if (signals.Count == 0 || target.SessionId is null)
+            IReadOnlyList<(int Pid, string Name)> signals = target.PollTriggers();
+            if (signals.Count == 0 || FindSession(target) is null)
             {
                 continue;
             }
@@ -112,8 +95,6 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
             {
                 try
                 {
-                    // Capture the process that fired (a child under `dotnet run`, not the
-                    // launcher), so a triggered snapshot carries provenance. Don't auto-load it.
                     SnapshotEntry entry = Capture(firingPid, load: false, reason: probe).Entry;
                     (captured ??= []).Add(new TriggeredCaptureResult(probe, entry, null));
                 }
@@ -127,25 +108,21 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
         return (IReadOnlyList<TriggeredCaptureResult>?)captured ?? [];
     }
 
-    /// <summary>Collects a dump from a live process (sl-side WriteDump), catalogs it, and loads it.</summary>
-    public SnapshotEntry Collect(int pid, DumpKind kind, bool load = true, string? provenance = null, bool correlated = false, string? reason = null)
+    private SnapshotEntry SaveSnapshot(
+        int pid,
+        string dumpPath,
+        bool load,
+        string? provenance,
+        bool correlated,
+        string? reason)
     {
-        string temp = DumpCollector.Collect(pid, kind, outputPath: null);
-        return Ingest(pid, temp, load, provenance, correlated, reason);
-    }
-
-    /// <summary>Catalogs an already-written dump file under the run session this pid belongs to.</summary>
-    public SnapshotEntry Ingest(int pid, string dumpPath, bool load = true, string? provenance = null, bool correlated = false, string? reason = null)
-    {
-        // Attribute the snapshot to the run that owns this pid (root or a live descendant), so a
-        // child's snapshot lands in the run's workspace instead of a stray collect session.
-        ProcessSupervisor? target = _targets.FirstOrDefault(t => t.SessionId is not null && Owns(t, pid));
-        Session session = target?.SessionId is { } sid && Store.GetSession(sid) is { } s
-            ? s
+        RunTarget? target = _targets.FirstOrDefault(t => Owns(t, pid));
+        Session session = target is not null && FindSession(target) is { } existing
+            ? existing
             : Store.BeginSession(SessionKind.Collect, NameOf(pid));
 
         SnapshotEntry entry = Store.AddSnapshot(session, dumpPath, moveIntoStore: true,
-            sourcePid: pid, sourceName: NameOf(pid) ?? target?.RootName,
+            sourcePid: pid, sourceName: NameOf(pid) ?? target?.Name,
             provenanceSource: provenance, correlated: correlated, reason: reason);
         if (load)
         {
@@ -155,16 +132,13 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
         return entry;
     }
 
-    /// <summary>
-    /// Coherently snapshots a live process: for a profiled/correlated target it forces a GC and
-    /// captures allocation state at the same instant as the dump, bundling it into the snapshot.
-    /// </summary>
+    /// <summary>Captures a heap and, when profiled, cumulative allocations.</summary>
     public CaptureResult Capture(int pid, bool load = true, string? reason = null)
     {
         lock (_captureGate)
         {
-            ProcessSupervisor? target = _targets.FirstOrDefault(t => !t.RootExited && Owns(t, pid));
-            bool profiled = target?.ProfileOutPath is not null;
+            RunTarget? target = _targets.FirstOrDefault(t => !t.HasExited && Owns(t, pid));
+            bool profiled = target?.AllocationPath is not null;
             bool correlationRequested = target is { HasCorrelation: true };
 
             string? provenance = null;
@@ -176,20 +150,16 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
                 {
                     if (correlationRequested)
                     {
-                        // Unified provenance.slab (allocations + correlation) at this instant.
-                        (provenance, gcAtEmit) =
-                            target!.RequestCorrelationSnapshot(pid, CaptureTimeout);
+                        (provenance, gcAtEmit) = target!.CaptureCorrelation(pid, CaptureTimeout);
                     }
                     else
                     {
-                        provenance = target!.FlushAllocations(
-                            pid, CaptureTimeout, throwOnError: true);
+                        provenance = target!.CaptureAllocations(pid, CaptureTimeout);
                     }
 
                     if (provenance is null)
                     {
-                        throw new DumpAnalysisException(
-                            $"Could not capture allocations from process {pid}; no snapshot was created.");
+                        throw new DumpAnalysisException($"Could not capture allocations from process {pid}; no snapshot was created.");
                     }
                     try
                     {
@@ -197,8 +167,7 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
                     }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                     {
-                        throw new DumpAnalysisException(
-                            $"The profiler produced invalid allocation data for process {pid}: {ex.Message}", ex);
+                        throw new DumpAnalysisException($"The profiler produced invalid allocation data for process {pid}: {ex.Message}", ex);
                     }
                 }
 
@@ -215,7 +184,7 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
                             : ProvenanceState.Drifted;
                 }
 
-                SnapshotEntry entry = Ingest(
+                SnapshotEntry entry = SaveSnapshot(
                     pid, dumpPath, load, provenance,
                     correlated: state == ProvenanceState.Exact, reason);
                 dumpPath = null; // moved into the snapshot bundle
@@ -229,14 +198,11 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
                 {
                     throw;
                 }
-                throw new DumpAnalysisException(
-                    $"{ex.Message}{preserved}", ex);
+                throw new DumpAnalysisException($"{ex.Message}{preserved}", ex);
             }
             catch (Exception ex) when (ex is not DumpAnalysisException)
             {
-                throw new DumpAnalysisException(
-                    $"Could not create snapshot for process {pid}: {ex.Message}" +
-                    PreservedArtifacts(dumpPath, provenance), ex);
+                throw new DumpAnalysisException($"Could not create snapshot for process {pid}: {ex.Message}{PreservedArtifacts(dumpPath, provenance)}", ex);
             }
         }
     }
@@ -260,20 +226,13 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
             : $" Preserved {string.Join(" and ", paths)}.";
     }
 
-    /// <summary>Whether a run-target's process tree contains this pid (its root or a live descendant).</summary>
-    private static bool Owns(ProcessSupervisor target, int pid) =>
-        target.RootPid == pid || target.List().Any(p => p.Pid == pid);
+    private static bool Owns(RunTarget target, int pid) =>
+        target.Pid == pid || target.Processes().Any(p => p.Pid == pid);
 
-    /// <summary>Finds (or lazily creates) the library session a run-target belongs to.</summary>
-    private Session SessionFor(ProcessSupervisor target, SessionKind fallbackKind)
-    {
-        if (target.SessionId is { } sid && Store.GetSession(sid) is { } existing)
-        {
-            return existing;
-        }
-
-        return Store.BeginSession(fallbackKind, target.RootName);
-    }
+    private Session? FindSession(RunTarget target) =>
+        _targetSessions.TryGetValue(target, out string? id)
+            ? Store.GetSession(id)
+            : null;
 
     private static string? NameOf(int pid)
     {
@@ -309,7 +268,7 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
     public void Dispose()
     {
         Current?.Dispose();
-        foreach (ProcessSupervisor target in _targets)
+        foreach (RunTarget target in _targets)
         {
             target.Dispose(); // leaves processes running; just releases handles
         }

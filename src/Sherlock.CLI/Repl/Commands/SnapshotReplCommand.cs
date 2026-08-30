@@ -11,9 +11,9 @@ namespace Sherlock.CLI.Repl.Commands;
 public sealed class SnapshotReplCommand : IReplCommand
 {
     public string Name => "snapshot";
-    public IReadOnlyList<string> Aliases => ["snap"];
+    public IReadOnlyList<string> Aliases => ["snap", "collect"];
     public string Summary => "Snapshot a live .NET process into the library (default: the live app; `snapshot <pid>` for a specific one).";
-    public string Usage => "snapshot [pid]";
+    public string Usage => "snapshot [pid | --pid N | --name X]";
     public string Category => "Live";
 
     public void Execute(ReplContext context, string[] args)
@@ -21,9 +21,8 @@ public sealed class SnapshotReplCommand : IReplCommand
         int pid;
         if (args.Length > 0)
         {
-            if (!int.TryParse(args[0], out pid))
+            if (!TryResolvePid(context.Console, args, out pid))
             {
-                context.Console.MarkupLineInterpolated($"[red]error:[/] '{args[0]}' is not a pid.");
                 return;
             }
         }
@@ -31,13 +30,13 @@ public sealed class SnapshotReplCommand : IReplCommand
         {
             // No pid: pick from live .NET processes. Prefer the single app child (target under a
             // launcher like `dotnet run`), else the single live process, else make the user choose.
-            List<SupervisedProcess> live = context.Workspace.Targets
-                .SelectMany(t => t.List())
+            List<RunProcess> live = context.Workspace.Targets
+                .SelectMany(t => t.Processes())
                 .Where(p => p.IsDotnet)
                 .ToList();
-            List<SupervisedProcess> children = live.Where(p => !p.IsRoot).ToList();
+            List<RunProcess> children = live.Where(p => !p.IsRoot).ToList();
 
-            SupervisedProcess? pick =
+            RunProcess? pick =
                 children.Count == 1 ? children[0] :
                 live.Count == 1 ? live[0] :
                 null;
@@ -51,7 +50,7 @@ public sealed class SnapshotReplCommand : IReplCommand
                 else
                 {
                     context.Console.MarkupLine("[yellow]Multiple live .NET processes[/] — pick one with [bold]snapshot <pid>[/]:");
-                    foreach (SupervisedProcess p in live)
+                    foreach (RunProcess p in live)
                     {
                         context.Console.MarkupLineInterpolated($"  {p.Pid}  {(p.IsRoot ? "root" : "child")}  {p.Name}");
                     }
@@ -61,10 +60,44 @@ public sealed class SnapshotReplCommand : IReplCommand
             pid = pick.Pid;
         }
 
-        Collect(context, pid);
+        Capture(context, pid);
     }
 
-    internal static void Collect(ReplContext context, int pid)
+    private static bool TryResolvePid(IAnsiConsole console, string[] args, out int pid)
+    {
+        pid = 0;
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (args[i] == "--pid" && i + 1 < args.Length &&
+                int.TryParse(args[i + 1], out pid))
+            {
+                return true;
+            }
+            if (args[i] == "--name" && i + 1 < args.Length)
+            {
+                IReadOnlyList<DotnetProcess> matches = ProcessLocator.FindByName(args[i + 1]);
+                if (matches.Count == 1)
+                {
+                    pid = matches[0].Pid;
+                    return true;
+                }
+                string error = matches.Count == 0
+                    ? $"no .NET process matches '{args[i + 1]}'."
+                    : $"'{args[i + 1]}' is ambiguous ({matches.Count} matches); use --pid.";
+                console.MarkupLineInterpolated($"[red]error:[/] {error}");
+                return false;
+            }
+            if (!args[i].StartsWith('-') && int.TryParse(args[i], out pid))
+            {
+                return true;
+            }
+        }
+
+        console.MarkupLine("[red]error:[/] specify a pid, [bold]--pid N[/], or [bold]--name X[/].");
+        return false;
+    }
+
+    private static void Capture(ReplContext context, int pid)
     {
         CaptureResult result;
         try

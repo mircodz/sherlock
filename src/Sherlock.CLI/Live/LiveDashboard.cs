@@ -25,12 +25,12 @@ public static class LiveDashboard
 {
     // Background samples posted onto the UI loop.
     private sealed record HeapSample(HeapStats? Heap, long Gc);
-    private sealed record ProcessList(IReadOnlyList<SupervisedProcess> Processes);
+    private sealed record ProcessList(IReadOnlyList<RunProcess> Processes);
     private sealed record Capturing(int Pid, string Name);
     private sealed record Captured(string Id, long Bytes, string Reason);
     private sealed record Status(string Text, Color Color);
 
-    public static void Run(Workspace workspace, ProcessSupervisor supervisor, RunSpec spec, CancellationToken cancellation)
+    public static void Run(Workspace workspace, RunTarget target, IReadOnlyList<string> command, CancellationToken cancellation)
     {
         var poll = TimeSpan.FromMilliseconds(200); // control-channel request timeout
         var busy = 0; // 1 while a capture is in flight; pause heap polls so we don't contend on the channel
@@ -39,12 +39,12 @@ public static class LiveDashboard
         var stat = new Label(StyledText.Empty());
 
         // Live process tree. Rows are links (click to snapshot); Enter snapshots the selected one.
-        var procs = new List<SupervisedProcess>();
-        var procTree = new TreeView<SupervisedProcess>
+        var procs = new List<RunProcess>();
+        var procTree = new TreeView<RunProcess>
         {
             RenderLabel = n =>
             {
-                SupervisedProcess p = n.Value;
+                RunProcess p = n.Value;
                 Color c = p.IsDotnet ? Theme.Current.Accent : Theme.Current.Muted;
                 return StyledText.Of(p.Name).Fg(c).Underline().Link(p.Pid)
                     .Append($"  pid {p.Pid}").Fg(Theme.Current.Muted)
@@ -53,7 +53,7 @@ public static class LiveDashboard
             ShowGuides = true,
             ShowHeader = true,
         };
-        procTree.Columns.Add(new TreeColumn<SupervisedProcess>(".NET", 7, n =>
+        procTree.Columns.Add(new TreeColumn<RunProcess>(".NET", 7, n =>
             new StyledText(n.Value.IsDotnet ? "yes" : "—", Theme.Current.MutedStyle)));
 
         var snapTable = new Table { ShowHeader = true, Striped = true, ShowScrollbar = true };
@@ -61,7 +61,7 @@ public static class LiveDashboard
         snapTable.Columns.Add(new Column("Size", Constraint.Length(10), Justify.Right));
         snapTable.Columns.Add(new Column("Captured", Constraint.Fill(2)));
 
-        string title = string.Join(' ', spec.Command);
+        string title = string.Join(' ', command);
 
         var left = new Stack(Direction.Vertical)
             .Add(new Panel(procTree, " Processes — click or Enter to snapshot ") { BorderStyle = BorderStyle.Rounded }, Constraint.Fill(1))
@@ -118,7 +118,7 @@ public static class LiveDashboard
 
         var footer = new Stack(Direction.Horizontal)
             .Add(FooterButton("↵", "Snapshot", SnapshotSelected), Constraint.Length(13))
-            .Add(FooterButton("k", "Kill", () => { supervisor.Kill(); app.Post(new Status("killed the process tree.", Theme.Current.Warning)); }), Constraint.Length(9))
+            .Add(FooterButton("k", "Kill", () => { target.Kill(); app.Post(new Status("killed the process tree.", Theme.Current.Warning)); }), Constraint.Length(9))
             .Add(FooterButton("q", "Quit", app.Quit), Constraint.Length(9));
 
         // Capture blocks for a second or two, so the banner repaints immediately, not on the next heap tick.
@@ -138,7 +138,7 @@ public static class LiveDashboard
                     app.Quit();
                     return true;
                 case KeyEvent { IsChar: true } k when k.Rune.Value == 'k':
-                    supervisor.Kill();
+                    target.Kill();
                     app.Post(new Status("killed the process tree.", Theme.Current.Warning));
                     return true;
             }
@@ -179,7 +179,7 @@ public static class LiveDashboard
                     {
                         pidSet = now;
                         procTree.Clear();
-                        foreach (SupervisedProcess p in pl.Processes.Where(p => p.IsRoot || !now.Contains(p.ParentPid)))
+                        foreach (RunProcess p in pl.Processes.Where(p => p.IsRoot || !now.Contains(p.ParentPid)))
                         {
                             procTree.AddRoot(p, parent => procs.Where(x => x.ParentPid == parent.Pid)).ExpandAll();
                         }
@@ -199,13 +199,13 @@ public static class LiveDashboard
         // Background poller: heap + gc + process list, ~2 Hz. Pauses heap polls during a capture.
         var producer = Task.Run(async () =>
         {
-            while (!cancellation.IsCancellationRequested && !supervisor.RootExited)
+            while (!cancellation.IsCancellationRequested && !target.HasExited)
             {
-                app.Post(new ProcessList(supervisor.List()));
+                app.Post(new ProcessList(target.Processes()));
                 if (Volatile.Read(ref busy) == 0)
                 {
-                    int pid = supervisor.PrimaryPid;
-                    app.Post(new HeapSample(supervisor.HeapSize(pid, poll), supervisor.GcCount(pid, poll)));
+                    int pid = target.PrimaryPid;
+                    app.Post(new HeapSample(target.HeapSize(pid, poll), target.GcCount(pid, poll)));
                 }
                 try { await Task.Delay(500, cancellation); }
                 catch (OperationCanceledException) { break; }
