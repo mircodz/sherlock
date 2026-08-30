@@ -1,10 +1,8 @@
-using System;
 using System.Collections.Generic;
 using System.Linq;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using Sherlock.Core.Collection;
-using Sherlock.Core.Store;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;

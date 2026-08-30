@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -11,10 +10,8 @@ using Cellar.Text;
 using Cellar.Widgets;
 using Cellar.Widgets.Charts;
 using Cellar.Widgets.Charts.Trees;
-using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using Sherlock.Core.Collection;
-using Sherlock.Core.Store;
 using Theme = Cellar.Theming.Theme;
 
 namespace Sherlock.CLI.Live;

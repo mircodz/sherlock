@@ -3,7 +3,6 @@ using System.IO;
 using System.Runtime.InteropServices;
 using Sherlock.Core.Storage;
 using Sherlock.Core.Tests.Common;
-using Xunit;
 
 namespace Sherlock.Core.Tests.Storage;
 
