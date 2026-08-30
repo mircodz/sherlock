@@ -2,9 +2,10 @@
 
 #include "sherlock/common/logger.hpp"
 #include "sherlock/profiler/il_writer.hpp"
+#include "sherlock/profiler/probe.hpp"
 
-#include <cstdio>
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -54,51 +55,82 @@ struct RetType {
 // instrument (byref/typedref, or an exotic RetType we can't size); the caller then skips the method.
 // A void return is success with nonVoid=false.
 bool parseReturnType(ICorProfilerInfo10* info, ModuleID moduleId, mdMethodDef methodToken, RetType& rt) {
+    rt = {};
     IMetaDataImport* md = nullptr;
     if (!SUCCEEDED(info->GetModuleMetaData(moduleId, ofRead, IID_IMetaDataImport, (IUnknown**)&md)) || !md) {
-        return true; // no metadata: treat as void (matches the original best-effort behavior)
+        return false;
     }
-    bool result = true;
-    PCCOR_SIGNATURE sig = nullptr; ULONG sigLen = 0;
-    if (SUCCEEDED(md->GetMethodProps(methodToken, nullptr, nullptr, 0, nullptr, nullptr, &sig, &sigLen, nullptr, nullptr))) {
+
+    const bool result = [&] {
+        PCCOR_SIGNATURE sig = nullptr;
+        ULONG sigLen = 0;
+        if (FAILED(md->GetMethodProps(
+                methodToken, nullptr, nullptr, 0, nullptr, nullptr, &sig, &sigLen, nullptr, nullptr)) ||
+            sig == nullptr || sigLen == 0) {
+            return false;
+        }
+
         const BYTE* sp = sig; const BYTE* send = sig + sigLen;
-        if (sp < send) {
-            BYTE cc = *sp++;                      // calling convention
-            std::uint32_t tmp;
-            if (cc & IMAGE_CEE_CS_CALLCONV_GENERIC) { if (!il::uncompress(sp, send, tmp)) { md->Release(); return false; } }
-            if (!il::uncompress(sp, send, tmp)) { md->Release(); return false; } // param count
-            // RetType begins here. Parse just enough to measure its length; skip on anything exotic.
-            const BYTE* rtStart = sp;
-            while (sp < send && (*sp == ELEMENT_TYPE_CMOD_OPT || *sp == ELEMENT_TYPE_CMOD_REQD)) {  // custom mods
-                sp++; std::uint32_t t; if (!il::uncompress(sp, send, t)) { md->Release(); return false; }
-            }
-            if (sp >= send) { md->Release(); return false; }
-            BYTE et = *sp++;
-            if (et == ELEMENT_TYPE_VOID) {
-                rt.nonVoid = false;
-            } else if (et == ELEMENT_TYPE_BYREF || et == ELEMENT_TYPE_TYPEDBYREF) {
-                result = false; // ref returns / typedref: skip (uncommon, tricky)
-            } else {
-                // Simple value/ref element types we can size to one byte, plus CLASS/VALUETYPE (+token).
-                bool simple = false;
-                switch (et) {
-                    case ELEMENT_TYPE_BOOLEAN: case ELEMENT_TYPE_CHAR:
-                    case ELEMENT_TYPE_I1: case ELEMENT_TYPE_U1: case ELEMENT_TYPE_I2: case ELEMENT_TYPE_U2:
-                    case ELEMENT_TYPE_I4: case ELEMENT_TYPE_U4: case ELEMENT_TYPE_I8: case ELEMENT_TYPE_U8:
-                    case ELEMENT_TYPE_R4: case ELEMENT_TYPE_R8: case ELEMENT_TYPE_I: case ELEMENT_TYPE_U:
-                    case ELEMENT_TYPE_STRING: case ELEMENT_TYPE_OBJECT:
-                        simple = true; break;
-                    case ELEMENT_TYPE_CLASS: case ELEMENT_TYPE_VALUETYPE: {
-                        std::uint32_t t; if (!il::uncompress(sp, send, t)) { md->Release(); return false; }
-                        simple = true; break;
-                    }
-                    default: break;
-                }
-                if (!simple) { result = false; }
-                else { rt.nonVoid = true; rt.blob.assign(rtStart, sp); }
+        BYTE cc = *sp++;
+        std::uint32_t tmp;
+        if (cc & IMAGE_CEE_CS_CALLCONV_GENERIC) {
+            if (!il::uncompress(sp, send, tmp)) {
+                return false;
             }
         }
-    }
+        if (!il::uncompress(sp, send, tmp)) {
+            return false;
+        }
+
+        const BYTE* rtStart = sp;
+        while (sp < send && (*sp == ELEMENT_TYPE_CMOD_OPT || *sp == ELEMENT_TYPE_CMOD_REQD)) {
+            sp++;
+            std::uint32_t token;
+            if (!il::uncompress(sp, send, token)) {
+                return false;
+            }
+        }
+        if (sp >= send) {
+            return false;
+        }
+
+        BYTE elementType = *sp++;
+        if (elementType == ELEMENT_TYPE_VOID) {
+            return true;
+        }
+        if (elementType == ELEMENT_TYPE_BYREF || elementType == ELEMENT_TYPE_TYPEDBYREF) {
+            return false;
+        }
+
+        bool supported = false;
+        switch (elementType) {
+            case ELEMENT_TYPE_BOOLEAN: case ELEMENT_TYPE_CHAR:
+            case ELEMENT_TYPE_I1: case ELEMENT_TYPE_U1: case ELEMENT_TYPE_I2: case ELEMENT_TYPE_U2:
+            case ELEMENT_TYPE_I4: case ELEMENT_TYPE_U4: case ELEMENT_TYPE_I8: case ELEMENT_TYPE_U8:
+            case ELEMENT_TYPE_R4: case ELEMENT_TYPE_R8: case ELEMENT_TYPE_I: case ELEMENT_TYPE_U:
+            case ELEMENT_TYPE_STRING: case ELEMENT_TYPE_OBJECT:
+                supported = true;
+                break;
+            case ELEMENT_TYPE_CLASS: case ELEMENT_TYPE_VALUETYPE: {
+                std::uint32_t token;
+                if (!il::uncompress(sp, send, token)) {
+                    return false;
+                }
+                supported = true;
+                break;
+            }
+            default:
+                break;
+        }
+        if (!supported) {
+            return false;
+        }
+
+        rt.nonVoid = true;
+        rt.blob.assign(rtStart, sp);
+        return true;
+    }();
+
     md->Release();
     return result;
 }
@@ -112,16 +144,29 @@ bool buildLocalSig(ICorProfilerInfo10* info, ModuleID moduleId, std::uint32_t lo
     std::vector<BYTE> origLocalsBody; // bytes after callconv+count
     if (localSigTok != 0) {
         IMetaDataImport* mdi = nullptr;
-        if (SUCCEEDED(info->GetModuleMetaData(moduleId, ofRead, IID_IMetaDataImport, (IUnknown**)&mdi)) && mdi) {
-            PCCOR_SIGNATURE ls = nullptr; ULONG lsLen = 0;
-            if (SUCCEEDED(mdi->GetSigFromToken(static_cast<mdSignature>(localSigTok), &ls, &lsLen)) && lsLen >= 2) {
-                const BYTE* lp = ls; const BYTE* lend = ls + lsLen;
-                lp++; // LOCAL_SIG (0x07)
-                if (!il::uncompress(lp, lend, origLocalCount)) { mdi->Release(); return false; }
-                origLocalsBody.assign(lp, lend);
-            }
-            mdi->Release();
+        if (FAILED(info->GetModuleMetaData(moduleId, ofRead, IID_IMetaDataImport, (IUnknown**)&mdi)) || mdi == nullptr) {
+            return false;
         }
+
+        PCCOR_SIGNATURE ls = nullptr;
+        ULONG lsLen = 0;
+        const bool valid = SUCCEEDED(mdi->GetSigFromToken(
+                               static_cast<mdSignature>(localSigTok), &ls, &lsLen)) &&
+                           ls != nullptr && lsLen >= 2 &&
+                           *ls == IMAGE_CEE_CS_CALLCONV_LOCAL_SIG;
+        if (!valid) {
+            mdi->Release();
+            return false;
+        }
+
+        const BYTE* lp = ls + 1;
+        const BYTE* lend = ls + lsLen;
+        if (!il::uncompress(lp, lend, origLocalCount)) {
+            mdi->Release();
+            return false;
+        }
+        origLocalsBody.assign(lp, lend);
+        mdi->Release();
     }
     retLocalIndex = origLocalCount;
     std::vector<BYTE> newSig;
@@ -131,11 +176,19 @@ bool buildLocalSig(ICorProfilerInfo10* info, ModuleID moduleId, std::uint32_t lo
     newSig.insert(newSig.end(), retTypeBlob.begin(), retTypeBlob.end());
     IMetaDataEmit* mde = nullptr;
     if (SUCCEEDED(info->GetModuleMetaData(moduleId, ofRead | ofWrite, IID_IMetaDataEmit, (IUnknown**)&mde)) && mde) {
-        mde->GetTokenFromSig(newSig.data(), static_cast<ULONG>(newSig.size()), &newLocalTok);
+        HRESULT hr = mde->GetTokenFromSig(newSig.data(), static_cast<ULONG>(newSig.size()), &newLocalTok);
         mde->Release();
-        return true;
+        return SUCCEEDED(hr) && newLocalTok != mdSignatureNil;
     }
     return false;
+}
+
+void emitProbeCall(il::ILStream& stream, std::uintptr_t cookie, std::uintptr_t target, mdSignature signature) {
+    stream.ldc_i8(static_cast<std::uint64_t>(cookie));
+    stream.conv_i();
+    stream.ldc_i8(static_cast<std::uint64_t>(target));
+    stream.conv_i();
+    stream.calli(signature);
 }
 
 } // namespace
@@ -143,7 +196,8 @@ bool buildLocalSig(ICorProfilerInfo10* info, ModuleID moduleId, std::uint32_t lo
 ShadowStackInstrumenter::ShadowStackInstrumenter(ICorProfilerInfo10* info, Logger* logger)
     : info_(info), logger_(logger) {}
 
-ShadowStackInstrumenter::ModuleSigs& ShadowStackInstrumenter::ensureSigs(ModuleID moduleId) {
+ShadowStackInstrumenter::ModuleSigs ShadowStackInstrumenter::ensureSigs(ModuleID moduleId) {
+    std::lock_guard lock(sigMutex_);
     auto it = sigByModule_.find(moduleId);
     if (it != sigByModule_.end())
         return it->second;
@@ -154,23 +208,33 @@ ShadowStackInstrumenter::ModuleSigs& ShadowStackInstrumenter::ensureSigs(ModuleI
         // void Sherlock_ShadowPush(int64) — unmanaged C calling convention.
         BYTE pushSig[] = { static_cast<BYTE>(IMAGE_CEE_CS_CALLCONV_C), 0x01,
                            static_cast<BYTE>(ELEMENT_TYPE_VOID), static_cast<BYTE>(ELEMENT_TYPE_I8) };
-        emit->GetTokenFromSig(pushSig, sizeof pushSig, &sigs.push);
+        if (FAILED(emit->GetTokenFromSig(pushSig, sizeof pushSig, &sigs.push))) {
+            sigs.push = mdSignatureNil;
+        }
         // void Sherlock_ShadowPop()
         BYTE popSig[] = { static_cast<BYTE>(IMAGE_CEE_CS_CALLCONV_C), 0x00,
                           static_cast<BYTE>(ELEMENT_TYPE_VOID) };
-        emit->GetTokenFromSig(popSig, sizeof popSig, &sigs.pop);
+        if (FAILED(emit->GetTokenFromSig(popSig, sizeof popSig, &sigs.pop))) {
+            sigs.pop = mdSignatureNil;
+        }
+        // void Sherlock_Probe*(native int cookie)
+        BYTE probeSig[] = { static_cast<BYTE>(IMAGE_CEE_CS_CALLCONV_C), 0x01,
+                           static_cast<BYTE>(ELEMENT_TYPE_VOID), static_cast<BYTE>(ELEMENT_TYPE_I) };
+        if (FAILED(emit->GetTokenFromSig(probeSig, sizeof probeSig, &sigs.probe))) {
+            sigs.probe = mdSignatureNil;
+        }
         emit->Release();
     }
-    return sigByModule_.emplace(moduleId, sigs).first->second;
+    sigByModule_.emplace(moduleId, sigs);
+    return sigs;
 }
 
-// Core IL rewrite shared by the JIT and ReJIT paths. Fills `out` with a fully assembled method body
-// (fat header + try/finally-wrapped code + EH section) and returns true; false to skip (caller leaves
-// the original IL untouched). Never sets the body itself.
 bool ShadowStackInstrumenter::buildIL(FunctionID functionId, ModuleID moduleId,
-                                      mdMethodDef methodToken, std::vector<BYTE>& out) {
-    ModuleSigs& sigs = ensureSigs(moduleId);
+                                      mdMethodDef methodToken, const ProbePlan& probe,
+                                      std::vector<BYTE>& out) {
+    ModuleSigs sigs = ensureSigs(moduleId);
     if (sigs.push == mdSignatureNil || sigs.pop == mdSignatureNil) { return false; }
+    if (probe && sigs.probe == mdSignatureNil) { return false; }
 
     LPCBYTE header = nullptr;
     ULONG headerSize = 0;
@@ -209,15 +273,20 @@ bool ShadowStackInstrumenter::buildIL(FunctionID functionId, ModuleID moduleId,
 
     // ---- layout pass 1: assign new offsets ----
     // Output segments (in order):
-    //   [prologue]  ldc.i8 funcId; ldc.i8 &push; conv.i; calli pushSig
+    //   [prologue]  shadow push; optional trigger enter
     //   [TRY]       transformed body (ret -> [stloc ret]; leave END)
-    //   [FINALLY]   ldc.i8 &pop; conv.i; calli popSig; endfinally
+    //   [FINALLY]   optional trigger exit; shadow pop; endfinally
     //   [END]       (ldloc ret;) ret
     il::ILStream prologue;
-    prologue.ldc_i8(static_cast<std::uint64_t>(functionId));                    // ldc.i8 funcId
-    prologue.ldc_i8(reinterpret_cast<std::uint64_t>(&Sherlock_ShadowPush));     // ldc.i8 &push
-    prologue.conv_i();                                                          // conv.i
-    prologue.calli(sigs.push);                                                  // calli pushSig
+    prologue.ldc_i8(static_cast<std::uint64_t>(functionId));
+    prologue.ldc_i8(reinterpret_cast<std::uint64_t>(&Sherlock_ShadowPush));
+    prologue.conv_i();
+    prologue.calli(sigs.push);
+    if (probe.onEnter()) {
+        emitProbeCall(
+            prologue, probe.cookie,
+            reinterpret_cast<std::uintptr_t>(&Sherlock_ProbeEnter), sigs.probe);
+    }
 
     // Per-body-instruction new offset map. Each transformed instruction's size is known up front
     // (branches all long-form; ret expands), so we assign offsets directly.
@@ -237,10 +306,15 @@ bool ShadowStackInstrumenter::buildIL(FunctionID functionId, ModuleID moduleId,
     std::uint32_t tryEnd = cur;                 // == handler start
     // finally body
     il::ILStream finallyBody;
-    finallyBody.ldc_i8(reinterpret_cast<std::uint64_t>(&Sherlock_ShadowPop));   // ldc.i8 &pop
-    finallyBody.conv_i();                                                       // conv.i
-    finallyBody.calli(sigs.pop);                                                // calli popSig
-    finallyBody.endfinally();                                                   // endfinally
+    if (probe.onExit()) {
+        emitProbeCall(
+            finallyBody, probe.cookie,
+            reinterpret_cast<std::uintptr_t>(&Sherlock_ProbeExit), sigs.probe);
+    }
+    finallyBody.ldc_i8(reinterpret_cast<std::uint64_t>(&Sherlock_ShadowPop));
+    finallyBody.conv_i();
+    finallyBody.calli(sigs.pop);
+    finallyBody.endfinally();
     std::uint32_t handlerStart = tryEnd;
     std::uint32_t handlerLen = static_cast<std::uint32_t>(finallyBody.size());
     std::uint32_t endLabel = handlerStart + handlerLen;
@@ -335,7 +409,13 @@ bool ShadowStackInstrumenter::buildIL(FunctionID functionId, ModuleID moduleId,
     // ---- assemble the full method ----
     const std::vector<BYTE>& prologueBytes = prologue.bytes();
     const std::vector<BYTE>& finallyBytes = finallyBody.bytes();
-    std::uint32_t newCodeSize = static_cast<std::uint32_t>(prologueBytes.size() + body.size() + finallyBytes.size() + endSeq.size());
+    const std::uint64_t newCodeSize64 =
+        prologueBytes.size() + body.size() + finallyBytes.size() + endSeq.size();
+    if (newCodeSize64 > std::numeric_limits<std::uint32_t>::max() ||
+        maxStack > std::numeric_limits<std::uint16_t>::max() - 2) {
+        return false;
+    }
+    const std::uint32_t newCodeSize = static_cast<std::uint32_t>(newCodeSize64);
 
     // Our transform prepends a fixed prologue/finally and grows the body by a few bytes per instruction,
     // so the rewritten code can't legitimately exceed the original plus a bounded margin. A gross overrun
@@ -344,9 +424,9 @@ bool ShadowStackInstrumenter::buildIL(FunctionID functionId, ModuleID moduleId,
     constexpr std::uint32_t kFixedOverhead = 256; // prologue + finally + end + slack
     if (newCodeSize > static_cast<std::uint64_t>(codeSize) * 2 + kFixedOverhead) {
         if (logger_)
-            logger_->logWarning("shadow rewrite produced an implausible body size (" +
-                                std::to_string(newCodeSize) + " from " + std::to_string(codeSize) +
-                                "); skipping method");
+            logger_->warn(
+                "shadow rewrite produced an implausible body size ({} from {}); skipping method",
+                newCodeSize, codeSize);
         return false;
     }
 
@@ -420,17 +500,25 @@ void ShadowStackInstrumenter::onModuleLoaded(ModuleID moduleId) {
         return;
     HRESULT hr = info_->RequestReJIT(static_cast<ULONG>(reToks.size()), reMods.data(), reToks.data());
     if (logger_) {
-        char buf[16];
-        std::snprintf(buf, sizeof buf, "0x%08x", static_cast<unsigned>(hr));
-        logger_->logInfo("shadow ReJIT requested " + std::to_string(reToks.size()) +
-                         " method(s), hr=" + buf);
+        logger_->info(
+            "shadow ReJIT requested {} method(s), hr=0x{:08x}",
+            reToks.size(), static_cast<unsigned>(hr));
     }
 }
 
-HRESULT ShadowStackInstrumenter::getReJITParameters(ModuleID moduleId, mdMethodDef methodToken,
-                                                    ICorProfilerFunctionControl* control) {
+void ShadowStackInstrumenter::onModuleUnloaded(ModuleID moduleId) {
+    std::lock_guard lock(sigMutex_);
+    sigByModule_.erase(moduleId);
+}
+
+bool ShadowStackInstrumenter::rewrite(ModuleID moduleId, mdMethodDef methodToken,
+                                      const ProbePlan& probe,
+                                      ICorProfilerFunctionControl* control) {
     // Circuit breaker: once latched off (too many prior ReJITErrors), never rewrite again.
-    if (disabled_.load(std::memory_order_relaxed)) { skipped_++; return S_OK; }
+    if (disabled_.load(std::memory_order_relaxed)) {
+        skipped_.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
 
     // Resolve the FunctionID so buildIL can bake it into the push. GetFunctionFromToken gives the
     // canonical (non-generic) FunctionID; generic instantiations share this body's IL, which is fine:
@@ -440,12 +528,16 @@ HRESULT ShadowStackInstrumenter::getReJITParameters(ModuleID moduleId, mdMethodD
         functionId = 0; // still emit; a 0 frame resolves to <unknown> but keeps depth correct
 
     std::vector<BYTE> out;
-    if (!buildIL(functionId, moduleId, methodToken, out)) { skipped_++; return S_OK; }
-    if (FAILED(control->SetILFunctionBody(static_cast<ULONG>(out.size()), out.data()))) {
-        skipped_++; return S_OK;
+    if (!buildIL(functionId, moduleId, methodToken, probe, out)) {
+        skipped_.fetch_add(1, std::memory_order_relaxed);
+        return false;
     }
-    instrumented_++;
-    return S_OK;
+    if (FAILED(control->SetILFunctionBody(static_cast<ULONG>(out.size()), out.data()))) {
+        skipped_.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    instrumented_.fetch_add(1, std::memory_order_relaxed);
+    return true;
 }
 
 void ShadowStackInstrumenter::noteReJITError() {
@@ -456,8 +548,9 @@ void ShadowStackInstrumenter::noteReJITError() {
     std::uint64_t n = rejitErrors_.fetch_add(1, std::memory_order_relaxed) + 1;
     if (n >= kMaxReJITErrors && !disabled_.exchange(true, std::memory_order_relaxed)) {
         if (logger_)
-            logger_->logError("shadow-stack instrumentation disabled after " + std::to_string(n) +
-                              " ReJIT errors; leaving remaining methods un-instrumented");
+            logger_->error(
+                "shadow-stack instrumentation disabled after {} ReJIT errors; leaving remaining methods un-instrumented",
+                n);
     }
 }
 

@@ -2,8 +2,9 @@
 
 #include <atomic>
 #include <cstdint>
-#include <deque>
 #include <functional>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -14,75 +15,144 @@ namespace Sherlock {
 
 class Logger;
 
-/// Method "breakpoints" via ReJIT + IL rewriting.
+enum class ProbePhase : std::uint8_t {
+    Enter = 1,
+    Exit = 2,
+};
+
+enum class ProbeEvents : std::uint8_t {
+    None = 0,
+    Enter = 1,
+    Exit = 2,
+    EnterAndExit = 3,
+};
+
+constexpr bool includes(ProbeEvents events, ProbePhase phase) {
+    return (static_cast<std::uint8_t>(events) & static_cast<std::uint8_t>(phase)) != 0;
+}
+
+/// The immutable part of a method probe baked into rewritten IL. `cookie` points to
+/// stable process-lifetime state, so the injected hook does not search an armed-method map.
+struct ProbePlan {
+    std::uintptr_t cookie = 0;
+    ProbeEvents events = ProbeEvents::None;
+
+    explicit operator bool() const { return cookie != 0 && events != ProbeEvents::None; }
+    bool onEnter() const { return includes(events, ProbePhase::Enter); }
+    bool onExit() const { return includes(events, ProbePhase::Exit); }
+};
+
+/// Thread-safe registry for resolved method probes. Map lookup happens only while rewriting IL;
+/// an executing instrumented method calls dispatch() with its embedded state pointer.
+class ProbeRegistry {
+public:
+    using HitCallback = std::function<void(const std::string&, ProbePhase)>;
+
+    struct Registration {
+        ProbePlan plan;
+        bool changed = false;
+        bool inserted = false;
+    };
+
+    Registration registerMethod(
+        ModuleID module, mdMethodDef token, std::string display, ProbeEvents events);
+    ProbePlan planFor(ModuleID module, mdMethodDef token) const;
+    void removeMethod(ModuleID module, mdMethodDef token, std::uintptr_t cookie);
+    void removeModule(ModuleID module);
+
+    // Set during profiler initialization, before modules can execute instrumented code.
+    void setHitCallback(HitCallback callback) { onHit_ = std::move(callback); }
+
+    static void dispatch(std::uintptr_t cookie, ProbePhase phase) noexcept;
+
+private:
+    struct MethodKey {
+        ModuleID module;
+        mdMethodDef token;
+
+        bool operator==(const MethodKey&) const = default;
+    };
+
+    struct MethodKeyHash {
+        std::size_t operator()(const MethodKey& key) const noexcept;
+    };
+
+    struct State {
+        State(ProbeRegistry* owner, ModuleID module, mdMethodDef token,
+              std::string display, ProbeEvents events)
+            : owner(owner), module(module), token(token), display(std::move(display)),
+              events(static_cast<std::uint8_t>(events)) {}
+
+        ProbeRegistry* owner;
+        ModuleID module;
+        mdMethodDef token;
+        std::string display;
+        std::atomic<std::uint8_t> events;
+        std::atomic<std::uint8_t> fired{0};
+        std::atomic<bool> active{true};
+    };
+
+    mutable std::mutex mutex_;
+    std::unordered_map<MethodKey, State*, MethodKeyHash> byMethod_;
+    // States are never moved or reclaimed while the profiler is active: their addresses are
+    // embedded in already-JITted code. Removing a probe only marks its state inactive.
+    std::vector<std::unique_ptr<State>> states_;
+    HitCallback onHit_;
+};
+
+extern "C" void Sherlock_ProbeEnter(std::intptr_t cookie);
+extern "C" void Sherlock_ProbeExit(std::intptr_t cookie);
+
+/// Resolves method "breakpoints" and requests targeted ReJIT.
 ///
-/// Each `Namespace.Type.Method` spec (from SHERLOCK_BREAK) is re-JITted with a tiny
-/// prologue spliced into its IL: a `calli` into a native trampoline. The first time the
-/// method is entered, the trampoline fires a callback - the profiler turns that into a
-/// "snapshot now" event to sl. This is *only* a remote trigger: it records nothing itself
-/// (no stacks, no aggregation). All provenance comes from the heap snapshot that follows,
-/// so a missed trigger (inlined / tiny forwarder / NativeAOT) just means no dump at that
-/// instant - it can never corrupt an analysis.
+/// This class does not rewrite IL. It resolves `Namespace.Type.Method` specs, registers
+/// stable probe state, and asks the runtime to ReJIT only matching methods. The shared
+/// shadow-stack instrumenter then emits the requested enter/exit hooks with its own rewrite.
 class ProbeManager {
 public:
     ProbeManager(ICorProfilerInfo10* info, Logger* logger);
 
     /// Parse "Ns.Type.Method;Ns.Other.Dispose,..." (';' or ',' separated).
-    void configure(const std::string& spec);
-    bool empty() const { return specs_.empty(); }
+    void configure(const std::string& spec, ProbeEvents events = ProbeEvents::Enter);
+    bool empty() const;
 
     /// Arm a spec at runtime (from the REPL over the control channel): parse it and
     /// resolve against already-loaded modules, ReJITting matches now. Returns true if a
     /// method was armed (false = no match in a loaded module - e.g. not loaded yet).
-    bool armLive(const std::string& spec);
+    bool armLive(const std::string& spec, ProbeEvents events = ProbeEvents::Enter);
 
-    /// Called once per probe, the first time it fires, with its display name. The profiler
-    /// routes this to sl over the control channel as a probe-hit event (-> heap snapshot).
-    void setHitCallback(std::function<void(const std::string&)> cb) { onHit_ = std::move(cb); }
+    void setHitCallback(ProbeRegistry::HitCallback callback) {
+        registry_.setHitCallback(std::move(callback));
+    }
 
-    /// Resolve any pending specs that live in this freshly-loaded module and
-    /// RequestReJIT the matching methods.
+    /// Resolve configured probes before the shadow-stack instrumenter requests ReJIT for
+    /// every method in this newly loaded module.
     void onModuleLoaded(ModuleID moduleId);
+    void onModuleUnloaded(ModuleID moduleId);
 
-    /// ReJIT callback: hand the runtime the rewritten IL for an armed method.
-    HRESULT getReJITParameters(ModuleID moduleId, mdMethodDef methodId, ICorProfilerFunctionControl* control);
-
-    /// True if (module, token) is armed - used to forbid inlining so the probe fires.
-    bool isArmed(ModuleID moduleId, mdMethodDef token) const;
-
-    /// Called from the injected IL (via the global trampoline) on every hit.
-    void onProbeHit(std::int32_t probeId);
+    /// Called by the shared IL rewriter. The lookup happens once per ReJIT, never per call.
+    ProbePlan planFor(ModuleID moduleId, mdMethodDef token) const {
+        return registry_.planFor(moduleId, token);
+    }
 
 private:
     struct Spec {
         std::string type;   // "Ns.Type"
         std::string method; // "Method"
-        bool resolved = false;
+        ProbeEvents events;
     };
 
-    struct Armed {
-        ModuleID module;
-        mdMethodDef token;
-        std::int32_t probeId;
-        std::string display; // "Ns.Type.Method"
-    };
-
-    // Per-module standalone signature token for the native trampoline (cached).
-    mdSignature ensureProbeSig(ModuleID moduleId);
-
-    // Resolve unresolved specs against one module and ReJIT the matches.
-    void resolveInModule(ModuleID moduleId);
+    // Resolve specs against one module. Newly loaded modules are already about to be
+    // globally ReJITted for the shadow stack; live arms request targeted ReJIT here.
+    std::size_t resolveInModule(ModuleID moduleId, bool requestRejit);
 
     ICorProfilerInfo10* info_;
     Logger* logger_;
 
+    mutable std::mutex mutex_;
     std::vector<ModuleID> loadedModules_; // for armLive() resolution against loaded modules
     std::vector<Spec> specs_;
-    std::deque<Armed> armed_;                                    // index == probeId; deque keeps refs stable
-    std::deque<std::atomic<bool>> fired_;                        // per-probe "already fired" latch
-    std::unordered_map<std::uint64_t, mdSignature> sigByModule_; // ModuleID -> sig token
-
-    std::function<void(const std::string&)> onHit_;
+    ProbeRegistry registry_;
 };
 
 } // namespace Sherlock

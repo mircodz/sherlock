@@ -15,7 +15,6 @@
 //   RES   \t <id> \t ok|err    [\t detail]                      profiler -> sl
 //   EVENT \t <name> [\t args...]                                profiler -> sl (unsolicited)
 //
-// Everything here is pure (no CLR/OS deps) so it can be unit-tested directly.
 namespace Sherlock::control {
 
 /// Control command verbs (payload of a REQ frame). Mirrored on the C# side in
@@ -65,8 +64,7 @@ inline constexpr std::string_view kSnapshotTrigger = "snapshot-trigger";
     return payload;
 }
 
-/// Splits a payload into tab-separated fields (views into `payload`, which must outlive
-/// them). Always returns at least one field.
+/// Splits a payload into tab-separated fields (views into `payload`, which must outlive  them). Always returns at least one field.
 [[nodiscard]] inline std::vector<std::string_view> splitFields(std::string_view payload) {
     std::vector<std::string_view> fields;
     std::size_t start = 0;
@@ -82,7 +80,7 @@ inline constexpr std::string_view kSnapshotTrigger = "snapshot-trigger";
     return fields;
 }
 
-/// Joins fields with tabs - the inverse of splitFields.
+/// Joins fields with tabs.
 template <typename Range>
 [[nodiscard]] inline std::string joinFields(const Range& fields) {
     std::string out;

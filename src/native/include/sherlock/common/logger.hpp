@@ -1,13 +1,14 @@
 #pragma once
 
 #include <atomic>
+#include <format>
 #include <mutex>
 #include <string>
+#include <string_view>
+#include <utility>
 
 namespace Sherlock {
 
-/// Minimal thread-safe logger. Writes to stderr at one of three severity levels;
-/// messages below the configured level are dropped.
 class Logger {
 public:
     enum class LogLevel {
@@ -21,18 +22,49 @@ public:
     Logger(const Logger&) = delete;
     Logger& operator=(const Logger&) = delete;
 
-    // min_level_ is atomic so setLogLevel (any thread) races cleanly with the level check on the
-    // logging paths (called from many app threads); relaxed is fine — it only gates verbosity.
     void setLogLevel(LogLevel level) { min_level_.store(level, std::memory_order_relaxed); }
     LogLevel getLogLevel() const { return min_level_.load(std::memory_order_relaxed); }
 
-    void logInfo(const std::string& message) { log(LogLevel::Info, message); }
-    void logWarning(const std::string& message) { log(LogLevel::Warning, message); }
-    void logError(const std::string& message) { log(LogLevel::Error, message); }
+    void info(std::string_view message) noexcept { write(LogLevel::Info, message); }
+    void warn(std::string_view message) noexcept { write(LogLevel::Warning, message); }
+    void error(std::string_view message) noexcept { write(LogLevel::Error, message); }
+
+    template <typename... Args>
+    void info(std::format_string<Args...> format, Args&&... args) noexcept {
+        writeFormatted(LogLevel::Info, format, std::forward<Args>(args)...);
+    }
+
+    template <typename... Args>
+    void warn(std::format_string<Args...> format, Args&&... args) noexcept {
+        writeFormatted(LogLevel::Warning, format, std::forward<Args>(args)...);
+    }
+
+    template <typename... Args>
+    void error(std::format_string<Args...> format, Args&&... args) noexcept {
+        writeFormatted(LogLevel::Error, format, std::forward<Args>(args)...);
+    }
 
 private:
-    void log(LogLevel level, const std::string& message);
-    static const char* levelName(LogLevel level);
+    bool enabled(LogLevel level) const noexcept {
+        return level >= min_level_.load(std::memory_order_relaxed);
+    }
+
+    template <typename... Args>
+    void writeFormatted(
+        LogLevel level, std::format_string<Args...> format, Args&&... args) noexcept {
+        if (!enabled(level)) {
+            return;
+        }
+
+        try {
+            writeEnabled(level, std::format(format, std::forward<Args>(args)...));
+        } catch (...) {
+        }
+    }
+
+    void write(LogLevel level, std::string_view message) noexcept;
+    void writeEnabled(LogLevel level, std::string_view message) noexcept;
+    static std::string_view levelName(LogLevel level) noexcept;
 
     std::atomic<LogLevel> min_level_{LogLevel::Info};
     std::mutex mutex_;

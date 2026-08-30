@@ -462,8 +462,9 @@ void Aggregator::emitCorrelation(const std::string& path) {
         return;
     }
     if (logger_)
-        logger_->logInfo("wrote provenance (" + std::to_string(merged.size()) + " stacks, " +
-                         std::to_string(live_.size()) + " live objects) to " + path);
+        logger_->info(
+            "wrote provenance ({} stacks, {} live objects) to {}",
+            merged.size(), live_.size(), path);
 }
 
 // Exit-time (or live-flush) allocation aggregate: allocations only, no correlation.
@@ -476,7 +477,7 @@ void Aggregator::dump(const std::string& path) {
         return;
     }
     if (logger_)
-        logger_->logInfo("wrote " + std::to_string(merged.size()) + " stacks to " + path);
+        logger_->info("wrote {} stacks to {}", merged.size(), path);
 }
 
 bool Aggregator::writeSlab(const std::string& path, storage::ProvenanceWriter& pw) {
@@ -485,7 +486,7 @@ bool Aggregator::writeSlab(const std::string& path, storage::ProvenanceWriter& p
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     if (!out) {
         if (logger_)
-            logger_->logError("could not open profile output: " + path);
+            logger_->error("could not open profile output: {}", path);
         return false;
     }
     // Stream straight to the file, never materialize the whole container in RAM (the correlation

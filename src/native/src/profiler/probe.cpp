@@ -1,19 +1,14 @@
 #include "sherlock/profiler/probe.hpp"
 
 #include "sherlock/common/logger.hpp"
-#include "sherlock/profiler/il_writer.hpp"
 
 #include <algorithm>
-#include <cstdio>
+#include <utility>
 #include <vector>
 
 namespace Sherlock {
 
 namespace {
-
-// The single ProbeManager per process; the injected IL calls a free function
-// trampoline with no client data, so it reaches the manager through this.
-ProbeManager* g_probes = nullptr;
 
 // Narrow ASCII std::string -> null-terminated WCHAR buffer (metadata names are ASCII; this
 // sidesteps the L"" wchar_t-width mismatch on the PAL).
@@ -28,19 +23,120 @@ std::vector<WCHAR> widen(const std::string& s) {
 
 } // namespace
 
-// The trampoline the rewritten IL calls (cdecl / IMAGE_CEE_CS_CALLCONV_C; on the
-// 64-bit targets we build, every calling convention collapses to one anyway).
-extern "C" void Sherlock_ProbeEnter(std::int32_t probeId) {
-    if (g_probes)
-        g_probes->onProbeHit(probeId);
+extern "C" void Sherlock_ProbeEnter(std::intptr_t cookie) {
+    ProbeRegistry::dispatch(static_cast<std::uintptr_t>(cookie), ProbePhase::Enter);
+}
+
+extern "C" void Sherlock_ProbeExit(std::intptr_t cookie) {
+    ProbeRegistry::dispatch(static_cast<std::uintptr_t>(cookie), ProbePhase::Exit);
+}
+
+std::size_t ProbeRegistry::MethodKeyHash::operator()(const MethodKey& key) const noexcept {
+    const std::size_t module = std::hash<std::uintptr_t>{}(static_cast<std::uintptr_t>(key.module));
+    const std::size_t token = std::hash<std::uint32_t>{}(static_cast<std::uint32_t>(key.token));
+    return module ^ (token + 0x9e3779b9u + (module << 6) + (module >> 2));
+}
+
+ProbeRegistry::Registration ProbeRegistry::registerMethod(
+    ModuleID module, mdMethodDef token, std::string display, ProbeEvents events) {
+    const MethodKey key{module, token};
+    const std::uint8_t requested = static_cast<std::uint8_t>(events);
+
+    std::lock_guard lock(mutex_);
+    if (auto it = byMethod_.find(key); it != byMethod_.end()) {
+        State* state = it->second;
+        const std::uint8_t previous = state->events.load(std::memory_order_acquire);
+        const ProbeEvents combined = static_cast<ProbeEvents>(previous | requested);
+        const std::uint8_t fired = state->fired.load(std::memory_order_acquire);
+        if ((fired & previous) == previous) {
+            state->active.store(false, std::memory_order_release);
+            auto replacement =
+                std::make_unique<State>(this, module, token, std::move(display), combined);
+            State* stable = replacement.get();
+            states_.push_back(std::move(replacement));
+            it->second = stable;
+            return {{reinterpret_cast<std::uintptr_t>(stable), combined}, true, true};
+        }
+
+        state->events.store(static_cast<std::uint8_t>(combined), std::memory_order_release);
+        return {{reinterpret_cast<std::uintptr_t>(state), combined}, combined != static_cast<ProbeEvents>(previous), false};
+    }
+
+    auto state = std::make_unique<State>(this, module, token, std::move(display), events);
+    State* stable = state.get();
+    states_.push_back(std::move(state));
+    byMethod_.emplace(key, stable);
+    return {{reinterpret_cast<std::uintptr_t>(stable), events}, true, true};
+}
+
+ProbePlan ProbeRegistry::planFor(ModuleID module, mdMethodDef token) const {
+    std::lock_guard lock(mutex_);
+    auto it = byMethod_.find(MethodKey{module, token});
+    if (it == byMethod_.end() || !it->second->active.load(std::memory_order_acquire)) {
+        return {};
+    }
+
+    State* state = it->second;
+    return {
+        reinterpret_cast<std::uintptr_t>(state),
+        static_cast<ProbeEvents>(state->events.load(std::memory_order_acquire)),
+    };
+}
+
+void ProbeRegistry::removeMethod(
+    ModuleID module, mdMethodDef token, std::uintptr_t cookie) {
+    std::lock_guard lock(mutex_);
+    auto it = byMethod_.find(MethodKey{module, token});
+    if (it == byMethod_.end() || reinterpret_cast<std::uintptr_t>(it->second) != cookie) {
+        return;
+    }
+    it->second->active.store(false, std::memory_order_release);
+    byMethod_.erase(it);
+}
+
+void ProbeRegistry::removeModule(ModuleID module) {
+    std::lock_guard lock(mutex_);
+    for (auto it = byMethod_.begin(); it != byMethod_.end();) {
+        if (it->first.module == module) {
+            it->second->active.store(false, std::memory_order_release);
+            it = byMethod_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void ProbeRegistry::dispatch(std::uintptr_t cookie, ProbePhase phase) noexcept {
+    auto* state = reinterpret_cast<State*>(cookie);
+    if (state == nullptr || !state->active.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    const std::uint8_t bit = static_cast<std::uint8_t>(phase);
+    if ((state->events.load(std::memory_order_acquire) & bit) == 0 ||
+        (state->fired.fetch_or(bit, std::memory_order_acq_rel) & bit) != 0) {
+        return;
+    }
+
+    try {
+        if (state->owner->onHit_) {
+            state->owner->onHit_(state->display, phase);
+        }
+    } catch (...) {
+        // Never allow user-facing event delivery to unwind through injected managed code.
+    }
 }
 
 ProbeManager::ProbeManager(ICorProfilerInfo10* info, Logger* logger)
-    : info_(info), logger_(logger) {
-    g_probes = this;
+    : info_(info), logger_(logger) {}
+
+bool ProbeManager::empty() const {
+    std::lock_guard lock(mutex_);
+    return specs_.empty();
 }
 
-void ProbeManager::configure(const std::string& spec) {
+void ProbeManager::configure(const std::string& spec, ProbeEvents events) {
+    std::vector<Spec> parsed;
     std::size_t start = 0;
     while (start <= spec.size()) {
         std::size_t end = spec.find_first_of(";,", start);
@@ -55,38 +151,88 @@ void ProbeManager::configure(const std::string& spec) {
 
         std::size_t dot = item.find_last_of('.');
         if (dot == std::string::npos || dot == 0 || dot + 1 >= item.size()) {
-            if (logger_) logger_->logWarning("ignoring malformed probe spec (want Ns.Type.Method): " + item);
+            if (logger_) {
+                logger_->warn(
+                    "ignoring malformed probe spec (want Ns.Type.Method): {}", item);
+            }
             continue;
         }
-        specs_.push_back({item.substr(0, dot), item.substr(dot + 1), false});
+        parsed.push_back({item.substr(0, dot), item.substr(dot + 1), events});
+    }
+
+    std::lock_guard lock(mutex_);
+    for (Spec& candidate : parsed) {
+        const bool duplicate = std::any_of(specs_.begin(), specs_.end(), [&](const Spec& existing) {
+            return existing.type == candidate.type &&
+                   existing.method == candidate.method &&
+                   existing.events == candidate.events;
+        });
+        if (!duplicate) {
+            specs_.push_back(std::move(candidate));
+        }
     }
 }
 
 void ProbeManager::onModuleLoaded(ModuleID moduleId) {
-    loadedModules_.push_back(moduleId); // remembered so armLive() can resolve against it later
-    resolveInModule(moduleId);
+    {
+        std::lock_guard lock(mutex_);
+        if (std::find(loadedModules_.begin(), loadedModules_.end(), moduleId) == loadedModules_.end()) {
+            loadedModules_.push_back(moduleId);
+        }
+    }
+    resolveInModule(moduleId, false);
 }
 
-bool ProbeManager::armLive(const std::string& spec) {
-    const std::size_t before = armed_.size();
-    configure(spec); // appends to specs_
-    for (ModuleID m : loadedModules_)
-        resolveInModule(m);
-    return armed_.size() > before;
+void ProbeManager::onModuleUnloaded(ModuleID moduleId) {
+    {
+        std::lock_guard lock(mutex_);
+        std::erase(loadedModules_, moduleId);
+    }
+    registry_.removeModule(moduleId);
 }
 
-void ProbeManager::resolveInModule(ModuleID moduleId) {
-    if (specs_.empty())
-        return;
+bool ProbeManager::armLive(const std::string& spec, ProbeEvents events) {
+    configure(spec, events);
+
+    std::vector<ModuleID> modules;
+    {
+        std::lock_guard lock(mutex_);
+        modules = loadedModules_;
+    }
+
+    std::size_t armed = 0;
+    for (ModuleID module : modules) {
+        armed += resolveInModule(module, true);
+    }
+    return armed > 0;
+}
+
+std::size_t ProbeManager::resolveInModule(ModuleID moduleId, bool requestRejit) {
+    std::vector<Spec> specs;
+    {
+        std::lock_guard lock(mutex_);
+        specs = specs_;
+    }
+    if (specs.empty()) {
+        return 0;
+    }
 
     IMetaDataImport* md = nullptr;
-    if (FAILED(info_->GetModuleMetaData(moduleId, ofRead, IID_IMetaDataImport, (IUnknown**)&md)) || md == nullptr)
-        return;
+    if (FAILED(info_->GetModuleMetaData(moduleId, ofRead, IID_IMetaDataImport, (IUnknown**)&md)) || md == nullptr) {
+        return 0;
+    }
 
     std::vector<ModuleID> reMods;
     std::vector<mdMethodDef> reToks;
+    struct Added {
+        ModuleID module;
+        mdMethodDef token;
+        std::uintptr_t cookie;
+        bool inserted;
+    };
+    std::vector<Added> added;
 
-    for (Spec& s : specs_) {
+    for (const Spec& s : specs) {
         std::vector<WCHAR> typeW = widen(s.type);
         mdTypeDef td = mdTypeDefNil;
         if (FAILED(md->FindTypeDefByName(typeW.data(), mdTokenNil, &td)) || td == mdTypeDefNil)
@@ -95,175 +241,56 @@ void ProbeManager::resolveInModule(ModuleID moduleId) {
         std::vector<WCHAR> methodW = widen(s.method);
         HCORENUM hEnum = nullptr;
         mdMethodDef methods[64];
-        ULONG count = 0;
-        if (FAILED(md->EnumMethodsWithName(&hEnum, td, methodW.data(), methods, 64, &count))) {
+        while (true) {
+            ULONG count = 0;
+            if (FAILED(md->EnumMethodsWithName(&hEnum, td, methodW.data(), methods, 64, &count))) {
+                break;
+            }
+            for (ULONG i = 0; i < count; ++i) {
+                ProbeRegistry::Registration registration = registry_.registerMethod(
+                    moduleId, methods[i], s.type + "." + s.method, s.events);
+                // A live arm deliberately retries an unchanged registration: RequestReJIT
+                // succeeding does not guarantee that the later IL rewrite was accepted.
+                if (!registration.changed && !requestRejit) {
+                    continue;
+                }
+                if (std::find(reToks.begin(), reToks.end(), methods[i]) != reToks.end()) {
+                    continue;
+                }
+                reMods.push_back(moduleId);
+                reToks.push_back(methods[i]);
+                added.push_back({moduleId, methods[i], registration.plan.cookie, registration.inserted});
+            }
+            if (count < 64) {
+                break;
+            }
+        }
+        if (hEnum != nullptr) {
             md->CloseEnum(hEnum);
-            continue;
         }
-
-        for (ULONG i = 0; i < count; ++i) {
-            // Dedupe: a module loads once, but guard against re-arming anyway.
-            bool already = std::any_of(armed_.begin(), armed_.end(), [&](const Armed& a) {
-                return a.module == moduleId && a.token == methods[i];
-            });
-            if (already)
-                continue;
-
-            std::int32_t probeId = static_cast<std::int32_t>(armed_.size());
-            armed_.push_back({moduleId, methods[i], probeId, s.type + "." + s.method});
-            fired_.emplace_back(false);
-            reMods.push_back(moduleId);
-            reToks.push_back(methods[i]);
-            s.resolved = true;
-        }
-        md->CloseEnum(hEnum);
     }
     md->Release();
 
-    if (!reToks.empty()) {
-        HRESULT hr = info_->RequestReJIT(static_cast<ULONG>(reToks.size()), reMods.data(), reToks.data());
-        if (FAILED(hr) && logger_) {
-            char buf[16];
-            std::snprintf(buf, sizeof buf, "0x%08x", static_cast<unsigned>(hr));
-            logger_->logError(std::string("RequestReJIT failed ") + buf);
-        } else if (logger_) {
-            logger_->logInfo("armed " + std::to_string(reToks.size()) + " method(s) for probing");
+    if (reToks.empty() || !requestRejit) {
+        return reToks.size();
+    }
+
+    HRESULT hr = info_->RequestReJIT(static_cast<ULONG>(reToks.size()), reMods.data(), reToks.data());
+    if (FAILED(hr)) {
+        for (const Added& entry : added) {
+            if (entry.inserted) {
+                registry_.removeMethod(entry.module, entry.token, entry.cookie);
+            }
         }
-    }
-}
-
-mdSignature ProbeManager::ensureProbeSig(ModuleID moduleId) {
-    auto it = sigByModule_.find(moduleId);
-    if (it != sigByModule_.end())
-        return it->second;
-
-    mdSignature tok = mdSignatureNil;
-    IMetaDataEmit* emit = nullptr;
-    if (SUCCEEDED(info_->GetModuleMetaData(moduleId, ofRead | ofWrite, IID_IMetaDataEmit, (IUnknown**)&emit)) && emit != nullptr) {
-        // void Sherlock_ProbeEnter(int32) - unmanaged C calling convention.
-        BYTE sig[] = {
-            static_cast<BYTE>(IMAGE_CEE_CS_CALLCONV_C),
-            0x01,                                  // param count
-            static_cast<BYTE>(ELEMENT_TYPE_VOID),  // return
-            static_cast<BYTE>(ELEMENT_TYPE_I4),    // param 0
-        };
-        emit->GetTokenFromSig(sig, sizeof sig, &tok);
-        emit->Release();
-    }
-    sigByModule_[moduleId] = tok;
-    return tok;
-}
-
-HRESULT ProbeManager::getReJITParameters(ModuleID moduleId, mdMethodDef methodId, ICorProfilerFunctionControl* control) {
-    // Find the probe id assigned at arm time.
-    std::int32_t probeId = -1;
-    for (const Armed& a : armed_) {
-        if (a.module == moduleId && a.token == methodId) { probeId = a.probeId; break; }
-    }
-    if (probeId < 0)
-        return S_OK; // not ours; leave original IL
-
-    mdSignature sigTok = ensureProbeSig(moduleId);
-    if (sigTok == mdSignatureNil)
-        return S_OK; // couldn't mint the calli signature; fall back to original
-
-    LPCBYTE header = nullptr;
-    ULONG headerSize = 0;
-    if (FAILED(info_->GetILFunctionBody(moduleId, methodId, &header, &headerSize)) || header == nullptr)
-        return S_OK;
-
-    const BYTE* p = header;
-    BYTE fmt = p[0] & CorILMethod_FormatMask;
-
-    std::uint32_t codeSize;
-    std::uint16_t maxStack;
-    std::uint32_t localSig = 0;
-    bool initLocals = false;
-    bool moreSects = false;
-    const BYTE* code = nullptr;
-
-    if (fmt == CorILMethod_TinyFormat) {
-        codeSize = p[0] >> 2;
-        maxStack = 8;
-        code = p + 1;
-    } else if (fmt == CorILMethod_FatFormat) {
-        std::uint16_t flags = il::rd16(p);
-        std::uint16_t hdrDwords = flags >> 12;
-        initLocals = (flags & CorILMethod_InitLocals) != 0;
-        moreSects = (flags & CorILMethod_MoreSects) != 0;
-        maxStack = il::rd16(p + 2);
-        codeSize = il::rd32(p + 4);
-        localSig = il::rd32(p + 8);
-        code = p + hdrDwords * 4;
-    } else {
-        return S_OK; // unknown format, don't touch it
-    }
-
-    // The prologue we splice in: ldc.i4 <probeId>; ldc.i8 <&trampoline>; conv.i; calli <sig>.
-    il::ILStream pre;
-    pre.ldc_i4(static_cast<std::uint32_t>(probeId));
-    pre.ldc_i8(reinterpret_cast<std::uint64_t>(&Sherlock_ProbeEnter));
-    pre.conv_i();
-    pre.calli(sigTok);
-    const std::vector<BYTE>& prefix = pre.bytes();
-    const std::uint32_t prefixLen = static_cast<std::uint32_t>(prefix.size());
-
-    // Collect + relocate EH clauses (offsets are absolute, so they shift by prefixLen).
-    std::vector<il::EHClause> clauses;
-    il::parseEHClauses(header, code, codeSize, moreSects, clauses);
-    for (il::EHClause& e : clauses) {
-        e.tryOffset += prefixLen;
-        e.handlerOffset += prefixLen;
-        if (e.flags & il::kClauseFilter) e.classTokenOrFilter += prefixLen;
-    }
-
-    // Emit a fat method: header + prefix + original code (+ relocated EH as fat section).
-    std::vector<BYTE> out;
-    std::uint16_t newFlags = CorILMethod_FatFormat;
-    if (initLocals) newFlags |= CorILMethod_InitLocals;
-    if (!clauses.empty()) newFlags |= CorILMethod_MoreSects;
-    il::put16(out, static_cast<std::uint16_t>((newFlags & 0xFFF) | (3 << 12))); // flags + 3-dword header
-    il::put16(out, std::max<std::uint16_t>(maxStack, 2));
-    il::put32(out, codeSize + prefixLen);
-    il::put32(out, localSig);
-    out.insert(out.end(), prefix.begin(), prefix.end());
-    out.insert(out.end(), code, code + codeSize);
-
-    if (!clauses.empty()) {
-        while (out.size() & 3) out.push_back(0); // 4-byte align the section
-        out.push_back(CorILMethod_Sect_EHTable | CorILMethod_Sect_FatFormat);
-        std::uint32_t dataSize = 4 + static_cast<std::uint32_t>(clauses.size()) * 24;
-        out.push_back(dataSize & 0xFF);
-        out.push_back((dataSize >> 8) & 0xFF);
-        out.push_back((dataSize >> 16) & 0xFF);
-        for (const il::EHClause& e : clauses) {
-            il::put32(out, e.flags); il::put32(out, e.tryOffset); il::put32(out, e.tryLength);
-            il::put32(out, e.handlerOffset); il::put32(out, e.handlerLength); il::put32(out, e.classTokenOrFilter);
+        if (logger_) {
+            logger_->error("RequestReJIT failed 0x{:08x}", static_cast<unsigned>(hr));
         }
+        return 0;
     }
-
-    HRESULT hr = control->SetILFunctionBody(static_cast<ULONG>(out.size()), out.data());
-    if (FAILED(hr) && logger_) {
-        char buf[16];
-        std::snprintf(buf, sizeof buf, "0x%08x", static_cast<unsigned>(hr));
-        logger_->logError(std::string("SetILFunctionBody failed ") + buf);
+    if (logger_) {
+        logger_->info("armed {} method(s) for probing", reToks.size());
     }
-    return S_OK;
-}
-
-bool ProbeManager::isArmed(ModuleID moduleId, mdMethodDef token) const {
-    return std::any_of(armed_.begin(), armed_.end(), [&](const Armed& a) {
-        return a.module == moduleId && a.token == token;
-    });
-}
-
-void ProbeManager::onProbeHit(std::int32_t probeId) {
-    // Pure trigger: fire sl once, the first time this probe is hit. Records nothing; all
-    // provenance comes from the heap snapshot sl takes in response.
-    if (probeId >= 0 && static_cast<std::size_t>(probeId) < armed_.size() &&
-        onHit_ && !fired_[probeId].exchange(true)) {
-        onHit_(armed_[probeId].display);
-    }
+    return reToks.size();
 }
 
 } // namespace Sherlock

@@ -4,16 +4,22 @@
 
 namespace Sherlock {
 
-void Logger::log(LogLevel level, const std::string& message) {
-    if (level < min_level_.load(std::memory_order_relaxed)) {
+void Logger::write(LogLevel level, std::string_view message) noexcept {
+    if (!enabled(level)) {
         return;
     }
-
-    std::lock_guard<std::mutex> lock(mutex_);
-    std::cerr << "[sherlock] [" << levelName(level) << "] " << message << '\n';
+    writeEnabled(level, message);
 }
 
-const char* Logger::levelName(LogLevel level) {
+void Logger::writeEnabled(LogLevel level, std::string_view message) noexcept {
+    try {
+        std::lock_guard lock(mutex_);
+        std::cerr << "[sherlock] [" << levelName(level) << "] " << message << '\n';
+    } catch (...) {
+    }
+}
+
+std::string_view Logger::levelName(LogLevel level) noexcept {
     switch (level) {
         case LogLevel::Info:    return "INFO ";
         case LogLevel::Warning: return "WARN ";

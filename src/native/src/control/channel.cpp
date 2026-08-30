@@ -86,7 +86,7 @@ void ControlChannel::start(std::string_view version, const std::vector<std::stri
     std::vector<std::string> hello = {"HELLO", std::string(version), featureList, std::to_string(pid)};
     std::string framed = frame(joinFields(hello));
     if (!sendAll(framed)) {
-        if (logger_) logger_->logWarning("control channel: HELLO send failed; not serving");
+        if (logger_) logger_->warn("control channel: HELLO send failed; not serving");
         return;
     }
 

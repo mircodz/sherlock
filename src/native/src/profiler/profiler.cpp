@@ -4,9 +4,9 @@
 #include "sherlock/profiler/shadowstack.hpp"
 
 #include <cstdint>
-#include <span>
-#include <cstdio>
 #include <cstdlib>
+#include <exception>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -85,7 +85,7 @@ ULONG STDMETHODCALLTYPE Profiler::Release() {
 HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
     HRESULT hr = pICorProfilerInfoUnk->QueryInterface(IID_ICorProfilerInfo10, (void**)&corProfilerInfo);
     if (FAILED(hr)) {
-        logger->logError("QueryInterface for ICorProfilerInfo10 failed");
+        logger->error("QueryInterface for ICorProfilerInfo10 failed");
         return hr;
     }
 
@@ -110,7 +110,7 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
 
     hr = corProfilerInfo->SetEventMask(eventMask);
     if (FAILED(hr)) {
-        logger->logError("SetEventMask failed");
+        logger->error("SetEventMask failed");
         return hr;
     }
 
@@ -146,7 +146,7 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
                 while (!one.empty() && (one.back() == ' ' || one.back() == '\t')) one.pop_back();
                 if (!one.empty()) armTrigger(one, false);
             }
-            logger->logInfo(std::string("snapshot-on: ") + triggerEnv);
+            logger->info("snapshot-on: {}", triggerEnv);
         }
     }
 
@@ -155,7 +155,7 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
     if (controlPresent) {
         control = std::make_unique<control::ControlChannel>(logger.get());
         if (std::optional<std::string> err = control->connect(ctlSocketEnv)) {
-            logger->logError("control channel connect failed: " + *err);
+            logger->error("control channel connect failed: {}", *err);
             control.reset();
         } else {
             std::vector<std::string> features = {"allocations"};
@@ -165,17 +165,20 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
                            [this](std::string_view cmd, std::span<const std::string_view> args) {
                                return handleControl(cmd, args);
                            });
-            // Route call: trigger hits to sl as snapshot-trigger events over the channel.
+            // `call:` currently arms entry only. The embedded probe also supports exit events so
+            // a later span capture can use the same composed rewrite.
             if (probes) {
-                probes->setHitCallback([this](const std::string& name) { fireTrigger("call:" + name); });
+                probes->setHitCallback([this](const std::string& name, ProbePhase phase) {
+                    fireTrigger((phase == ProbePhase::Enter ? "call:" : "call-exit:") + name);
+                });
             }
-            logger->logInfo("control channel connected");
+            logger->info("control channel connected");
         }
     }
 
     isInitialized = true;
 
-    logger->logInfo("profiler initialized; aggregating allocations by call stack");
+    logger->info("profiler initialized; aggregating allocations by call stack");
     return S_OK;
 }
 
@@ -184,7 +187,7 @@ HRESULT STDMETHODCALLTYPE Profiler::InitializeForAttach(IUnknown*, void*, UINT) 
     // flag SetEventMask rejects on attach (CORPROF_E_IMMUTABLE_FLAGS_SET), so there's no useful degraded
     // mode. Fail clearly at load time. Sherlock attaches at process start via CORECLR_PROFILER.
     if (logger)
-        logger->logError("Sherlock must be set at startup (CORECLR_PROFILER); runtime attach is not supported.");
+        logger->error("Sherlock must be set at startup (CORECLR_PROFILER); runtime attach is not supported.");
     return E_NOTIMPL;
 }
 
@@ -292,13 +295,13 @@ HRESULT STDMETHODCALLTYPE Profiler::Shutdown() {
     if (control) {
         control->stop(); // stop serving requests before we tear down the aggregator
     }
-    logger->logInfo("profiler shutting down: " +
-                    std::to_string(totalAllocations.load()) + " allocations, " +
-                    std::to_string(totalBytes.load()) + " bytes");
+    logger->info(
+        "profiler shutting down: {} allocations, {} bytes",
+        totalAllocations.load(), totalBytes.load());
     if (shadowInstr) {
-        logger->logInfo("shadow-stack instrumentation: " +
-                        std::to_string(shadowInstr->instrumentedCount()) + " methods instrumented, " +
-                        std::to_string(shadowInstr->skippedCount()) + " skipped");
+        logger->info(
+            "shadow-stack instrumentation: {} methods instrumented, {} skipped",
+            shadowInstr->instrumentedCount(), shadowInstr->skippedCount());
     }
     if (aggregator) {
         aggregator->countPendingAsSurvived(); // anything uncollected at exit is still live
@@ -351,7 +354,11 @@ HRESULT STDMETHODCALLTYPE Profiler::ObjectAllocated(ObjectID objectId, ClassID c
         const std::uint32_t depth = shadow::storedDepth();
         const std::uint32_t n = depth < kMaxFrames ? depth : static_cast<std::uint32_t>(kMaxFrames);
         const FunctionID* sf = shadow::frames();
-        aggregator->record(std::span<const FunctionID>(sf + (depth - n), n), objectSize, objectId, classId);
+        std::span<const FunctionID> frames;
+        if (n > 0) {
+            frames = {sf + (depth - n), n};
+        }
+        aggregator->record(frames, objectSize, objectId, classId);
     } catch (...) {
         // Swallow: a throw crossing back into the runtime would be undefined behavior.
     }
@@ -369,18 +376,37 @@ HRESULT STDMETHODCALLTYPE Profiler::AssemblyUnloadStarted(AssemblyID) { return S
 HRESULT STDMETHODCALLTYPE Profiler::AssemblyUnloadFinished(AssemblyID, HRESULT) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ModuleLoadStarted(ModuleID) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ModuleLoadFinished(ModuleID moduleId, HRESULT hrStatus) {
-    if (probes && SUCCEEDED(hrStatus))
-        probes->onModuleLoaded(moduleId);
-    if (shadowInstr && SUCCEEDED(hrStatus)) {
-        try {
-            shadowInstr->onModuleLoaded(moduleId);
-        } catch (...) {
+    if (FAILED(hrStatus)) {
+        return S_OK;
+    }
+    try {
+        // Resolve probes first. The global shadow-stack ReJIT that follows then sees and
+        // composes those plans without issuing a duplicate startup ReJIT request.
+        if (probes) {
+            probes->onModuleLoaded(moduleId);
         }
+        if (shadowInstr) {
+            shadowInstr->onModuleLoaded(moduleId);
+        }
+    } catch (const std::exception& ex) {
+        logger->error("module instrumentation failed: {}", ex.what());
+    } catch (...) {
+        logger->error("module instrumentation failed");
     }
     return S_OK;
 }
 HRESULT STDMETHODCALLTYPE Profiler::ModuleUnloadStarted(ModuleID) { return S_OK; }
-HRESULT STDMETHODCALLTYPE Profiler::ModuleUnloadFinished(ModuleID, HRESULT) { return S_OK; }
+HRESULT STDMETHODCALLTYPE Profiler::ModuleUnloadFinished(ModuleID moduleId, HRESULT hrStatus) {
+    if (SUCCEEDED(hrStatus)) {
+        if (probes) {
+            probes->onModuleUnloaded(moduleId);
+        }
+        if (shadowInstr) {
+            shadowInstr->onModuleUnloaded(moduleId);
+        }
+    }
+    return S_OK;
+}
 HRESULT STDMETHODCALLTYPE Profiler::ModuleAttachedToAssembly(ModuleID, AssemblyID) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ClassLoadStarted(ClassID) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ClassLoadFinished(ClassID, HRESULT) { return S_OK; }
@@ -392,7 +418,12 @@ HRESULT STDMETHODCALLTYPE Profiler::JITCompilationFinished(FunctionID, HRESULT, 
 HRESULT STDMETHODCALLTYPE Profiler::JITCachedFunctionSearchStarted(FunctionID, BOOL*) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::JITCachedFunctionSearchFinished(FunctionID, COR_PRF_JIT_CACHE) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::JITFunctionPitched(FunctionID) { return S_OK; }
-HRESULT STDMETHODCALLTYPE Profiler::JITInlining(FunctionID, FunctionID, BOOL*) { return S_OK; }
+HRESULT STDMETHODCALLTYPE Profiler::JITInlining(FunctionID, FunctionID, BOOL* shouldInline) {
+    if (shouldInline) {
+        *shouldInline = TRUE;
+    }
+    return S_OK;
+}
 HRESULT STDMETHODCALLTYPE Profiler::ThreadCreated(ThreadID) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ThreadDestroyed(ThreadID) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ThreadAssignedToOSThread(ThreadID, DWORD) { return S_OK; }
@@ -506,20 +537,31 @@ HRESULT STDMETHODCALLTYPE Profiler::ProfilerAttachComplete() { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ProfilerDetachSucceeded() { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ReJITCompilationStarted(FunctionID, ReJITID, BOOL) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::GetReJITParameters(ModuleID moduleId, mdMethodDef methodId, ICorProfilerFunctionControl* pFunctionControl) {
-    // Shadow-stack instrumentation wraps the whole body; when active it owns every token (a probe's
-    // prologue-only splice would be lost inside our try/finally anyway). Probes handle the rest only
-    // when shadow-stack isn't running.
-    if (shadowInstr)
-        return shadowInstr->getReJITParameters(moduleId, methodId, pFunctionControl);
-    if (probes)
-        return probes->getReJITParameters(moduleId, methodId, pFunctionControl);
+    try {
+        // There is exactly one body rewrite. Trigger lookup happens once here; the resulting
+        // stable cookie is embedded into the method alongside shadow-stack maintenance.
+        ProbePlan probe = probes ? probes->planFor(moduleId, methodId) : ProbePlan{};
+        if (shadowInstr) {
+            const bool rewritten =
+                shadowInstr->rewrite(moduleId, methodId, probe, pFunctionControl);
+            if (!rewritten && probe) {
+                logger->warn(
+                    "armed method token {} could not be instrumented; it can be armed again to retry",
+                    methodId);
+            }
+        }
+    } catch (const std::exception& ex) {
+        logger->error("ReJIT rewrite failed: {}", ex.what());
+    } catch (...) {
+        logger->error("ReJIT rewrite failed");
+    }
     return S_OK;
 }
 HRESULT STDMETHODCALLTYPE Profiler::ReJITCompilationFinished(FunctionID, ReJITID, HRESULT, BOOL) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ReJITError(ModuleID, mdMethodDef methodId, FunctionID, HRESULT hrStatus) {
-    char buf[16];
-    std::snprintf(buf, sizeof buf, "0x%08x", static_cast<unsigned>(hrStatus));
-    logger->logError("ReJIT error for token " + std::to_string(methodId) + ": " + buf);
+    logger->error(
+        "ReJIT error for token {}: 0x{:08x}",
+        methodId, static_cast<unsigned>(hrStatus));
     // Feed the circuit breaker: enough rewrite rejections latch the shadow-stack instrumenter off so
     // we stop handing the runtime IL it won't accept.
     if (shadowInstr)

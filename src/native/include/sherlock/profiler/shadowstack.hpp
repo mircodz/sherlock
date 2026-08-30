@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -11,6 +12,7 @@
 namespace Sherlock {
 
 class Logger;
+struct ProbePlan;
 
 // ---------------------------------------------------------------------------
 // Thread-local shadow stack. Maintained by IL injected into every managed method
@@ -51,12 +53,8 @@ extern "C" void Sherlock_ShadowPush(std::int64_t funcId);
 extern "C" void Sherlock_ShadowPop();
 
 // ---------------------------------------------------------------------------
-// ShadowStackInstrumenter: rewrites a method's IL at JIT time to push its FunctionID
-// on entry and pop it in a finally that wraps the whole body.
-//
-// Standalone (does NOT share code with ProbeManager). Degrades safely: any method it
-// can't confidently rewrite is left with its original IL, so we never hand the runtime
-// invalid IL.
+// The sole ReJIT method-body rewriter. It always composes shadow-stack maintenance and
+// may also inject trigger calls for a method selected by ProbeManager.
 // ---------------------------------------------------------------------------
 class ShadowStackInstrumenter {
 public:
@@ -67,13 +65,13 @@ public:
     // rewritten IL applies from first call AND is used for inlined bodies (inline-aware) —
     // letting us keep inlining ON.
     void onModuleLoaded(ModuleID moduleId);
-    // Deliver the rewritten IL for one ReJIT request. Returns S_OK regardless (a skip leaves
-    // the original IL). Resolves the FunctionID from the token to bake into the push.
-    HRESULT getReJITParameters(ModuleID moduleId, mdMethodDef methodToken,
-                               ICorProfilerFunctionControl* control);
+    // Deliver the rewritten IL for one ReJIT request. Returns false when the original IL
+    // was left untouched, allowing an armed probe to report the failed instrumentation.
+    bool rewrite(ModuleID moduleId, mdMethodDef methodToken, const ProbePlan& probe, ICorProfilerFunctionControl* control);
+    void onModuleUnloaded(ModuleID moduleId);
 
-    std::uint64_t instrumentedCount() const { return instrumented_; }
-    std::uint64_t skippedCount() const { return skipped_; }
+    std::uint64_t instrumentedCount() const { return instrumented_.load(std::memory_order_relaxed); }
+    std::uint64_t skippedCount() const { return skipped_.load(std::memory_order_relaxed); }
 
     // Circuit breaker. The runtime reports a rewrite the JIT rejected via ReJITError; the profiler routes
     // it here. After too many, we latch OFF permanently — every subsequent getReJITParameters leaves the
@@ -84,23 +82,26 @@ public:
     bool disabled() const { return disabled_; }
 
 private:
-    // Per-module standalone sig tokens for the push/pop trampolines (cached).
-    struct ModuleSigs { mdSignature push = mdSignatureNil; mdSignature pop = mdSignatureNil; };
-    ModuleSigs& ensureSigs(ModuleID moduleId);
+    struct ModuleSigs {
+        mdSignature push = mdSignatureNil;
+        mdSignature pop = mdSignatureNil;
+        mdSignature probe = mdSignatureNil;
+    };
+    ModuleSigs ensureSigs(ModuleID moduleId);
 
-    // Core IL rewrite: builds the try/finally-wrapped body with push/pop into `out`. Returns
-    // true on success (out filled), false to skip (leave original IL). Shared by both paths.
+    // Builds one try/finally-wrapped body containing shadow-stack and optional probe hooks.
     bool buildIL(FunctionID functionId, ModuleID moduleId, mdMethodDef methodToken,
-                 std::vector<BYTE>& out);
+                 const ProbePlan& probe, std::vector<BYTE>& out);
 
     // After this many ReJITErrors we latch the instrumenter off (see noteReJITError).
     static constexpr std::uint64_t kMaxReJITErrors = 10;
 
     ICorProfilerInfo10* info_;
     Logger* logger_;
+    std::mutex sigMutex_;
     std::unordered_map<std::uint64_t, ModuleSigs> sigByModule_;
-    std::uint64_t instrumented_ = 0;
-    std::uint64_t skipped_ = 0;
+    std::atomic<std::uint64_t> instrumented_{0};
+    std::atomic<std::uint64_t> skipped_{0};
     std::atomic<std::uint64_t> rejitErrors_{0};
     std::atomic<bool> disabled_{false};
 };
