@@ -3,6 +3,7 @@
 #include "sherlock/common/logger.hpp"
 #include "sherlock/control/protocol.hpp"
 
+#include <exception>
 #include <utility>
 
 #ifndef _WIN32
@@ -118,7 +119,18 @@ void ControlChannel::serve() {
             std::string_view cmd = fields[2];
             std::span<const std::string_view> args(fields.data() + 3, fields.size() - 3);
 
-            Reply reply = handler_ ? handler_(cmd, args) : Reply::error("no handler");
+            Reply reply;
+            try {
+                reply = handler_
+                    ? handler_(cmd, args)
+                    : Reply::error("no handler");
+            } catch (const std::exception& ex) {
+                if (logger_) logger_->error("control handler failed: {}", ex.what());
+                reply = Reply::error(ex.what());
+            } catch (...) {
+                if (logger_) logger_->error("control handler failed");
+                reply = Reply::error("internal profiler error");
+            }
             std::vector<std::string> res = {"RES", std::string(id), reply.ok ? "ok" : "err", reply.detail};
             std::string framed = frame(joinFields(res));
             sendAll(framed);

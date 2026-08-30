@@ -279,7 +279,7 @@ private:
             const std::uint8_t* e = p + kHeaderSize + static_cast<std::size_t>(i) * kSectionEntrySize;
             const std::uint64_t off = detail::getU64(e + 8);
             const std::uint64_t len = detail::getU64(e + 16);
-            if (off > n || len > n || off + len > n) {
+            if (off > n || len > n - off) {
                 sections_.clear();
                 return; // out-of-bounds section
             }

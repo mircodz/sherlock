@@ -128,6 +128,28 @@ public class ContainerTests : IDisposable
     }
 
     [Fact]
+    public void Rejects_UnsupportedContainerVersion()
+    {
+        byte[] bytes = (byte[])GoldenBytes.Clone();
+        bytes[4] = 2;
+        string path = Path.Combine(_tmp.Path, "future.slab");
+        File.WriteAllBytes(path, bytes);
+
+        Assert.Throws<InvalidDataException>(() => SlabFile.Open(path));
+    }
+
+    [Fact]
+    public void Rejects_OverflowingSectionBounds()
+    {
+        byte[] bytes = (byte[])GoldenBytes.Clone();
+        bytes.AsSpan(24, sizeof(ulong)).Fill(0xff); // section offset = ulong.MaxValue
+        string path = Path.Combine(_tmp.Path, "overflow.slab");
+        File.WriteAllBytes(path, bytes);
+
+        Assert.Throws<InvalidDataException>(() => SlabFile.Open(path));
+    }
+
+    [Fact]
     public void Open_MemoryMapsAFile_AndReadsZeroCopy()
     {
         var w = new ContainerWriter();

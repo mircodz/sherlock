@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using Sherlock.Core;
 using Sherlock.Core.Collection;
+using Sherlock.Core.Profiling;
 using Sherlock.Core.Store;
 
 namespace Sherlock.CLI;
@@ -17,6 +19,7 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
     public SnapshotStore Store { get; } = store;
 
     private readonly List<ProcessSupervisor> _targets = [];
+    private readonly Lock _captureGate = new();
 
     /// <summary>Processes launched with <c>run</c> during this session.</summary>
     public IReadOnlyList<ProcessSupervisor> Targets => _targets;
@@ -94,9 +97,9 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
     }
 
     /// <summary>For each probe that has signalled, dumps the firing process into its run's session, labelled with the probe.</summary>
-    public IReadOnlyList<(SnapshotEntry Entry, string Probe)> PollProbeSnapshots()
+    public IReadOnlyList<TriggeredCaptureResult> PollProbeSnapshots()
     {
-        List<(SnapshotEntry, string)>? captured = null;
+        List<TriggeredCaptureResult>? captured = null;
         foreach (ProcessSupervisor target in _targets)
         {
             IReadOnlyList<(int Pid, string Name)> signals = target.TryPollProbeSignals();
@@ -107,14 +110,21 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
 
             foreach ((int firingPid, string probe) in signals)
             {
-                // Capture the process that fired (a child under `dotnet run`, not the
-                // launcher), so a triggered snapshot carries provenance. Don't auto-load it.
-                SnapshotEntry entry = Capture(firingPid, load: false, reason: probe).Entry;
-                (captured ??= []).Add((entry, probe));
+                try
+                {
+                    // Capture the process that fired (a child under `dotnet run`, not the
+                    // launcher), so a triggered snapshot carries provenance. Don't auto-load it.
+                    SnapshotEntry entry = Capture(firingPid, load: false, reason: probe).Entry;
+                    (captured ??= []).Add(new TriggeredCaptureResult(probe, entry, null));
+                }
+                catch (Exception ex)
+                {
+                    (captured ??= []).Add(new TriggeredCaptureResult(probe, null, ex.Message));
+                }
             }
         }
 
-        return (IReadOnlyList<(SnapshotEntry, string)>?)captured ?? [];
+        return (IReadOnlyList<TriggeredCaptureResult>?)captured ?? [];
     }
 
     /// <summary>Collects a dump from a live process (sl-side WriteDump), catalogs it, and loads it.</summary>
@@ -151,39 +161,104 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
     /// </summary>
     public CaptureResult Capture(int pid, bool load = true, string? reason = null)
     {
-        ProcessSupervisor? target = _targets.FirstOrDefault(t => !t.RootExited && Owns(t, pid));
-        bool correlated = target is { HasCorrelation: true };
-
-        string? provenance = null;
-        long gcAtEmit = -1;
-        if (target is not null && (correlated || target.ProfileOutPath is not null))
+        lock (_captureGate)
         {
-            if (correlated)
+            ProcessSupervisor? target = _targets.FirstOrDefault(t => !t.RootExited && Owns(t, pid));
+            bool profiled = target?.ProfileOutPath is not null;
+            bool correlationRequested = target is { HasCorrelation: true };
+
+            string? provenance = null;
+            string? dumpPath = null;
+            long gcAtEmit = -1;
+            try
             {
-                // Unified provenance.slab (allocations + correlation) at this instant.
-                (provenance, gcAtEmit) = target.RequestCorrelationSnapshot(pid, CaptureTimeout);
+                if (profiled)
+                {
+                    if (correlationRequested)
+                    {
+                        // Unified provenance.slab (allocations + correlation) at this instant.
+                        (provenance, gcAtEmit) =
+                            target!.RequestCorrelationSnapshot(pid, CaptureTimeout);
+                    }
+                    else
+                    {
+                        provenance = target!.FlushAllocations(
+                            pid, CaptureTimeout, throwOnError: true);
+                    }
+
+                    if (provenance is null)
+                    {
+                        throw new DumpAnalysisException(
+                            $"Could not capture allocations from process {pid}; no snapshot was created.");
+                    }
+                    try
+                    {
+                        ProvenanceReader.ValidateFile(provenance);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        throw new DumpAnalysisException(
+                            $"The profiler produced invalid allocation data for process {pid}: {ex.Message}", ex);
+                    }
+                }
+
+                dumpPath = DumpCollector.Collect(pid, DumpKind.Heap);
+
+                ProvenanceState state = ProvenanceState.None;
+                if (correlationRequested)
+                {
+                    long gcAfterDump = target!.GcCount(pid, DriftTimeout);
+                    state = gcAtEmit < 0 || gcAfterDump < 0
+                        ? ProvenanceState.Unverified
+                        : gcAfterDump == gcAtEmit
+                            ? ProvenanceState.Exact
+                            : ProvenanceState.Drifted;
+                }
+
+                SnapshotEntry entry = Ingest(
+                    pid, dumpPath, load, provenance,
+                    correlated: state == ProvenanceState.Exact, reason);
+                dumpPath = null; // moved into the snapshot bundle
+                provenance = null; // copied into the bundle and removed by the store
+                return new CaptureResult(entry, state);
             }
-            else
+            catch (DumpAnalysisException ex)
             {
-                provenance = target.FlushAllocations(pid, CaptureTimeout);
+                string preserved = PreservedArtifacts(dumpPath, provenance);
+                if (preserved.Length == 0)
+                {
+                    throw;
+                }
+                throw new DumpAnalysisException(
+                    $"{ex.Message}{preserved}", ex);
+            }
+            catch (Exception ex) when (ex is not DumpAnalysisException)
+            {
+                throw new DumpAnalysisException(
+                    $"Could not create snapshot for process {pid}: {ex.Message}" +
+                    PreservedArtifacts(dumpPath, provenance), ex);
             }
         }
-
-        SnapshotEntry entry = Collect(pid, DumpKind.Heap, load: load, provenance: provenance, correlated: correlated, reason: reason);
-
-        ProvenanceState state = ProvenanceState.None;
-        if (entry.HasCorrelation)
-        {
-            // A GC between the emit and the external dump moves objects and stales the address
-            // join. We can detect it (via the GC count) but not prevent it.
-            bool drifted = gcAtEmit >= 0 && target!.GcCount(pid, DriftTimeout) is long now && now >= 0 && now != gcAtEmit;
-            state = drifted ? ProvenanceState.Drifted : ProvenanceState.Exact;
-        }
-        return new CaptureResult(entry, state);
     }
 
-    private static readonly TimeSpan CaptureTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan CaptureTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan DriftTimeout = TimeSpan.FromSeconds(3);
+
+    private static string PreservedArtifacts(string? dumpPath, string? provenancePath)
+    {
+        var paths = new List<string>(2);
+        if (dumpPath is not null && File.Exists(dumpPath))
+        {
+            paths.Add($"heap dump '{dumpPath}'");
+        }
+        if (provenancePath is not null && File.Exists(provenancePath))
+        {
+            paths.Add($"allocation data '{provenancePath}'");
+        }
+        return paths.Count == 0
+            ? string.Empty
+            : $" Preserved {string.Join(" and ", paths)}.";
+    }
 
     /// <summary>Whether a run-target's process tree contains this pid (its root or a live descendant).</summary>
     private static bool Owns(ProcessSupervisor target, int pid) =>
@@ -247,7 +322,10 @@ public enum ProvenanceState
     None,
     Exact,
     Drifted,
+    Unverified,
 }
 
 /// <summary>The outcome of <see cref="Workspace.Capture"/>: the new snapshot and its provenance state.</summary>
 public sealed record CaptureResult(SnapshotEntry Entry, ProvenanceState Provenance);
+
+public sealed record TriggeredCaptureResult(string Probe, SnapshotEntry? Entry, string? Error);

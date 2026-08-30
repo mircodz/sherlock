@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text;
 using Microsoft.Diagnostics.NETCore.Client;
 
 namespace Sherlock.Core.Collection;
@@ -101,9 +102,21 @@ public sealed class ProcessSupervisor : IDisposable
     /// </param>
     public SupervisedProcess Start(string path, IReadOnlyList<string> args, bool dumpOnCrash, string? profilerPath = null, string? captureDir = null, string? snapshotOn = null, bool correlate = false, bool collectChildren = false)
     {
+        if (profilerPath is not null && captureDir is null)
+        {
+            captureDir = Directory.CreateTempSubdirectory("sherlock-profile-").FullName;
+        }
         if (captureDir is not null)
         {
             Directory.CreateDirectory(captureDir);
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(
+                    captureDir,
+                    UnixFileMode.UserRead |
+                    UnixFileMode.UserWrite |
+                    UnixFileMode.UserExecute);
+            }
         }
         _captureDir = captureDir;
         _collectChildren = collectChildren;
@@ -153,8 +166,7 @@ public sealed class ProcessSupervisor : IDisposable
             }
 
             // sl listens on a socket; the profiler connects back for on-demand requests and events.
-            string ctlDir = captureDir ?? Path.GetTempPath();
-            _control = new ProfilerControlServer(Path.Combine(ctlDir, "control.sock"));
+            _control = new ProfilerControlServer(ControlSocketPath(captureDir));
             _control.EventReceived += (pid, fields) =>
             {
                 if (fields.Length >= 3 && fields[1] == ControlEvents.SnapshotTrigger)
@@ -292,10 +304,33 @@ public sealed class ProcessSupervisor : IDisposable
         return Path.Combine(dir, $"{stem}.{pid}{Path.GetExtension(path)}");
     }
 
-    /// <summary>Drains probe hits queued since the last call. Only while alive, a dump needs a live pid.</summary>
+    private static string ControlSocketPath(string? preferredDirectory)
+    {
+        string name = $"sl-{Guid.NewGuid():N}.sock";
+        string preferred = Path.Combine(preferredDirectory ?? Path.GetTempPath(), name);
+        if (Encoding.UTF8.GetByteCount(preferred) <= 100)
+        {
+            return preferred;
+        }
+
+        string fallback = Path.Combine(Path.GetTempPath(), name);
+        if (Encoding.UTF8.GetByteCount(fallback) <= 100)
+        {
+            return fallback;
+        }
+
+        if (!OperatingSystem.IsWindows() && Directory.Exists("/tmp"))
+        {
+            return Path.Combine("/tmp", name);
+        }
+
+        throw new DumpAnalysisException("The profiler control socket path exceeds the platform limit.");
+    }
+
+    /// <summary>Drains probe hits queued since the last call, including late events observed at exit.</summary>
     public IReadOnlyList<(int Pid, string Name)> TryPollProbeSignals()
     {
-        if (_root is null || _root.HasExited)
+        if (_root is null)
         {
             return [];
         }
@@ -316,19 +351,24 @@ public sealed class ProcessSupervisor : IDisposable
     {
         if (_control is null || !IsAlive(pid))
         {
-            return (null, -1);
+            throw new DumpAnalysisException($"Process {pid} has no live profiler control channel.");
         }
 
         (bool ok, string[] fields) = Request(pid, ControlCommands.EmitCorrelation, timeout);
         if (!ok)
         {
-            return (null, -1);
+            throw new DumpAnalysisException(
+                fields.FirstOrDefault() ?? $"Profiler in process {pid} did not produce correlation data.");
         }
 
         // The profiler reports its own (per-pid) sidecar path in the response.
         string path = fields.Length > 0 ? fields[0] : "";
         long gc = fields.Length > 1 && long.TryParse(fields[1], out long g) ? g : -1;
-        return (File.Exists(path) ? path : null, gc);
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            throw new DumpAnalysisException($"Profiler in process {pid} reported a missing correlation file.");
+        }
+        return (path, gc);
     }
 
     /// <summary>The number of GCs a process's profiler has seen, to detect drift across a snapshot.</summary>
@@ -388,16 +428,31 @@ public sealed class ProcessSupervisor : IDisposable
     /// Flushes a process's aggregate allocation profile now rather than at exit, returning its path.
     /// Best-effort on a busy target: the merge races concurrent allocations.
     /// </summary>
-    public string? FlushAllocations(int pid, TimeSpan timeout)
+    public string? FlushAllocations(int pid, TimeSpan timeout, bool throwOnError = false)
     {
         if (_control is null || !IsAlive(pid))
         {
+            if (throwOnError)
+            {
+                throw new DumpAnalysisException($"Process {pid} has no live profiler control channel.");
+            }
             return null;
         }
 
         (bool ok, string[] fields) = Request(pid, ControlCommands.FlushAllocations, timeout);
         string path = fields.Length > 0 ? fields[0] : "";
-        return ok && File.Exists(path) ? path : null;
+        if (ok && File.Exists(path))
+        {
+            return path;
+        }
+        if (throwOnError)
+        {
+            throw new DumpAnalysisException(
+                ok
+                    ? $"Profiler in process {pid} reported a missing allocation file."
+                    : fields.FirstOrDefault() ?? $"Profiler in process {pid} did not produce allocation data.");
+        }
+        return null;
     }
 
     /// <summary>The live supervised subtree (root + descendants), root first, each carrying its

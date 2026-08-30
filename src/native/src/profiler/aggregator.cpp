@@ -5,13 +5,25 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cerrno>
+#include <cstdio>
 #include <cstdint>
 #include <fstream>
 #include <limits>
+#include <memory>
+#include <system_error>
 #include <string_view>
 #include <unordered_map>
 #include <span>
 #include <vector>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace Sherlock {
 
@@ -107,9 +119,9 @@ Aggregator::Aggregator(ICorProfilerInfo10* info, Logger* logger)
 }
 
 Aggregator::~Aggregator() {
-    int n = shardCount_.load();
-    for (int i = 0; i < n && i < kMaxShards; ++i)
-        delete shards_[i];
+    for (std::atomic<Shard*>& slot : shards_) {
+        delete slot.load(std::memory_order_acquire);
+    }
 }
 
 // Reserve the per-thread shard structures up front so the hot path never pays for a map rehash
@@ -126,7 +138,7 @@ Aggregator::Shard& Aggregator::localShard() {
         shard->pending.reserve(kPendingReserve);
         int idx = shardCount_.fetch_add(1, std::memory_order_acq_rel);
         if (idx < kMaxShards)
-            shards_[idx] = shard;       // registered; GC sweep & dump will see it
+            shards_[idx].store(shard, std::memory_order_release);
         // else: too many threads, shard still works locally but isn't dumped.
         t_shard = {instanceId_, shard};
     }
@@ -139,6 +151,7 @@ void Aggregator::record(std::span<const FunctionID> frames, std::uint64_t bytes,
     std::uint64_t key = hashFrames(frames);
     key = (key ^ static_cast<std::uint64_t>(classId)) * 1099511628211ull;
     Shard& shard = localShard();
+    std::lock_guard lock(shard.mutex);
 
     auto it = shard.sites.find(key);
     Site* site;
@@ -208,6 +221,11 @@ bool Aggregator::inLargeObjectHeap(ObjectID addr) const {
 }
 
 void Aggregator::endGc() {
+    std::unique_lock correlationLock(correlationMutex_, std::defer_lock);
+    if (correlate_) {
+        correlationLock.lock();
+    }
+
     // Sort the range vectors (required by inSortedRanges / ForwardCursor). The runtime tends to
     // report these already in address order, so guard each sort behind an is_sorted check.
     if (!std::is_sorted(survivorRanges_.begin(), survivorRanges_.end()))
@@ -227,11 +245,8 @@ void Aggregator::endGc() {
     // from `pending` at the first ephemeral GC.
     if (correlate_)
         newSurvivors_.clear();
-    int n = shardCount_.load(std::memory_order_acquire);
-    for (int i = 0; i < n && i < kMaxShards; ++i) {
-        Shard* shard = shards_[i];
-        if (shard == nullptr)
-            continue;
+    for (Shard* shard : registeredShards()) {
+        std::lock_guard shardLock(shard->mutex);
         for (const Pending& p : shard->pending) {
             bool aliveUnexamined = inLargeObjectHeap(p.addr) && !condemned(p.addr);
             if (survived(p.addr) || aliveUnexamined) {
@@ -370,14 +385,16 @@ void Aggregator::endGc() {
 }
 
 void Aggregator::countPendingAsSurvived() {
+    std::unique_lock correlationLock(correlationMutex_, std::defer_lock);
+    if (correlate_) {
+        correlationLock.lock();
+    }
+
     // At shutdown, anything still pending was never collected, i.e. still alive. Append the newly
     // discovered live objects and re-sort once (cold, one-shot path).
     std::size_t appended = 0;
-    int n = shardCount_.load(std::memory_order_acquire);
-    for (int i = 0; i < n && i < kMaxShards; ++i) {
-        Shard* shard = shards_[i];
-        if (shard == nullptr)
-            continue;
+    for (Shard* shard : registeredShards()) {
+        std::lock_guard shardLock(shard->mutex);
         for (const Pending& p : shard->pending) {
             p.site->survived.count += 1;
             p.site->survived.bytes += p.bytes;
@@ -399,13 +416,22 @@ void Aggregator::countPendingAsSurvived() {
     }
 }
 
-std::unordered_map<std::uint64_t, Aggregator::Site> Aggregator::mergeShards() {
+std::vector<Aggregator::Shard*> Aggregator::registeredShards() const {
+    std::vector<Shard*> result;
+    const int count = std::min(shardCount_.load(std::memory_order_acquire), kMaxShards);
+    result.reserve(static_cast<std::size_t>(count));
+    for (int i = 0; i < count; ++i) {
+        if (Shard* shard = shards_[i].load(std::memory_order_acquire)) {
+            result.push_back(shard);
+        }
+    }
+    return result;
+}
+
+std::unordered_map<std::uint64_t, Aggregator::Site> Aggregator::mergeShards(
+    std::span<Shard* const> shards) {
     std::unordered_map<std::uint64_t, Site> merged;
-    int n = shardCount_.load(std::memory_order_acquire);
-    for (int i = 0; i < n && i < kMaxShards; ++i) {
-        Shard* shard = shards_[i];
-        if (shard == nullptr)
-            continue;
+    for (Shard* shard : shards) {
         for (auto& [key, site] : shard->sites) {
             auto it = merged.find(key);
             if (it == merged.end()) {
@@ -419,6 +445,30 @@ std::unordered_map<std::uint64_t, Aggregator::Site> Aggregator::mergeShards() {
         }
     }
     return merged;
+}
+
+void Aggregator::captureState(
+    std::unordered_map<std::uint64_t, Site>& sites,
+    std::vector<LiveEntry>* live) {
+    std::lock_guard snapshotLock(snapshotMutex_);
+    std::vector<Shard*> shards = registeredShards();
+
+    // Correlation updates acquire this lock before shard locks; preserve that order.
+    std::unique_lock correlationLock(correlationMutex_, std::defer_lock);
+    if (live != nullptr) {
+        correlationLock.lock();
+    }
+
+    std::vector<std::unique_lock<std::mutex>> shardLocks;
+    shardLocks.reserve(shards.size());
+    for (Shard* shard : shards) {
+        shardLocks.emplace_back(shard->mutex);
+    }
+
+    sites = mergeShards(shards);
+    if (live != nullptr) {
+        *live = live_;
+    }
 }
 
 std::uint32_t Aggregator::internSiteStack(storage::ProvenanceWriter& pw, const Site& site) {
@@ -439,65 +489,135 @@ void Aggregator::writeProfile(storage::ProvenanceWriter& pw, const std::unordere
 
 // A snapshot's unified provenance.slab: the allocation profile plus per-object correlation over one
 // shared stack table. sl joins the correlation to a heap dump by address.
-void Aggregator::emitCorrelation(const std::string& path) {
-    storage::ProvenanceWriter pw;
+bool Aggregator::emitCorrelation(const std::string& path) noexcept {
+    try {
+        std::unordered_map<std::uint64_t, Site> merged;
+        std::vector<LiveEntry> live;
+        captureState(merged, &live);
 
-    // Best-effort on a live process: the merge races concurrent record().
-    std::unordered_map<std::uint64_t, Site> merged = mergeShards();
-    writeProfile(pw, merged);
+        storage::ProvenanceWriter pw;
+        writeProfile(pw, merged);
 
-    // Each live object's address -> its allocation stack id (intern each site once). live_ is kept
-    // sorted by address, so this emits an already-sorted object column: the .slab join to the heap
-    // dump is then a linear merge-join on address, no read-time sort.
-    std::unordered_map<const Site*, std::uint32_t> siteStack;
-    for (const LiveEntry& lv : live_) {
-        auto [it, inserted] = siteStack.try_emplace(lv.site, 0u);
-        if (inserted) {
-            it->second = internSiteStack(pw, *lv.site);
+        // Site frames and class ids are immutable after insertion, so copied live entries can safely
+        // resolve them after the short shard-locking snapshot phase.
+        std::unordered_map<const Site*, std::uint32_t> siteStack;
+        for (const LiveEntry& lv : live) {
+            auto [it, inserted] = siteStack.try_emplace(lv.site, 0u);
+            if (inserted) {
+                it->second = internSiteStack(pw, *lv.site);
+            }
+            pw.addObject(static_cast<std::uint64_t>(lv.addr), it->second);
         }
-        pw.addObject(static_cast<std::uint64_t>(lv.addr), it->second);
-    }
 
-    if (!writeSlab(path, pw)) {
-        return;
+        if (!writeSlab(path, pw)) {
+            return false;
+        }
+        if (logger_) {
+            logger_->info("wrote provenance ({} stacks, {} live objects) to {}", merged.size(), live.size(), path);
+        }
+        return true;
+    } catch (const std::exception& ex) {
+        if (logger_) {
+            logger_->error("could not build provenance snapshot: {}", ex.what());
+        }
+    } catch (...) {
+        if (logger_) {
+            logger_->error("could not build provenance snapshot");
+        }
     }
-    if (logger_)
-        logger_->info(
-            "wrote provenance ({} stacks, {} live objects) to {}",
-            merged.size(), live_.size(), path);
+    return false;
 }
 
 // Exit-time (or live-flush) allocation aggregate: allocations only, no correlation.
-void Aggregator::dump(const std::string& path) {
-    std::unordered_map<std::uint64_t, Site> merged = mergeShards();
-    storage::ProvenanceWriter pw;
-    writeProfile(pw, merged);
+bool Aggregator::dump(const std::string& path) noexcept {
+    try {
+        std::unordered_map<std::uint64_t, Site> merged;
+        captureState(merged, nullptr);
+        storage::ProvenanceWriter pw;
+        writeProfile(pw, merged);
 
-    if (!writeSlab(path, pw)) {
-        return;
+        if (!writeSlab(path, pw)) {
+            return false;
+        }
+        if (logger_) {
+            logger_->info("wrote {} stacks to {}", merged.size(), path);
+        }
+        return true;
+    } catch (const std::exception& ex) {
+        if (logger_) {
+            logger_->error("could not build allocation snapshot: {}", ex.what());
+        }
+    } catch (...) {
+        if (logger_) {
+            logger_->error("could not build allocation snapshot");
+        }
     }
-    if (logger_)
-        logger_->info("wrote {} stacks to {}", merged.size(), path);
+    return false;
 }
 
 bool Aggregator::writeSlab(const std::string& path, storage::ProvenanceWriter& pw) {
     storage::ContainerWriter cw;
     pw.writeTo(cw);
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    if (!out) {
+    const std::string temp =
+        path + ".tmp-" + std::to_string(instanceId_) + "-" +
+        std::to_string(writeSequence_.fetch_add(1, std::memory_order_relaxed));
+
+#ifndef _WIN32
+    const int fd = ::open(
+        temp.c_str(), O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
+    if (fd < 0) {
+        if (logger_) {
+            logger_->error("could not create private profile output: {}", path);
+        }
+        return false;
+    }
+    ::close(fd);
+#endif
+
+    std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+        std::remove(temp.c_str());
         if (logger_)
             logger_->error("could not open profile output: {}", path);
         return false;
     }
-    // Stream straight to the file, never materialize the whole container in RAM (the correlation
-    // column alone can be gigabytes on a large heap).
-    return cw.writeTo(out);
+
+    bool written = cw.writeTo(out);
+    out.flush();
+    written = written && out.good();
+    out.close();
+    written = written && !out.fail();
+    if (!written) {
+        std::remove(temp.c_str());
+        if (logger_) {
+            logger_->error("could not write profile output: {}", path);
+        }
+        return false;
+    }
+
+#ifdef _WIN32
+    const bool published = MoveFileExA(
+        temp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+#else
+    const bool published = std::rename(temp.c_str(), path.c_str()) == 0;
+#endif
+    if (!published) {
+        std::remove(temp.c_str());
+        if (logger_) {
+            logger_->error("could not publish profile output: {}", path);
+        }
+        return false;
+    }
+    return true;
 }
 
 const std::string& Aggregator::resolveMethodName(FunctionID method) {
-    auto cached = nameCache_.find(method);
-    if (cached != nameCache_.end())
-        return cached->second;
+    {
+        std::lock_guard lock(nameCacheMutex_);
+        auto cached = nameCache_.find(method);
+        if (cached != nameCache_.end())
+            return cached->second;
+    }
 
     std::string name = "<unknown>";
     if (method != 0 && info_ != nullptr) {
@@ -525,16 +645,31 @@ const std::string& Aggregator::resolveMethodName(FunctionID method) {
         }
     }
 
+    std::lock_guard lock(nameCacheMutex_);
     return nameCache_.emplace(method, std::move(name)).first->second;
 }
 
 const std::string& Aggregator::resolveTypeName(ClassID classId) {
-    auto cached = typeNameCache_.find(classId);
-    if (cached != typeNameCache_.end())
-        return cached->second;
+    {
+        std::lock_guard lock(nameCacheMutex_);
+        auto cached = typeNameCache_.find(classId);
+        if (cached != typeNameCache_.end())
+            return cached->second;
+    }
 
     std::string name = resolveTypeNameUncached(classId);
+    std::lock_guard lock(nameCacheMutex_);
     return typeNameCache_.emplace(classId, std::move(name)).first->second;
+}
+
+std::vector<Aggregator::LiveObjectInfo> Aggregator::inspectLiveObjects() const {
+    std::lock_guard lock(correlationMutex_);
+    std::vector<LiveObjectInfo> out;
+    out.reserve(live_.size());
+    for (const LiveEntry& entry : live_) {
+        out.push_back({static_cast<std::uint64_t>(entry.addr), entry.id});
+    }
+    return out;
 }
 
 std::string Aggregator::resolveTypeNameUncached(ClassID classId) {

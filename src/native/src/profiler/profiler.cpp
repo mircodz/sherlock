@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
+#include <format>
 #include <span>
 #include <string>
 #include <vector>
@@ -36,6 +37,16 @@ std::string withPid(const std::string& path) {
     std::size_t dot = path.find_last_of('.');
     if (dot == std::string::npos || (slash != std::string::npos && dot < slash)) {
         return path + suffix; // no extension
+    }
+    return path.substr(0, dot) + suffix + path.substr(dot);
+}
+
+std::string withCaptureId(const std::string& path, std::uint64_t id) {
+    const std::string suffix = ".capture-" + std::to_string(id);
+    const std::size_t slash = path.find_last_of("/\\");
+    const std::size_t dot = path.find_last_of('.');
+    if (dot == std::string::npos || (slash != std::string::npos && dot < slash)) {
+        return path + suffix;
     }
     return path.substr(0, dot) + suffix + path.substr(dot);
 }
@@ -163,7 +174,15 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
             if (triggersEnabled) features.push_back("snapshot-triggers");
             control->start("0.1", features,
                            [this](std::string_view cmd, std::span<const std::string_view> args) {
-                               return handleControl(cmd, args);
+                               try {
+                                   return handleControl(cmd, args);
+                               } catch (const std::exception& ex) {
+                                   logger->error("control request failed: {}", ex.what());
+                                   return control::Reply::error(ex.what());
+                               } catch (...) {
+                                   logger->error("control request failed");
+                                   return control::Reply::error("internal profiler error");
+                               }
                            });
             // `call:` currently arms entry only. The embedded probe also supports exit events so
             // a later span capture can use the same composed rewrite.
@@ -199,13 +218,21 @@ control::Reply Profiler::handleControl(std::string_view cmd, std::span<const std
         if (!correlate || !aggregator) {
             return control::Reply::error("correlation not enabled for this run");
         }
-        if (corProfilerInfo != nullptr) {
-            corProfilerInfo->ForceGC(); // settle addresses before emitting
+        if (corProfilerInfo == nullptr) {
+            return control::Reply::error("no profiler info");
         }
-        aggregator->emitCorrelation(correlationPath);
+        HRESULT gc = corProfilerInfo->ForceGC(); // settle addresses before emitting
+        if (FAILED(gc)) {
+            return control::Reply::error(std::format("ForceGC failed: 0x{:08x}", static_cast<unsigned>(gc)));
+        }
+        const std::string path = withCaptureId(
+            correlationPath, snapshotSequence.fetch_add(1, std::memory_order_relaxed));
+        if (!aggregator->emitCorrelation(path)) {
+            return control::Reply::error("could not write correlation snapshot");
+        }
         // Return the GC count at emit; sl re-checks after the dump to detect drift (a GC between emit
         // and dump would move objects and invalidate the address join).
-        return control::Reply::success(correlationPath + "\t" + std::to_string(gcCount.load()));
+        return control::Reply::success(path + "\t" + std::to_string(gcCount.load()));
     }
     if (cmd == control::commands::kGcCount) {
         return control::Reply::success(std::to_string(gcCount.load()));
@@ -242,8 +269,11 @@ control::Reply Profiler::handleControl(std::string_view cmd, std::span<const std
         if (!aggregator) {
             return control::Reply::error("no aggregator");
         }
-        aggregator->dump(outputPath);
-        return control::Reply::success(outputPath);
+        const std::string path = withCaptureId(
+            outputPath, snapshotSequence.fetch_add(1, std::memory_order_relaxed));
+        return aggregator->dump(path)
+            ? control::Reply::success(path)
+            : control::Reply::error("could not write allocation snapshot");
     }
     if (cmd == control::commands::kArmTrigger) {
         if (args.empty()) {
@@ -281,9 +311,15 @@ bool Profiler::armTrigger(const std::string& spec, bool live) {
     return false; // unknown kind
 }
 
-void Profiler::fireTrigger(const std::string& display) {
-    if (control) {
-        control->sendEvent({std::string(control::events::kSnapshotTrigger), display});
+void Profiler::fireTrigger(const std::string& display) noexcept {
+    try {
+        if (control) {
+            control->sendEvent({std::string(control::events::kSnapshotTrigger), display});
+        }
+    } catch (const std::exception& ex) {
+        logger->error("could not send snapshot trigger: {}", ex.what());
+    } catch (...) {
+        logger->error("could not send snapshot trigger");
     }
 }
 
@@ -305,7 +341,9 @@ HRESULT STDMETHODCALLTYPE Profiler::Shutdown() {
     }
     if (aggregator) {
         aggregator->countPendingAsSurvived(); // anything uncollected at exit is still live
-        aggregator->dump(outputPath);
+        if (!aggregator->dump(outputPath)) {
+            logger->error("could not write final allocation profile");
+        }
     }
     return S_OK;
 }

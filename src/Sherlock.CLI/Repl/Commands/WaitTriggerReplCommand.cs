@@ -38,13 +38,22 @@ public sealed class WaitTriggerReplCommand : IReplCommand
         {
             while (DateTime.UtcNow < deadline)
             {
-                IReadOnlyList<(SnapshotEntry Entry, string Probe)> caught = context.Workspace.PollProbeSnapshots();
+                IReadOnlyList<TriggeredCaptureResult> caught = context.Workspace.PollProbeSnapshots();
                 if (caught.Count > 0)
                 {
-                    foreach ((SnapshotEntry entry, string probe) in caught)
+                    foreach (TriggeredCaptureResult capture in caught)
                     {
-                        context.Console.MarkupLineInterpolated(
-                            $"[green]●[/] [bold]{probe}[/] [green]fired — heap snapshot[/] [bold]{entry.Id}[/] [grey]captured.[/]");
+                        if (capture.Entry is { } entry)
+                        {
+                            string contents = entry.HasAllocations ? "heap + allocations" : "heap only";
+                            context.Console.MarkupLineInterpolated(
+                                $"[green]●[/] [bold]{capture.Probe}[/] [green]fired — snapshot[/] [bold]{entry.Id}[/] [grey]captured ({contents}).[/]");
+                        }
+                        else
+                        {
+                            context.Console.MarkupLineInterpolated(
+                                $"[red]●[/] [bold]{capture.Probe}[/] [red]fired but capture failed:[/] {capture.Error}");
+                        }
                     }
                     return;
                 }

@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
 using Sherlock.Core.Profiling;
 using Sherlock.Core.Storage;
@@ -100,5 +101,36 @@ public class ProvenanceTests : IDisposable
         var r = new ProvenanceReader(slab);
         Assert.Equal(0L, r.CorrelationCount);
         Assert.Null(r.StackFor(0x1000));
+    }
+
+    [Fact]
+    public void RejectsMissingStackTable()
+    {
+        var writer = new ContainerWriter();
+        writer.AddRecords(SectionType.Allocations, ProfileFormat.Version, new AllocationRecord[1]);
+        using SlabFile slab = _tmp.WriteSlab(writer);
+
+        Assert.Throws<InvalidDataException>(() => new ProvenanceReader(slab));
+    }
+
+    [Fact]
+    public void RejectsUnknownAllocationStack()
+    {
+        var writer = new ProvenanceWriter();
+        writer.AddAllocation(stackId: 42, allocBytes: 100, allocCount: 1, survivedBytes: 0, survivedCount: 0);
+        using SlabFile slab = Write(writer);
+
+        Assert.Throws<InvalidDataException>(() => new ProvenanceReader(slab));
+    }
+
+    [Fact]
+    public void RejectsUnknownCorrelationStack()
+    {
+        var writer = new ProvenanceWriter();
+        writer.InternStack(["A"]);
+        writer.AddObject(0x1000, stackId: 42);
+        using SlabFile slab = Write(writer);
+
+        Assert.Throws<InvalidDataException>(() => new ProvenanceReader(slab));
     }
 }

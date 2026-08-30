@@ -12,10 +12,19 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <span>
+#include <string>
+#include <thread>
 #include <utility>
 #include <vector>
+
+#include "sherlock/storage/container.hpp"
+#include "sherlock/storage/profile.hpp"
 
 using namespace Sherlock;
 
@@ -35,7 +44,9 @@ void alloc(Aggregator& a, std::uint64_t addr, std::uint64_t bytes = 24) {
 
 std::vector<std::uint64_t> liveAddrs(const Aggregator& a) {
     std::vector<std::uint64_t> v;
-    for (auto& [addr, id] : a.liveSetForTest()) v.push_back(addr);
+    for (const Aggregator::LiveObjectInfo& object : a.inspectLiveObjects()) {
+        v.push_back(object.address);
+    }
     return v;
 }
 
@@ -44,6 +55,18 @@ std::vector<std::uint64_t> liveAddrs(const Aggregator& a) {
 struct Agg : Aggregator {
     Agg() : Aggregator(nullptr, nullptr) { enableCorrelation(); }
 };
+
+std::filesystem::path tempSlab(std::string_view name) {
+    static std::atomic<std::uint64_t> sequence{1};
+    return std::filesystem::temp_directory_path() /
+           ("sherlock-" + std::string(name) + "-" +
+            std::to_string(sequence.fetch_add(1, std::memory_order_relaxed)) + ".slab");
+}
+
+std::string readAll(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+}
 
 } // namespace
 
@@ -224,19 +247,19 @@ TEST(AggregatorLifecycle, ObjectIdIsStableAcrossMoves) {
     a.noteCondemnedRange(0x1000, 0x8);
     a.noteSurvivorRange(0x1000, 0x8);
     a.endGc();
-    auto before = a.liveSetForTest();
+    auto before = a.inspectLiveObjects();
     ASSERT_EQ(before.size(), 1u);
-    std::uint64_t id = before[0].second;
+    std::uint64_t id = before[0].id;
 
     // Move it; the id must follow the object to its new address.
     a.beginGc();
     a.noteCondemnedRange(0x1000, 0x8);
     a.noteMove(0x1000, 0x7000, 0x8);
     a.endGc();
-    auto after = a.liveSetForTest();
+    auto after = a.inspectLiveObjects();
     ASSERT_EQ(after.size(), 1u);
-    EXPECT_EQ(after[0].first, 0x7000u);
-    EXPECT_EQ(after[0].second, id) << "object id must be stable across a move";
+    EXPECT_EQ(after[0].address, 0x7000u);
+    EXPECT_EQ(after[0].id, id) << "object id must be stable across a move";
 }
 
 // --- a longer randomized-ish sequence: many GCs, growth, no loss/dup, always sorted ---------------
@@ -259,6 +282,75 @@ TEST(AggregatorLifecycle, ManyGCsKeepLiveSetSortedAndConsistent) {
         ASSERT_EQ(std::adjacent_find(live.begin(), live.end()), live.end()) << "dup after GC " << gc;
     }
     // 20 GCs * 4 survivors each = 80 live objects retained.
-    EXPECT_EQ(a.liveSetForTest().size(), 80u);
+    EXPECT_EQ(a.inspectLiveObjects().size(), 80u);
     (void)base;
+}
+
+TEST(AggregatorSnapshot, RepeatedProfilesAreIndependentAndParseable) {
+    Aggregator aggregator(nullptr, nullptr);
+    const std::filesystem::path first = tempSlab("profile-first");
+    const std::filesystem::path second = tempSlab("profile-second");
+
+    alloc(aggregator, 0x1000);
+    ASSERT_TRUE(aggregator.dump(first.string()));
+    alloc(aggregator, 0x2000);
+    ASSERT_TRUE(aggregator.dump(second.string()));
+
+    const std::string firstBytes = readAll(first);
+    const std::string secondBytes = readAll(second);
+    storage::ContainerReader firstContainer(std::as_bytes(std::span(firstBytes)));
+    storage::ContainerReader secondContainer(std::as_bytes(std::span(secondBytes)));
+    ASSERT_TRUE(firstContainer.valid());
+    ASSERT_TRUE(secondContainer.valid());
+
+    storage::ProvenanceReader firstProfile(firstContainer);
+    storage::ProvenanceReader secondProfile(secondContainer);
+    ASSERT_EQ(firstProfile.allocations().size(), 1u);
+    ASSERT_EQ(secondProfile.allocations().size(), 1u);
+    EXPECT_EQ(firstProfile.allocations()[0].allocCount, 1u);
+    EXPECT_EQ(secondProfile.allocations()[0].allocCount, 2u);
+
+    std::filesystem::remove(first);
+    std::filesystem::remove(second);
+}
+
+TEST(AggregatorSnapshot, DumpIsSafeWhileAnotherThreadRecords) {
+    Aggregator aggregator(nullptr, nullptr);
+    std::atomic<std::uint64_t> recorded{0};
+    std::jthread writer([&](std::stop_token stop) {
+        while (!stop.stop_requested()) {
+            std::uint64_t n = recorded.fetch_add(1, std::memory_order_relaxed);
+            alloc(aggregator, 0x1000 + n * 0x20);
+        }
+    });
+
+    while (recorded.load(std::memory_order_relaxed) < 100) {
+        std::this_thread::yield();
+    }
+
+    for (int i = 0; i < 8; ++i) {
+        const std::filesystem::path path = tempSlab("concurrent");
+        ASSERT_TRUE(aggregator.dump(path.string()));
+        const std::string bytes = readAll(path);
+        storage::ContainerReader container(std::as_bytes(std::span(bytes)));
+        ASSERT_TRUE(container.valid());
+        storage::ProvenanceReader profile(container);
+        ASSERT_EQ(profile.allocations().size(), 1u);
+        EXPECT_GT(profile.allocations()[0].allocCount, 0u);
+        std::filesystem::remove(path);
+    }
+
+    writer.request_stop();
+    writer.join();
+}
+
+TEST(AggregatorSnapshot, WriteFailureIsReportedAndLeavesNoTemporaryFile) {
+    Aggregator aggregator(nullptr, nullptr);
+    alloc(aggregator, 0x1000);
+    const std::filesystem::path missing =
+        std::filesystem::path(tempSlab("missing-parent").string() + ".missing") /
+        "profile.slab";
+
+    EXPECT_FALSE(aggregator.dump(missing.string()));
+    EXPECT_FALSE(std::filesystem::exists(missing));
 }

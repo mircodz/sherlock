@@ -133,6 +133,7 @@ private:
     std::atomic<std::uint64_t> totalBytes{0};
 
     std::string outputPath;
+    std::atomic<std::uint64_t> snapshotSequence{1};
     std::uint64_t sampleInterval = 0; // bytes between samples; 0 = sample every allocation
     std::unique_ptr<Logger> logger;
     std::unique_ptr<Aggregator> aggregator;
@@ -160,7 +161,7 @@ private:
     // Parse & arm one "kind:arg" snapshot trigger (call/alloc/gc/throw). Returns false
     // for an unknown kind or (live call) an unresolved method. `live` = from the REPL.
     bool armTrigger(const std::string& spec, bool live);
-    void fireTrigger(const std::string& display); // emit a snapshot-trigger event to sl
+    void fireTrigger(const std::string& display) noexcept; // emit a snapshot-trigger event to sl
 };
 
 } // namespace Sherlock

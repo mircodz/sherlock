@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <mutex>
@@ -23,14 +24,19 @@ class ProvenanceWriter;
 /// Aggregates allocations by full call stack (the allocating method plus its callers), in-process,
 /// and tracks how many sampled allocations survive their first GC (a cheap proxy for "escapes gen-0").
 ///
-/// The hot path is lock-free: each thread folds allocations into its own shard, keyed by a 64-bit
-/// hash of the captured stack. Name resolution (the expensive metadata lookups) is deferred to dump
-/// time and memoized, so a given FunctionID is symbolized at most once.
+/// Each thread folds allocations into its own shard, keyed by a 64-bit hash of the captured stack.
+/// The shard lock is uncontended during normal execution and lets a control-thread snapshot copy a
+/// coherent view without racing the target's allocation callbacks.
 class Aggregator {
 public:
     struct Stats {
         std::uint64_t count = 0;
         std::uint64_t bytes = 0;
+    };
+
+    struct LiveObjectInfo {
+        std::uint64_t address;
+        std::uint64_t id;
     };
 
     // A unique (allocation stack, allocated type) pair and what it has allocated. The same call site
@@ -53,6 +59,7 @@ public:
     // Sites keyed by stack hash; a 64-bit FNV-1a collision across distinct stacks would only merge
     // their counts.
     struct Shard {
+        std::mutex mutex;
         std::unordered_map<std::uint64_t, Site> sites;
         std::vector<Pending> pending;   // sampled objects not yet judged by a GC
     };
@@ -62,7 +69,7 @@ public:
 
     /// Hot path. `frames` is the captured stack (root -> leaf), a view over the caller's shadow
     /// stack storage (no allocation); `addr` is the object's address; `classId` is its type (stored,
-    /// resolved to a name only at dump time). Lock-free: touches only the calling thread's shard.
+    /// resolved to a name only at dump time). Touches only the calling thread's shard.
     void record(std::span<const FunctionID> frames, std::uint64_t bytes, ObjectID addr, ClassID classId);
 
     // --- GC integration. All called on the GC thread with the world stopped. ---
@@ -77,11 +84,10 @@ public:
     // --- Correlation (opt-in via SHERLOCK_CORRELATE). Tracks live objects across GC
     // moves so a snapshot can be joined to allocation stacks by current address. ---
     void enableCorrelation() { correlate_ = true; }
-    void emitCorrelation(const std::string& path);            // live address -> allocation stack
+    [[nodiscard]] bool emitCorrelation(const std::string& path) noexcept;
 
-    /// Merges every thread's shard, resolves frame names (cached), and writes a
-    /// folded-stack file sorted by allocated bytes. Must not run concurrently with record().
-    void dump(const std::string& path);
+    /// Copies every thread's shard, resolves frame names, and atomically publishes a profile.
+    [[nodiscard]] bool dump(const std::string& path) noexcept;
 
     /// Resolves a FunctionID to "Type.Method" (cached). Public so the trace
     /// collector can reuse it as a symbolizer.
@@ -89,14 +95,8 @@ public:
 
     /// Resolves a ClassID to "Ns.Type" (cached). Used by allocation/exception triggers.
     const std::string& resolveTypeName(ClassID classId);
-    /// address). Lets unit tests drive record()/GC callbacks and assert the live set without going
-    /// through emitCorrelation's file I/O.
-    std::vector<std::pair<std::uint64_t, std::uint64_t>> liveSetForTest() const {
-        std::vector<std::pair<std::uint64_t, std::uint64_t>> out;
-        out.reserve(live_.size());
-        for (const LiveEntry& e : live_) out.emplace_back(static_cast<std::uint64_t>(e.addr), e.id);
-        return out;
-    }
+    /// Returns a stable copy of the currently tracked correlated objects for diagnostics.
+    std::vector<LiveObjectInfo> inspectLiveObjects() const;
 
 private:
     static constexpr int kMaxShards = 1024;
@@ -122,9 +122,12 @@ private:
     /// Serializes a built provenance writer to a .slab file. Returns false on I/O error.
     bool writeSlab(const std::string& path, storage::ProvenanceWriter& pw);
 
-    /// Merges every thread's shard into one map keyed by stack hash. Best-effort on a live
-    /// process (races concurrent record()); exact at shutdown when allocations have stopped.
-    std::unordered_map<std::uint64_t, Site> mergeShards();
+    std::vector<Shard*> registeredShards() const;
+    std::unordered_map<std::uint64_t, Site> mergeShards(
+        std::span<Shard* const> shards);
+    void captureState(
+        std::unordered_map<std::uint64_t, Site>& sites,
+        std::vector<LiveEntry>* live);
 
     /// Interns a site's stack (resolving frames root->leaf) into `pw` and returns its stackId.
     std::uint32_t internSiteStack(storage::ProvenanceWriter& pw, const Site& site);
@@ -139,11 +142,10 @@ private:
     // (or a stack address) with a destroyed one never reuses its freed shard.
     std::uint64_t instanceId_;
 
-    // Lock-free shard registry: a thread claims a slot once via fetch_add. Iterated
-    // by the GC thread without locking (the world is stopped, so no races), with a
-    // null check in case a just-incremented slot isn't populated yet.
+    // A thread claims one registry slot. Atomic pointers make publication safe for the control
+    // thread even when a new allocating thread appears while a snapshot is starting.
     std::atomic<int> shardCount_{0};
-    Shard* shards_[kMaxShards] = {};
+    std::array<std::atomic<Shard*>, kMaxShards> shards_{};
 
     // Survivor spans [start, end) by old address, gathered during one GC. GC thread only.
     std::vector<intervals::AddrRange> survivorRanges_;
@@ -183,8 +185,12 @@ private:
     std::vector<std::size_t> runStarts_;           // start offsets of the monotone runs in windowScratch_
     std::vector<LiveEntry> newSurvivors_;          // this GC's freshly-surviving sampled objects
 
-    std::unordered_map<FunctionID, std::string> nameCache_;      // dump-time only
-    std::unordered_map<ClassID, std::string> typeNameCache_;     // for triggers
+    mutable std::mutex correlationMutex_;
+    std::mutex snapshotMutex_;
+    std::mutex nameCacheMutex_;
+    std::atomic<std::uint64_t> writeSequence_{1};
+    std::unordered_map<FunctionID, std::string> nameCache_;
+    std::unordered_map<ClassID, std::string> typeNameCache_;
 };
 
 } // namespace Sherlock

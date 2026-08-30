@@ -77,16 +77,25 @@ public sealed class SnapshotReplCommand : IReplCommand
             return;
         }
 
+        string contents = result.Entry.HasAllocations
+            ? result.Entry.HasCorrelation ? "heap + allocations + correlation" : "heap + allocations"
+            : "heap only";
+        string sizes = result.Entry.HasAllocations
+            ? $"{ByteSize.Format(result.Entry.SizeBytes)} heap + {ByteSize.Format(result.Entry.ProvenanceSizeBytes)} allocations"
+            : ByteSize.Format(result.Entry.SizeBytes);
         context.Console.MarkupLineInterpolated(
-            $"[green]saved & loaded[/] [bold]{result.Entry.Id}[/] [grey]({ByteSize.Format(result.Entry.SizeBytes)})[/]");
+            $"[green]saved & loaded[/] [bold]{result.Entry.Id}[/] [grey]({contents}, {sizes})[/]");
 
         switch (result.Provenance)
         {
             case ProvenanceState.Drifted:
-                context.Console.MarkupLine("[yellow]⚠ a GC ran during capture[/] [grey]— some allocation provenance may be stale; re-snapshot for exact results.[/]");
+                context.Console.MarkupLine("[yellow]⚠ a GC ran during capture[/] [grey]— allocation totals are available, but per-object provenance was disabled.[/]");
                 break;
             case ProvenanceState.Exact:
                 context.Console.MarkupLine("[grey]Allocation provenance captured (exact); use[/] whoalloc <address> [grey]to see where an object was allocated.[/]");
+                break;
+            case ProvenanceState.Unverified:
+                context.Console.MarkupLine("[yellow]⚠ correlation could not be verified[/] [grey]— allocation totals are available, but per-object provenance was disabled.[/]");
                 break;
         }
     }

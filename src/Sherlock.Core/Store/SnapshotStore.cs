@@ -4,6 +4,8 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Sherlock.Core.Profiling;
+using Sherlock.Core.Storage;
 
 namespace Sherlock.Core.Store;
 
@@ -23,6 +25,7 @@ public sealed class SnapshotStore
     };
 
     private readonly string _catalogPath;
+    private readonly object _gate = new();
     private Catalog _catalog;
 
     public SnapshotStore(string root)
@@ -30,6 +33,7 @@ public sealed class SnapshotStore
         Root = root;
         _catalogPath = Path.Combine(root, "catalog.json");
         Directory.CreateDirectory(root);
+        SecureDirectory(root);
         _catalog = Load(_catalogPath);
     }
 
@@ -45,25 +49,43 @@ public sealed class SnapshotStore
         return new SnapshotStore(root);
     }
 
-    public IReadOnlyList<Session> Sessions => _catalog.Sessions.AsReadOnly();
+    public IReadOnlyList<Session> Sessions
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _catalog.Sessions.ToArray();
+            }
+        }
+    }
 
-    public Session? GetSession(string id) =>
-        _catalog.Sessions.FirstOrDefault(s => string.Equals(s.Id, id, StringComparison.OrdinalIgnoreCase));
+    public Session? GetSession(string id)
+    {
+        lock (_gate)
+        {
+            return _catalog.Sessions.FirstOrDefault(
+                s => string.Equals(s.Id, id, StringComparison.OrdinalIgnoreCase));
+        }
+    }
 
     /// <summary>Finds a snapshot (and its owning session) by snapshot id or label.</summary>
     public (Session Session, SnapshotEntry Snapshot)? FindSnapshot(string idOrLabel)
     {
-        foreach (Session session in _catalog.Sessions)
+        lock (_gate)
         {
-            SnapshotEntry? snap = session.Snapshots.FirstOrDefault(s =>
-                string.Equals(s.Id, idOrLabel, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(s.Label, idOrLabel, StringComparison.OrdinalIgnoreCase));
-            if (snap is not null)
+            foreach (Session session in _catalog.Sessions)
             {
-                return (session, snap);
+                SnapshotEntry? snap = session.Snapshots.FirstOrDefault(s =>
+                    string.Equals(s.Id, idOrLabel, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(s.Label, idOrLabel, StringComparison.OrdinalIgnoreCase));
+                if (snap is not null)
+                {
+                    return (session, snap);
+                }
             }
+            return null;
         }
-        return null;
     }
 
     /// <summary>Creates an empty workspace and its directory.</summary>
@@ -72,24 +94,38 @@ public sealed class SnapshotStore
         string? command = null,
         bool withLog = false)
     {
-        string id = $"w{_catalog.NextSession++}"; // w = workspace (a run)
-        string dir = Path.Combine(Root, id);
-        Directory.CreateDirectory(dir);
-
-        var session = new Session
+        lock (_gate)
         {
-            Id = id,
-            Kind = kind,
-            Dir = dir,
-            CreatedAt = DateTimeOffset.Now,
-            Command = command,
-            LogPath = withLog ? Path.Combine(dir, "run.log") : null,
-        };
+            string id = $"w{_catalog.NextSession++}"; // w = workspace (a run)
+            string dir = Path.Combine(Root, id);
+            Directory.CreateDirectory(dir);
+            SecureDirectory(dir);
 
-        _catalog.Sessions.Add(session);
-        WriteMetadata(session);
-        Save();
-        return session;
+            var session = new Session
+            {
+                Id = id,
+                Kind = kind,
+                Dir = dir,
+                CreatedAt = DateTimeOffset.Now,
+                Command = command,
+                LogPath = withLog ? Path.Combine(dir, "run.log") : null,
+            };
+
+            _catalog.Sessions.Add(session);
+            try
+            {
+                WriteMetadata(session);
+                Save();
+                return session;
+            }
+            catch
+            {
+                _catalog.Sessions.Remove(session);
+                _catalog.NextSession--;
+                TryDeleteDir(dir);
+                throw;
+            }
+        }
     }
 
     /// <summary>Adds a dump to a session: moves it under the session's <c>snapshots/</c> when owned.</summary>
@@ -104,56 +140,139 @@ public sealed class SnapshotStore
         bool correlated = false,
         string? reason = null)
     {
-        if (!File.Exists(sourcePath))
+        lock (_gate)
         {
-            throw new FileNotFoundException("Dump file not found.", sourcePath);
-        }
-
-        string id = $"s{_catalog.NextSnapshot++}";
-        string finalPath;
-        bool owned;
-        if (moveIntoStore)
-        {
-            // A self-contained bundle folder: heap.dmp plus provenance.slab.
-            string bundleDir = Path.Combine(session.Dir, "snapshots", id);
-            Directory.CreateDirectory(bundleDir);
-            finalPath = Path.Combine(bundleDir, "heap.dmp");
-            File.Move(sourcePath, finalPath, overwrite: true);
-
-            if (provenanceSource is not null && File.Exists(provenanceSource))
+            if (!File.Exists(sourcePath))
             {
-                File.Copy(provenanceSource, Path.Combine(bundleDir, "provenance.slab"), overwrite: true);
-                try { File.Delete(provenanceSource); } catch { /* transient staging file */ }
+                throw new FileNotFoundException("Dump file not found.", sourcePath);
+            }
+            if (correlated && provenanceSource is null)
+            {
+                throw new InvalidDataException("A correlated snapshot requires allocation provenance.");
+            }
+            if (!moveIntoStore && provenanceSource is not null)
+            {
+                throw new InvalidOperationException(
+                    "Allocation provenance can only be attached to an owned snapshot bundle.");
+            }
+            if (provenanceSource is not null)
+            {
+                ValidateProvenance(provenanceSource);
             }
 
-            owned = true;
-        }
-        else
-        {
-            finalPath = Path.GetFullPath(sourcePath);
-            owned = false;
-        }
+            string id = $"s{_catalog.NextSnapshot++}";
+            string? bundleDir = null;
+            string? stagingDir = null;
+            string finalPath = Path.GetFullPath(sourcePath);
+            bool owned = false;
+            ProcessRecord? process = null;
+            SnapshotEntry? entry = null;
+            bool processAdded = false;
 
-        var entry = new SnapshotEntry(
-            Id: id,
-            Path: finalPath,
-            Owned: owned,
-            Label: label,
-            CreatedAt: DateTimeOffset.Now,
-            SizeBytes: new FileInfo(finalPath).Length)
-        {
-            Reason = reason,
-            HasCorrelation = correlated,
-        };
+            try
+            {
+                if (moveIntoStore)
+                {
+                    string snapshotsDir = Path.Combine(session.Dir, "snapshots");
+                    Directory.CreateDirectory(snapshotsDir);
+                    SecureDirectory(snapshotsDir);
+                    bundleDir = Path.Combine(snapshotsDir, id);
+                    stagingDir = $"{bundleDir}.tmp-{Guid.NewGuid():N}";
+                    Directory.CreateDirectory(stagingDir);
+                    SecureDirectory(stagingDir);
 
-        // Attribute the snapshot to its source process; the first process seen in a workspace is its
-        // root (a launched run sets its root explicitly, ahead of any snapshot).
-        ProcessRecord process = session.GetOrAddProcess(
-            sourcePid ?? 0, sourceName, isRoot: session.Processes.Count == 0);
-        process.Snapshots.Add(entry);
-        WriteMetadata(session);
-        Save();
-        return entry;
+                    string stagedHeap = Path.Combine(stagingDir, "heap.dmp");
+                    MoveFile(sourcePath, stagedHeap);
+                    SecureFile(stagedHeap);
+                    if (provenanceSource is not null)
+                    {
+                        string stagedProvenance = Path.Combine(stagingDir, "provenance.slab");
+                        File.Copy(provenanceSource, stagedProvenance, overwrite: false);
+                        SecureFile(stagedProvenance);
+                    }
+
+                    Directory.Move(stagingDir, bundleDir);
+                    stagingDir = null;
+                    finalPath = Path.Combine(bundleDir, "heap.dmp");
+                    owned = true;
+                }
+
+                entry = new SnapshotEntry(
+                    Id: id,
+                    Path: finalPath,
+                    Owned: owned,
+                    Label: label,
+                    CreatedAt: DateTimeOffset.Now,
+                    SizeBytes: new FileInfo(finalPath).Length)
+                {
+                    Reason = reason,
+                    HasCorrelation = correlated,
+                    ProvenanceSizeBytes = provenanceSource is null
+                        ? 0
+                        : new FileInfo(Path.Combine(bundleDir!, "provenance.slab")).Length,
+                };
+
+                int pid = sourcePid ?? 0;
+                process = session.Processes.FirstOrDefault(p => p.Pid == pid);
+                if (process is null)
+                {
+                    process = session.GetOrAddProcess(
+                        pid, sourceName, isRoot: session.Processes.Count == 0);
+                    processAdded = true;
+                }
+                else
+                {
+                    process.Name ??= sourceName;
+                }
+
+                process.Snapshots.Add(entry);
+                WriteMetadata(session);
+                Save();
+
+                if (moveIntoStore && provenanceSource is not null)
+                {
+                    TryDeleteFile(provenanceSource);
+                }
+                return entry;
+            }
+            catch (Exception failure)
+            {
+                if (entry is not null && process is not null)
+                {
+                    process.Snapshots.Remove(entry);
+                }
+                if (processAdded && process is not null)
+                {
+                    session.Processes.Remove(process);
+                }
+                _catalog.NextSnapshot--;
+
+                string? stagedHeap = stagingDir is null
+                    ? bundleDir is null ? null : Path.Combine(bundleDir, "heap.dmp")
+                    : Path.Combine(stagingDir, "heap.dmp");
+                bool heapRestored = stagedHeap is null || !File.Exists(stagedHeap) || File.Exists(sourcePath);
+                if (!heapRestored)
+                {
+                    heapRestored = TryMoveFile(stagedHeap!, sourcePath);
+                }
+                if (heapRestored && stagingDir is not null)
+                {
+                    TryDeleteDir(stagingDir);
+                }
+                if (heapRestored && bundleDir is not null)
+                {
+                    TryDeleteDir(bundleDir);
+                }
+                TryWriteMetadata(session);
+                if (!heapRestored)
+                {
+                    throw new IOException(
+                        $"Snapshot metadata could not be saved, and the heap dump was preserved at '{stagedHeap}'.",
+                        failure);
+                }
+                throw;
+            }
+        }
     }
 
     /// <summary>Creates a single-snapshot session (a one-off collect/import/crash).</summary>
@@ -173,76 +292,229 @@ public sealed class SnapshotStore
     /// <summary>Re-persists a session after external mutation (e.g. setting its pid).</summary>
     public void Persist(Session session)
     {
-        WriteMetadata(session);
-        Save();
+        lock (_gate)
+        {
+            WriteMetadata(session);
+            Save();
+        }
     }
 
     /// <summary>Records that a process's exit-time allocation profile is present on disk.</summary>
     public void MarkAllocations(Session session, int pid, string? name, string allocationsPath)
     {
-        session.GetOrAddProcess(pid, name).AllocationsPath = allocationsPath;
-        WriteMetadata(session);
-        Save();
+        ValidateProvenance(allocationsPath);
+        SecureFile(allocationsPath);
+        lock (_gate)
+        {
+            session.GetOrAddProcess(pid, name).AllocationsPath = allocationsPath;
+            WriteMetadata(session);
+            Save();
+        }
     }
 
     /// <summary>Removes a whole session (id <c>rN</c>) or a single snapshot (id <c>sN</c>).</summary>
     public bool Remove(string id)
     {
-        Session? session = GetSession(id);
-        if (session is not null)
+        lock (_gate)
         {
-            _catalog.Sessions.Remove(session);
-            TryDeleteDir(session.Dir);
-            Save();
+            Session? session = GetSession(id);
+            if (session is not null)
+            {
+                int index = _catalog.Sessions.IndexOf(session);
+                _catalog.Sessions.RemoveAt(index);
+                try
+                {
+                    Save();
+                }
+                catch
+                {
+                    _catalog.Sessions.Insert(index, session);
+                    throw;
+                }
+                TryDeleteDir(session.Dir);
+                return true;
+            }
+
+            if (FindSnapshot(id) is not ({ } owner, { } snap))
+            {
+                return false;
+            }
+
+            ProcessRecord? process = owner.Processes.FirstOrDefault(p => p.Snapshots.Contains(snap));
+            if (process is null)
+            {
+                return false;
+            }
+            int snapshotIndex = process.Snapshots.IndexOf(snap);
+            process.Snapshots.RemoveAt(snapshotIndex);
+            try
+            {
+                WriteMetadata(owner);
+                Save();
+            }
+            catch
+            {
+                process.Snapshots.Insert(snapshotIndex, snap);
+                TryWriteMetadata(owner);
+                throw;
+            }
+
+            if (snap.Owned)
+            {
+                TryDeleteDir(snap.Dir); // the bundle folder (heap.dmp + allocations + correlation)
+            }
+
             return true;
         }
-
-        if (FindSnapshot(id) is not ({ } owner, { } snap))
-        {
-            return false;
-        }
-
-        owner.Processes.FirstOrDefault(p => p.Snapshots.Contains(snap))?.Snapshots.Remove(snap);
-        if (snap.Owned)
-        {
-            TryDeleteDir(snap.Dir); // the bundle folder (heap.dmp + allocations + correlation)
-        }
-
-        WriteMetadata(owner);
-        Save();
-
-        return true;
     }
 
     public SnapshotEntry? SetLabel(string snapshotId, string? label)
     {
-        if (FindSnapshot(snapshotId) is not ({ } session, { } snap))
+        lock (_gate)
         {
+            if (FindSnapshot(snapshotId) is not ({ } session, { } snap))
+            {
+                return null;
+            }
+
+            SnapshotEntry updated = snap with { Label = label };
+            ProcessRecord? process = session.Processes.FirstOrDefault(p => p.Snapshots.Contains(snap));
+            if (process is not null)
+            {
+                int index = process.Snapshots.IndexOf(snap);
+                process.Snapshots[index] = updated;
+                try
+                {
+                    WriteMetadata(session);
+                    Save();
+                }
+                catch
+                {
+                    process.Snapshots[index] = snap;
+                    TryWriteMetadata(session);
+                    throw;
+                }
+                return updated;
+            }
             return null;
         }
-
-        SnapshotEntry updated = snap with { Label = label };
-        ProcessRecord? process = session.Processes.FirstOrDefault(p => p.Snapshots.Contains(snap));
-        if (process is not null)
-        {
-            process.Snapshots[process.Snapshots.IndexOf(snap)] = updated;
-        }
-        WriteMetadata(session);
-        Save();
-        return updated;
     }
 
-    private void Save() => File.WriteAllText(_catalogPath, JsonSerializer.Serialize(_catalog, JsonOptions));
+    private void Save() =>
+        WriteTextAtomic(_catalogPath, JsonSerializer.Serialize(_catalog, JsonOptions));
 
     /// <summary>Writes the session's self-describing record next to its artifacts.</summary>
     private void WriteMetadata(Session session)
     {
+        Directory.CreateDirectory(session.Dir);
+        WriteTextAtomic(
+            Path.Combine(session.Dir, "metadata.json"),
+            JsonSerializer.Serialize(session, JsonOptions));
+    }
+
+    private void TryWriteMetadata(Session session)
+    {
         try
         {
-            Directory.CreateDirectory(session.Dir);
-            File.WriteAllText(Path.Combine(session.Dir, "metadata.json"), JsonSerializer.Serialize(session, JsonOptions));
+            WriteMetadata(session);
         }
-        catch { /* best effort; the catalog remains the source of truth */ }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private static void ValidateProvenance(string path)
+    {
+        if (!File.Exists(path))
+        {
+            throw new FileNotFoundException("Allocation provenance file not found.", path);
+        }
+        ProvenanceReader.ValidateFile(path);
+    }
+
+    private static void WriteTextAtomic(string path, string contents)
+    {
+        string temp = $"{path}.tmp-{Guid.NewGuid():N}";
+        try
+        {
+            File.WriteAllText(temp, contents);
+            SecureFile(temp);
+            File.Move(temp, path, overwrite: true);
+        }
+        finally
+        {
+            TryDeleteFile(temp);
+        }
+    }
+
+    private static void MoveFile(string source, string destination)
+    {
+        try
+        {
+            File.Move(source, destination);
+        }
+        catch (IOException) when (!File.Exists(destination))
+        {
+            File.Copy(source, destination, overwrite: false);
+            File.Delete(source);
+        }
+    }
+
+    private static bool TryMoveFile(string source, string destination)
+    {
+        try
+        {
+            MoveFile(source, destination);
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private static void SecureDirectory(string path)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(
+                path,
+                UnixFileMode.UserRead |
+                UnixFileMode.UserWrite |
+                UnixFileMode.UserExecute);
+        }
+    }
+
+    private static void SecureFile(string path)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(
+                path,
+                UnixFileMode.UserRead |
+                UnixFileMode.UserWrite);
+        }
     }
 
     private static void TryDeleteDir(string dir)

@@ -25,6 +25,13 @@ public sealed record SnapshotEntry(
     /// <summary>Whether a provenance container (allocation profile, plus correlation when captured) is bundled.</summary>
     public bool HasAllocations => ProvenancePath is not null;
 
+    /// <summary>Size of the bundled allocation-provenance container at capture time.</summary>
+    public long ProvenanceSizeBytes { get; init; }
+
+    /// <summary>Total persisted size of the heap and allocation artifacts.</summary>
+    [JsonIgnore]
+    public long TotalSizeBytes => checked(SizeBytes + ProvenanceSizeBytes);
+
     /// <summary>The bundle folder: <c>heap.dmp</c> (this <see cref="Path"/>) plus <c>provenance.slab</c>.</summary>
     [JsonIgnore]
     public string Dir => System.IO.Path.GetDirectoryName(Path) ?? string.Empty;

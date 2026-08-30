@@ -64,7 +64,7 @@ public sealed class ListReplCommand : IReplCommand
                     string etime = e.CreatedAt.LocalDateTime.ToString("HH:mm");
                     string reason = e.Reason is { } r ? $"  [grey]via {Markup.Escape(r)}[/]" : "";
                     context.Console.MarkupLine(
-                        $"      {marker} [bold]{e.Id,-3}[/]  [green]{ByteSize.Format(e.SizeBytes),10}[/]  [grey]{etime}[/]  {Badges(e)}{reason}{label}{missing}");
+                        $"      {marker} [bold]{e.Id,-3}[/]  [green]{ByteSize.Format(e.TotalSizeBytes),10}[/]  [grey]{etime}[/]  {Badges(e)}{reason}{label}{missing}");
                 }
             }
         }

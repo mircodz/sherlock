@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Runtime.InteropServices;
 using Sherlock.Core.Storage;
 
@@ -108,6 +109,45 @@ public sealed class ProvenanceReader
         Allocations = slab.GetColumn<AllocationRecord>(SectionType.Allocations);
         AllocationsVersion = slab.SectionVersion(SectionType.Allocations);
         _corr = slab.GetColumn<CorrelationRecord>(SectionType.Correlation);
+        if (AllocationsVersion > 2 ||
+            slab.Has(SectionType.Correlation) && slab.SectionVersion(SectionType.Correlation) > 2)
+        {
+            throw new InvalidDataException("unsupported provenance section version");
+        }
+
+        for (long i = 0; i < Allocations.Length; i++)
+        {
+            AllocationRecord allocation = Allocations[i];
+            if (allocation.StackId >= Stacks.StackCount)
+            {
+                throw new InvalidDataException("allocation references an unknown stack");
+            }
+            if (AllocationsVersion >= 2 && allocation.TypeId >= Stacks.FrameCount)
+            {
+                throw new InvalidDataException("allocation references an unknown type");
+            }
+        }
+
+        ulong previousAddress = 0;
+        for (long i = 0; i < _corr.Length; i++)
+        {
+            CorrelationRecord correlation = _corr[i];
+            if (correlation.StackId >= Stacks.StackCount)
+            {
+                throw new InvalidDataException("correlation references an unknown stack");
+            }
+            if (i > 0 && correlation.Address <= previousAddress)
+            {
+                throw new InvalidDataException("correlation addresses are not strictly sorted");
+            }
+            previousAddress = correlation.Address;
+        }
+    }
+
+    public static void ValidateFile(string path)
+    {
+        using SlabFile slab = SlabFile.Open(path);
+        _ = new ProvenanceReader(slab);
     }
 
     /// <summary>The number of tracked live objects (correlation records).</summary>

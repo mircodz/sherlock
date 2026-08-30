@@ -38,6 +38,10 @@ public sealed class SlabFile : IDisposable
             throw new InvalidDataException("bad container magic");
         }
         Version = BinaryPrimitives.ReadUInt16LittleEndian(head[4..]);
+        if (Version != ContainerFormat.FormatVersion)
+        {
+            throw new InvalidDataException($"unsupported container version {Version}");
+        }
         ushort flags = BinaryPrimitives.ReadUInt16LittleEndian(head[6..]);
         if ((flags & ContainerFormat.FlagLittleEndian) == 0)
         {
@@ -46,21 +50,37 @@ public sealed class SlabFile : IDisposable
         uint count = BinaryPrimitives.ReadUInt32LittleEndian(head[8..]);
 
         long tableEnd = ContainerFormat.HeaderSize + (long)count * ContainerFormat.SectionEntrySize;
-        if (tableEnd > mmap.Length)
+        if (tableEnd > mmap.Length || tableEnd > int.MaxValue)
         {
             throw new InvalidDataException("section table exceeds container");
         }
 
-        var table = new byte[count * ContainerFormat.SectionEntrySize];
+        var table = new byte[checked((int)(count * (long)ContainerFormat.SectionEntrySize))];
         mmap.CopyTo(ContainerFormat.HeaderSize, table);
+        var occupied = new List<(long Start, long End)>(checked((int)count));
         for (int i = 0; i < count; i++)
         {
             ReadOnlySpan<byte> e = table.AsSpan(i * ContainerFormat.SectionEntrySize, ContainerFormat.SectionEntrySize);
             ulong offset = BinaryPrimitives.ReadUInt64LittleEndian(e[8..]);
             ulong length = BinaryPrimitives.ReadUInt64LittleEndian(e[16..]);
-            if (offset > (ulong)mmap.Length || length > (ulong)mmap.Length || offset + length > (ulong)mmap.Length)
+            ulong records = BinaryPrimitives.ReadUInt64LittleEndian(e[24..]);
+            ulong fileLength = (ulong)mmap.Length;
+            if (offset > fileLength || length > fileLength - offset)
             {
                 throw new InvalidDataException("section bounds exceed container");
+            }
+            if (length > 0 && offset < (ulong)tableEnd)
+            {
+                throw new InvalidDataException("section overlaps the container header");
+            }
+            if (records > long.MaxValue)
+            {
+                throw new InvalidDataException("section record count exceeds supported range");
+            }
+
+            if (length > 0)
+            {
+                occupied.Add(((long)offset, checked((long)(offset + length))));
             }
             _sections.Add(new SectionInfo(
                 (SectionType)BinaryPrimitives.ReadUInt32LittleEndian(e),
@@ -68,7 +88,16 @@ public sealed class SlabFile : IDisposable
                 BinaryPrimitives.ReadUInt16LittleEndian(e[6..]),
                 (long)offset,
                 (long)length,
-                (long)BinaryPrimitives.ReadUInt64LittleEndian(e[24..])));
+                (long)records));
+        }
+
+        occupied.Sort(static (a, b) => a.Start.CompareTo(b.Start));
+        for (int i = 1; i < occupied.Count; i++)
+        {
+            if (occupied[i].Start < occupied[i - 1].End)
+            {
+                throw new InvalidDataException("container sections overlap");
+            }
         }
     }
 

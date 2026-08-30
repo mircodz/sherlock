@@ -15,10 +15,10 @@ add_executable(SherlockTests
     aggregator.cpp
     container.cpp
     intervals.cpp
-    logger.cpp
     probes.cpp
     profile.cpp
     symbols.cpp
+    ${CMAKE_SOURCE_DIR}/src/common/logger.cpp
     ${CMAKE_SOURCE_DIR}/src/profiler/aggregator.cpp
     ${CMAKE_SOURCE_DIR}/src/profiler/probe.cpp)
 target_link_libraries(SherlockTests PRIVATE GTest::gtest GTest::gtest_main)

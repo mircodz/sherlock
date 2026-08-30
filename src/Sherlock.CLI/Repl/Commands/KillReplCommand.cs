@@ -53,10 +53,12 @@ public sealed class KillReplCommand : IReplCommand
         {
             try
             {
-                SnapshotEntry entry = context.Console.Status().Start($"Snapshotting pid {target.RootPid} before kill…",
-                    _ => context.Workspace.Collect(target.RootPid, DumpKind.Heap, load: false));
+                SnapshotEntry entry = context.Console.Status().Start(
+                    $"Snapshotting pid {target.RootPid} before kill…",
+                    _ => context.Workspace.Capture(target.RootPid, load: false).Entry);
+                string contents = entry.HasAllocations ? "heap + allocations" : "heap only";
                 context.Console.MarkupLineInterpolated(
-                    $"[green]saved[/] [bold]{entry.Id}[/] [grey]({ByteSize.Format(entry.SizeBytes)}) — load {entry.Id} to analyze[/]");
+                    $"[green]saved[/] [bold]{entry.Id}[/] [grey]({contents}, {ByteSize.Format(entry.TotalSizeBytes)}) — load {entry.Id} to analyze[/]");
             }
             catch (DumpAnalysisException ex)
             {

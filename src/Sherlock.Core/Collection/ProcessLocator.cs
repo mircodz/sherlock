@@ -16,7 +16,8 @@ public static class ProcessLocator
             .OrderBy(p => p.Pid)
             .ToList();
 
-    public static IReadOnlyList<DotnetProcess> FindByName(string name) => List()
+    public static IReadOnlyList<DotnetProcess> FindByName(string name) =>
+        List()
             .Where(p => p.Name.Contains(name, StringComparison.OrdinalIgnoreCase))
             .ToList();
 

@@ -136,10 +136,19 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
                 $"[yellow]· allocation profile captured for session[/] [bold]{session.Id}[/] [grey]({session.Command})[/]");
         }
 
-        foreach ((Sherlock.Core.Store.SnapshotEntry entry, string probe) in _workspace.PollProbeSnapshots())
+        foreach (TriggeredCaptureResult capture in _workspace.PollProbeSnapshots())
         {
-            console.MarkupLineInterpolated(
-                $"[yellow]●[/] [bold]{probe}[/] [yellow]fired — heap snapshot[/] [bold]{entry.Id}[/] [grey]captured; load {entry.Id} to inspect[/]");
+            if (capture.Entry is { } entry)
+            {
+                string contents = entry.HasAllocations ? "heap + allocations" : "heap only";
+                console.MarkupLineInterpolated(
+                    $"[yellow]●[/] [bold]{capture.Probe}[/] [yellow]fired — snapshot[/] [bold]{entry.Id}[/] [grey]captured ({contents}); load {entry.Id} to inspect[/]");
+            }
+            else
+            {
+                console.MarkupLineInterpolated(
+                    $"[red]●[/] [bold]{capture.Probe}[/] [red]fired but capture failed:[/] {capture.Error}");
+            }
         }
     }
 

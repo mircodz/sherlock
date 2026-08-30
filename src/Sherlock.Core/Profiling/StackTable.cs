@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using Sherlock.Core.Storage;
@@ -40,19 +41,93 @@ public sealed class StackTable
         _frames = frames;
         _stacks = stacks;
         _stackFrames = stackFrames;
+
+        int frameWidth = Marshal.SizeOf<FrameRecord>();
+        int stackWidth = Marshal.SizeOf<StackRecord>();
+        if (frames.Length % frameWidth != 0 ||
+            stacks.Length % stackWidth != 0 ||
+            stackFrames.Length % sizeof(uint) != 0)
+        {
+            throw new InvalidDataException("stack table contains a truncated record section");
+        }
+
         _frameCache = new string?[FrameCount];
+        Validate();
     }
 
     /// <summary>Reads the stack table from a <see cref="SlabFile"/>. The four sub-sections are bounded
     /// by call-site cardinality (tens of thousands), so they're small single-section blobs.</summary>
-    public static StackTable Read(SlabFile slab) =>
-        new(slab.Blob(SectionType.Strings),
+    public static StackTable Read(SlabFile slab)
+    {
+        if (!HasAllSections(slab))
+        {
+            throw new InvalidDataException("provenance container is missing its stack table");
+        }
+        foreach (SectionType section in new[]
+                 {
+                     SectionType.Strings,
+                     SectionType.Frames,
+                     SectionType.Stacks,
+                     SectionType.StackFrames,
+                 })
+        {
+            if (slab.SectionVersion(section) != StackTableFormat.Version)
+            {
+                throw new InvalidDataException($"unsupported {section} section version");
+            }
+        }
+
+        // Validate fixed-width descriptors before reading the sections as owned blobs.
+        _ = slab.GetColumn<FrameRecord>(SectionType.Frames);
+        _ = slab.GetColumn<StackRecord>(SectionType.Stacks);
+        _ = slab.GetColumn<uint>(SectionType.StackFrames);
+        return new StackTable(
+            slab.Blob(SectionType.Strings),
             slab.Blob(SectionType.Frames),
             slab.Blob(SectionType.Stacks),
             slab.Blob(SectionType.StackFrames));
+    }
 
     public int FrameCount => _frames.Length / Marshal.SizeOf<FrameRecord>();
     public int StackCount => _stacks.Length / Marshal.SizeOf<StackRecord>();
+
+    private static bool HasAllSections(SlabFile slab) =>
+        slab.Has(SectionType.Strings) &&
+        slab.Has(SectionType.Frames) &&
+        slab.Has(SectionType.Stacks) &&
+        slab.Has(SectionType.StackFrames);
+
+    private void Validate()
+    {
+        ReadOnlySpan<FrameRecord> frames = MemoryMarshal.Cast<byte, FrameRecord>(_frames.Span);
+        foreach (FrameRecord frame in frames)
+        {
+            ulong end = (ulong)frame.StrOffset + frame.StrLen;
+            if (end > (ulong)_strings.Length)
+            {
+                throw new InvalidDataException("frame name exceeds the string table");
+            }
+        }
+
+        ReadOnlySpan<uint> frameIds = MemoryMarshal.Cast<byte, uint>(_stackFrames.Span);
+        foreach (uint frameId in frameIds)
+        {
+            if (frameId >= frames.Length)
+            {
+                throw new InvalidDataException("stack references an unknown frame");
+            }
+        }
+
+        ReadOnlySpan<StackRecord> stacks = MemoryMarshal.Cast<byte, StackRecord>(_stacks.Span);
+        foreach (StackRecord stack in stacks)
+        {
+            ulong end = (ulong)stack.FirstFrame + stack.FrameCount;
+            if (end > (ulong)frameIds.Length)
+            {
+                throw new InvalidDataException("stack exceeds the stack-frame table");
+            }
+        }
+    }
 
     /// <summary>The method name of a frame, decoded from the Strings blob (cached).</summary>
     public string Frame(uint frameId)

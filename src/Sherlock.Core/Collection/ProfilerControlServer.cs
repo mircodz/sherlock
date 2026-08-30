@@ -18,6 +18,8 @@ namespace Sherlock.Core.Collection;
 /// </summary>
 public sealed class ProfilerControlServer : IDisposable
 {
+    private const int MaxFrameBytes = 16 * 1024 * 1024;
+
     private readonly Socket _listener;
     private readonly string _path;
     private readonly CancellationTokenSource _cts = new();
@@ -30,6 +32,7 @@ public sealed class ProfilerControlServer : IDisposable
         public string? Version { get; set; }
         public IReadOnlyList<string> Features { get; set; } = [];
         public readonly ConcurrentDictionary<int, TaskCompletionSource<string[]>> Pending = new();
+        public readonly SemaphoreSlim SendLock = new(1, 1);
         public int NextId;
     }
 
@@ -60,6 +63,13 @@ public sealed class ProfilerControlServer : IDisposable
 
         _listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         _listener.Bind(new UnixDomainSocketEndPoint(path));
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(
+                path,
+                UnixFileMode.UserRead |
+                UnixFileMode.UserWrite);
+        }
         _listener.Listen(backlog: 16); // a subtree can bring several profilers at once
         _ = Task.Run(AcceptLoopAsync);
     }
@@ -81,7 +91,15 @@ public sealed class ProfilerControlServer : IDisposable
         parts.AddRange(args);
         try
         {
-            await SendAsync(client.Socket, string.Join('\t', parts));
+            await client.SendLock.WaitAsync(_cts.Token);
+            try
+            {
+                await SendAsync(client.Socket, string.Join('\t', parts), _cts.Token);
+            }
+            finally
+            {
+                client.SendLock.Release();
+            }
         }
         catch
         {
@@ -163,11 +181,27 @@ public sealed class ProfilerControlServer : IDisposable
                 }
             }
         }
+        catch (Exception) when (_cts.IsCancellationRequested)
+        {
+        }
+        catch (SocketException)
+        {
+        }
+        catch (InvalidDataException)
+        {
+        }
         finally
         {
             if (pid != 0)
             {
                 _clients.TryRemove(new KeyValuePair<int, Client>(pid, client));
+            }
+            foreach ((int id, TaskCompletionSource<string[]> pending) in client.Pending)
+            {
+                if (client.Pending.TryRemove(id, out _))
+                {
+                    pending.TrySetException(new IOException("profiler control channel disconnected"));
+                }
             }
             try { socket.Dispose(); } catch { /* ignore */ }
         }
@@ -185,7 +219,10 @@ public sealed class ProfilerControlServer : IDisposable
                     ? fields[2].Split(',', StringSplitOptions.RemoveEmptyEntries)
                     : [];
                 pid = fields.Length > 3 && int.TryParse(fields[3], out int p) ? p : 0;
-                _clients[pid] = client;
+                if (pid > 0)
+                {
+                    _clients[pid] = client;
+                }
                 break;
 
             case "RES":
@@ -203,16 +240,29 @@ public sealed class ProfilerControlServer : IDisposable
         return pid;
     }
 
-    private static async Task SendAsync(Socket client, string payload)
+    private static async Task SendAsync(Socket client, string payload, CancellationToken cancellationToken)
     {
         byte[] body = Encoding.UTF8.GetBytes(payload);
+        if (body.Length > MaxFrameBytes)
+        {
+            throw new InvalidDataException($"control frame exceeds {MaxFrameBytes} bytes");
+        }
         var framed = new byte[4 + body.Length];
         framed[0] = (byte)body.Length;
         framed[1] = (byte)(body.Length >> 8);
         framed[2] = (byte)(body.Length >> 16);
         framed[3] = (byte)(body.Length >> 24);
         Buffer.BlockCopy(body, 0, framed, 4, body.Length);
-        await client.SendAsync(framed);
+        int sent = 0;
+        while (sent < framed.Length)
+        {
+            int n = await client.SendAsync(framed.AsMemory(sent), SocketFlags.None, cancellationToken);
+            if (n == 0)
+            {
+                throw new IOException("profiler control channel closed while sending");
+            }
+            sent += n;
+        }
     }
 
     private static bool TryReadFrame(List<byte> buffer, out string payload)
@@ -224,6 +274,10 @@ public sealed class ProfilerControlServer : IDisposable
         }
 
         int len = buffer[0] | (buffer[1] << 8) | (buffer[2] << 16) | (buffer[3] << 24);
+        if (len < 0 || len > MaxFrameBytes)
+        {
+            throw new InvalidDataException("invalid profiler control frame length");
+        }
         if (buffer.Count < 4 + len)
         {
             return false;
@@ -240,6 +294,7 @@ public sealed class ProfilerControlServer : IDisposable
         foreach (Client client in _clients.Values)
         {
             try { client.Socket.Dispose(); } catch { /* ignore */ }
+            client.SendLock.Dispose();
         }
         try { _listener.Dispose(); } catch { /* ignore */ }
         try { if (File.Exists(_path))

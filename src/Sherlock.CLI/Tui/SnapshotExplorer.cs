@@ -625,8 +625,10 @@ public static class SnapshotExplorer
             ("When", Constraint.Length(14), false), ("Size", Constraint.Length(10), true), ("Captured", Constraint.Fill(2), false));
         foreach ((ProcessRecord process, SnapshotEntry snap) in entries)
         {
-            string kind = snap.HasCorrelation ? "heap + alloc" : "heap";
-            snaps.Rows.Add([snap.Id, process.Name ?? "?", snap.CreatedAt.LocalDateTime.ToString("MM-dd HH:mm"), ByteFormat.Human(snap.SizeBytes), snap.Reason is { } r ? $"{kind} ({r})" : kind]);
+            string kind = snap.HasCorrelation
+                ? "heap + alloc + corr"
+                : snap.HasAllocations ? "heap + alloc" : "heap only";
+            snaps.Rows.Add([snap.Id, process.Name ?? "?", snap.CreatedAt.LocalDateTime.ToString("MM-dd HH:mm"), ByteFormat.Human(snap.TotalSizeBytes), snap.Reason is { } r ? $"{kind} ({r})" : kind]);
         }
         snaps.OnActivate = i =>
         {

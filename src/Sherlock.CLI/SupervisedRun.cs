@@ -59,9 +59,19 @@ public static class SupervisedRun
         {
             console.MarkupLineInterpolated($"[yellow]· allocation profile captured for[/] [bold]{session.Id}[/]");
         }
-        foreach ((SnapshotEntry entry, string probe) in workspace.PollProbeSnapshots())
+        foreach (TriggeredCaptureResult capture in workspace.PollProbeSnapshots())
         {
-            console.MarkupLineInterpolated($"[yellow]●[/] [bold]{probe}[/] [yellow]fired → snapshot[/] [bold]{entry.Id}[/]");
+            if (capture.Entry is { } entry)
+            {
+                string contents = entry.HasAllocations ? "heap + allocations" : "heap only";
+                console.MarkupLineInterpolated(
+                    $"[yellow]●[/] [bold]{capture.Probe}[/] [yellow]fired → snapshot[/] [bold]{entry.Id}[/] [grey]({contents})[/]");
+            }
+            else
+            {
+                console.MarkupLineInterpolated(
+                    $"[red]●[/] [bold]{capture.Probe}[/] [red]fired but capture failed:[/] {capture.Error}");
+            }
         }
     }
 
