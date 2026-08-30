@@ -168,7 +168,14 @@ public sealed unsafe class Column<T> where T : unmanaged
         while (lo < hi)
         {
             int mid = (lo + hi + 1) >> 1;
-            if (_segs[mid].FirstElement <= i) lo = mid; else hi = mid - 1;
+            if (_segs[mid].FirstElement <= i)
+            {
+                lo = mid;
+            }
+            else
+            {
+                hi = mid - 1;
+            }
         }
         return _segs[lo];
     }

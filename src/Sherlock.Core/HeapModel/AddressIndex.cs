@@ -55,8 +55,19 @@ public sealed class AddressIndex
         {
             int mid = (int)(((uint)lo + (uint)hi) >> 1);
             ulong v = addresses[mid];
-            if (v == address) return mid;
-            if (v < address) lo = mid + 1; else hi = mid;
+            if (v == address)
+            {
+                return mid;
+            }
+
+            if (v < address)
+            {
+                lo = mid + 1;
+            }
+            else
+            {
+                hi = mid;
+            }
         }
         return -1;
     }

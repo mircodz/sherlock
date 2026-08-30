@@ -45,7 +45,7 @@ public sealed class SlabFile : IDisposable
         }
         uint count = BinaryPrimitives.ReadUInt32LittleEndian(head[8..]);
 
-        long tableEnd = (long)ContainerFormat.HeaderSize + (long)count * ContainerFormat.SectionEntrySize;
+        long tableEnd = ContainerFormat.HeaderSize + (long)count * ContainerFormat.SectionEntrySize;
         if (tableEnd > mmap.Length)
         {
             throw new InvalidDataException("section table exceeds container");
@@ -91,7 +91,10 @@ public sealed class SlabFile : IDisposable
     {
         foreach (SectionInfo s in _sections)
         {
-            if (s.Type == type) return true;
+            if (s.Type == type)
+            {
+                return true;
+            }
         }
         return false;
     }
@@ -101,7 +104,10 @@ public sealed class SlabFile : IDisposable
     {
         foreach (SectionInfo s in _sections)
         {
-            if (s.Type == type) return s.Version;
+            if (s.Type == type)
+            {
+                return s.Version;
+            }
         }
         return 0;
     }
@@ -114,7 +120,11 @@ public sealed class SlabFile : IDisposable
         var segs = new List<(long byteOffset, long count)>();
         foreach (SectionInfo s in _sections)
         {
-            if (s.Type != type) continue;
+            if (s.Type != type)
+            {
+                continue;
+            }
+
             Validate<T>(type, s, width);
             segs.Add((s.ByteOffset, s.Count));
         }
@@ -131,7 +141,11 @@ public sealed class SlabFile : IDisposable
         var result = new List<Column<T>>();
         foreach (SectionInfo s in _sections)
         {
-            if (s.Type != type) continue;
+            if (s.Type != type)
+            {
+                continue;
+            }
+
             Validate<T>(type, s, width);
             result.Add(new Column<T>(_mmap, [(s.ByteOffset, s.Count)]));
         }
@@ -158,7 +172,11 @@ public sealed class SlabFile : IDisposable
     {
         foreach (SectionInfo s in _sections)
         {
-            if (s.Type != type) continue;
+            if (s.Type != type)
+            {
+                continue;
+            }
+
             var buf = new byte[checked((int)s.ByteLength)];
             _mmap.CopyTo(s.ByteOffset, buf);
             return buf;

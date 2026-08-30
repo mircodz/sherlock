@@ -188,9 +188,17 @@ public static class SnapshotExplorer
                 if (f.NextCommand is { } next)
                 {
                     StyledText st = StyledText.Of("   → ").Fg(Theme.Current.Muted).Append(next).Fg(Theme.Current.Accent);
-                    if (target is not null) st = st.Underline().Link(target);
+                    if (target is not null)
+                    {
+                        st = st.Underline().Link(target);
+                    }
+
                     var line = new Label(st);
-                    if (target is not null) line.OnLinkClick = p => Follow(snap, p);
+                    if (target is not null)
+                    {
+                        line.OnLinkClick = p => Follow(snap, p);
+                    }
+
                     findings.Add(line, Constraint.Length(1));
                 }
             }
@@ -409,7 +417,10 @@ public static class SnapshotExplorer
                     st = st.Append("      ").Append(sel.Label).Fg(Theme.Current.Foreground)
                         .Append($"   {ByteFormat.Human(bytes)}").Fg(Theme.Current.Warning)
                         .Append($"   {100.0 * bytes / Math.Max(1, total):0.0}% of total").Fg(Theme.Current.Muted);
-                    if (sel.Value.AllocCount > 0) st = st.Append($"   ·   {sel.Value.AllocCount:N0} objects").Fg(Theme.Current.Muted);
+                    if (sel.Value.AllocCount > 0)
+                    {
+                        st = st.Append($"   ·   {sel.Value.AllocCount:N0} objects").Fg(Theme.Current.Muted);
+                    }
                 }
                 info.Content = st;
             }
@@ -451,9 +462,16 @@ public static class SnapshotExplorer
                 var inspect = new TreeView<string> { RenderLabel = FieldLabel, ShowGuides = true };
                 inspect.OnLinkClick = p => Follow(snap, p);
                 TreeNode<string> obj = inspect.AddRoot($"{Short(detail.TypeName)} @ 0x{address:x}  ({ByteFormat.Human((long)detail.Size)})");
-                if (detail.StringValue is { } str) obj.AddChild($"= \"{str}\"");
+                if (detail.StringValue is { } str)
+                {
+                    obj.AddChild($"= \"{str}\"");
+                }
                 else if (detail.IsArray) { obj.AddChild($"length : int = {detail.ElementCount}"); foreach (string el in detail.Elements.Take(64)) obj.AddChild($"[] = {el}"); }
-                else foreach (FieldValue f in detail.Fields) obj.AddChild($"{f.Name} : {Short(f.TypeName)} = {f.Value}");
+                else
+                {
+                    foreach (FieldValue f in detail.Fields) obj.AddChild($"{f.Name} : {Short(f.TypeName)} = {f.Value}");
+                }
+
                 obj.ExpandAll();
                 inspect.MarkDirty();
                 return new Panel(inspect, " Object — click a reference to follow it ") { BorderStyle = BorderStyle.Rounded };
@@ -464,7 +482,11 @@ public static class SnapshotExplorer
                 var roots = new TreeView<RootRow> { RenderLabel = RootLabel, ShowGuides = true };
                 roots.OnLinkClick = p => Follow(snap, p);
                 IReadOnlyList<GcRootPath> paths = snap.Roots(address, 3, ct);
-                if (paths.Count == 0) roots.AddRoot(new RootRow("(not reachable from any GC root — collectable)", null));
+                if (paths.Count == 0)
+                {
+                    roots.AddRoot(new RootRow("(not reachable from any GC root — collectable)", null));
+                }
+
                 foreach (GcRootPath path in paths)
                 {
                     TreeNode<RootRow> root = roots.AddRoot(new RootRow(path.RootDescription, null));
@@ -536,7 +558,10 @@ public static class SnapshotExplorer
                 .Append($"   {ByteFormat.Human(survived)} survived").Fg(Theme.Current.Success)
                 .Append($"   {count:N0} objects").Fg(Theme.Current.Muted)
                 .Append($"   ·   {through.Sites.Count:N0} call paths").Fg(Theme.Current.Muted);
-            if (through.HasTypes) summary = summary.Append($"   ·   {types} types").Fg(Theme.Current.Muted);
+            if (through.HasTypes)
+            {
+                summary = summary.Append($"   ·   {types} types").Fg(Theme.Current.Muted);
+            }
 
             var tabs = new Tabs();
             if (through.HasTypes)
@@ -573,7 +598,11 @@ public static class SnapshotExplorer
             var inclusive = new Dictionary<string, long>(StringComparer.Ordinal);
             foreach (AllocationSite site in profile.Sites)
             {
-                if (site.Frames.Count == 0) continue;
+                if (site.Frames.Count == 0)
+                {
+                    continue;
+                }
+
                 string leaf = site.Frames[^1];
                 (long Bytes, long Count) cur = self.GetValueOrDefault(leaf);
                 self[leaf] = (cur.Bytes + site.AllocBytes, cur.Count + site.AllocCount);
@@ -664,13 +693,20 @@ public static class SnapshotExplorer
             {
                 int e0 = text.IndexOf(" = ", StringComparison.Ordinal);
                 if (e0 >= 0 && TryAddr(text[(e0 + 3)..], out ulong a0))
+                {
                     return StyledText.Of(text[..(e0 + 3)]).Fg(theme.Foreground).Append(text[(e0 + 3)..]).Fg(theme.Accent).Underline().Link(new ObjTarget(a0));
+                }
+
                 return new StyledText(text, new Style(theme.Foreground, Color.Default));
             }
             StyledText st = StyledText.Of(text[..colon]).Fg(theme.Foreground).Append(" : ").Fg(theme.Muted);
             string rest = text[(colon + 3)..];
             int eq = rest.IndexOf(" = ", StringComparison.Ordinal);
-            if (eq < 0) return st.Append(rest).Fg(theme.Secondary);
+            if (eq < 0)
+            {
+                return st.Append(rest).Fg(theme.Secondary);
+            }
+
             st.Append(rest[..eq]).Fg(theme.Secondary).Append(" = ").Fg(theme.Muted);
             string value = rest[(eq + 3)..];
             return TryAddr(value, out ulong a)
@@ -751,7 +787,10 @@ file sealed class FilterStack : Cellar.Widgets.Widget
         set
         {
             _stack.HasFocus = value;
-            if (value && !_input.HasFocus && !_body.HasFocus) _body.HasFocus = true;
+            if (value && !_input.HasFocus && !_body.HasFocus)
+            {
+                _body.HasFocus = true;
+            }
         }
     }
 

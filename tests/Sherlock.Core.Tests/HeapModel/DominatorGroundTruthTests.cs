@@ -46,7 +46,11 @@ public sealed class DominatorGroundTruthTests
     {
         ulong addr = g.Addresses.Span[obj];
         for (int rpo = 1; rpo < r.Address.Length; rpo++)
-            if (r.Address[rpo] == addr) return r.Retained[rpo];
+            if (r.Address[rpo] == addr)
+            {
+                return r.Retained[rpo];
+            }
+
         return 0;
     }
 
@@ -55,7 +59,11 @@ public sealed class DominatorGroundTruthTests
     {
         ulong addr = g.Addresses.Span[obj];
         for (int rpo = 1; rpo < r.Address.Length; rpo++)
-            if (r.Address[rpo] == addr) return rpo;
+            if (r.Address[rpo] == addr)
+            {
+                return rpo;
+            }
+
         return -1;
     }
 

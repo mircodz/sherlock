@@ -80,7 +80,11 @@ public static class LiveDashboard
 
         void Snapshot(int pid)
         {
-            if (Interlocked.Exchange(ref busy, 1) == 1) return; // one capture at a time
+            if (Interlocked.Exchange(ref busy, 1) == 1)
+            {
+                return; // one capture at a time
+            }
+
             string name = procs.FirstOrDefault(p => p.Pid == pid)?.Name ?? "process";
             app.Post(new Capturing(pid, name));
             _ = Task.Run(() =>

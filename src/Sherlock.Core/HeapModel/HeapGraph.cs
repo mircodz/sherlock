@@ -140,7 +140,11 @@ public sealed class HeapGraph : IDisposable
     {
         get
         {
-            if (_hashed) return _contentHash;
+            if (_hashed)
+            {
+                return _contentHash;
+            }
+
             const ulong prime = 1099511628211UL;
             ulong h = 1469598103934665603UL;
 
@@ -155,7 +159,7 @@ public sealed class HeapGraph : IDisposable
 
             // Strided samples (~4096 points each), enough to catch any structural change cheaply.
             SampleU64(addr, Mix);
-            Edges.Sample(4096, v => Mix((ulong)(uint)v));
+            Edges.Sample(4096, v => Mix((uint)v));
 
             _contentHash = h;
             _hashed = true;

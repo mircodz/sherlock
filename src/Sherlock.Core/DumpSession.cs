@@ -8,10 +8,6 @@ using Sherlock.Core.HeapModel;
 
 namespace Sherlock.Core;
 
-/// <summary>
-/// An open dump and its analysis facade. Dumps are immutable, so expensive whole-heap results
-/// (dominator tree, type histogram) are computed once and cached for the session's lifetime.
-/// </summary>
 public sealed class DumpSession : IDisposable
 {
     private DumpSession(string path, DataTarget dataTarget, ClrInfo clrInfo, ClrRuntime runtime)
@@ -33,7 +29,7 @@ public sealed class DumpSession : IDisposable
 
     /// <summary>The compact object graph, extracted once (bypassing ClrMD's DAC) and persisted beside
     /// the dump so reopening skips extraction. Backs the graph analyses.</summary>
-    public HeapModel.HeapGraph GetHeapGraph(CancellationToken cancellationToken = default) =>
+    public HeapGraph GetHeapGraph(CancellationToken cancellationToken = default) =>
         (_heapGraph ??= new HeapGraphProvider(this)).Get(cancellationToken);
 
     /// <summary>The dominator tree over the persisted DAC-free heap graph, cached on disk beside the
@@ -50,13 +46,16 @@ public sealed class DumpSession : IDisposable
     {
         // An existing heap graph (from dominators, or cached on disk) gives the histogram for free via
         // its type column. Otherwise use ClrMD directly rather than pay full graph extraction.
-        HeapModel.HeapGraphProvider provider = _heapGraph ??= new HeapGraphProvider(this);
+        HeapGraphProvider provider = _heapGraph ??= new HeapGraphProvider(this);
         if (provider.TryGetCachedOrOnDisk() is { } graph && graph.Histogram() is { } rows)
         {
             var stats = new List<HeapTypeStat>(rows.Length);
             foreach ((string typeName, long count, ulong totalSize) in rows)
             {
-                if (count > 0) stats.Add(new HeapTypeStat(typeName, count, totalSize));
+                if (count > 0)
+                {
+                    stats.Add(new HeapTypeStat(typeName, count, totalSize));
+                }
             }
             stats.Sort((a, b) => b.TotalSize.CompareTo(a.TotalSize));
             return stats;

@@ -242,6 +242,10 @@ public sealed class ProfilerControlServer : IDisposable
             try { client.Socket.Dispose(); } catch { /* ignore */ }
         }
         try { _listener.Dispose(); } catch { /* ignore */ }
-        try { if (File.Exists(_path)) File.Delete(_path); } catch { /* ignore */ }
+        try { if (File.Exists(_path))
+            {
+                File.Delete(_path);
+            }
+        } catch { /* ignore */ }
     }
 }

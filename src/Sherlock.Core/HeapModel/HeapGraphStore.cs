@@ -34,9 +34,9 @@ public static class HeapGraphStore
         var writer = new ContainerWriter();
         // Per-object columns are chunked (N same-typed sections of uniform element count): a large graph
         // (>~268M objects) overflows a single AddRecords section. Column<T> reassembles them on load.
-        writer.AddChunkedRecords<ulong>(SectionType.GraphAddresses, Version, graph.Addresses.Span);
-        writer.AddChunkedRecords<uint>(SectionType.GraphSizes, Version, graph.Sizes.Span);
-        writer.AddChunkedRecords<long>(SectionType.GraphOffsets, Version, graph.Offsets.Span);
+        writer.AddChunkedRecords(SectionType.GraphAddresses, Version, graph.Addresses.Span);
+        writer.AddChunkedRecords(SectionType.GraphSizes, Version, graph.Sizes.Span);
+        writer.AddChunkedRecords(SectionType.GraphOffsets, Version, graph.Offsets.Span);
 
         // One section per edge chunk (each already ≤ the on-disk section cap), plus the chunk-start table
         // so the reader rebuilds the column without re-deriving boundaries from the offsets.
@@ -47,12 +47,12 @@ public static class HeapGraphStore
             writer.AddChunkedSection(SectionType.GraphEdgesChunk, Version, sizeof(int), [edgeChunks[i]],
                 (ulong)(edges.ChunkStarts[i + 1] - edges.ChunkStarts[i]));
         }
-        writer.AddRecords<long>(SectionType.GraphEdgeChunkMeta, Version, edges.ChunkStarts);
+        writer.AddRecords(SectionType.GraphEdgeChunkMeta, Version, edges.ChunkStarts);
 
-        writer.AddRecords<ulong>(SectionType.GraphMeta, Version, [graph.FreeBytes, (ulong)graph.FreeCount]);
+        writer.AddRecords(SectionType.GraphMeta, Version, [graph.FreeBytes, (ulong)graph.FreeCount]);
         if (graph.TypeIds is { } typeIds && graph.TypeNames is { } typeNames)
         {
-            writer.AddChunkedRecords<int>(SectionType.GraphTypeIds, Version, typeIds.Span);
+            writer.AddChunkedRecords(SectionType.GraphTypeIds, Version, typeIds.Span);
             byte[] namesBlob = EncodeNames(typeNames);
             writer.AddSection(SectionType.GraphTypeNames, Version, 0, namesBlob, (ulong)typeNames.Length);
         }
@@ -113,8 +113,15 @@ public static class HeapGraphStore
             ulong freeBytes = 0;
             long freeCount = 0;
             Column<ulong> meta = slab.GetColumn<ulong>(SectionType.GraphMeta);
-            if (meta.Length >= 1) freeBytes = meta[0];
-            if (meta.Length >= 2) freeCount = (long)meta[1];
+            if (meta.Length >= 1)
+            {
+                freeBytes = meta[0];
+            }
+
+            if (meta.Length >= 2)
+            {
+                freeCount = (long)meta[1];
+            }
 
             return new HeapGraph(addresses, sizes, offsets, edges, typeIds, typeNames, freeBytes, freeCount,
                 backing: slab);

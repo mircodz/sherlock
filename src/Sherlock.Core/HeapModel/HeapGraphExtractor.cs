@@ -85,10 +85,17 @@ public sealed class HeapGraphExtractor(DumpSession session)
                 else
                 {
                     reader.Read(obj + (ulong)pointerSize, out uint count);
-                    if (t.IsString) count++;
-                    size = (ulong)count * (ulong)t.ComponentSize + (ulong)t.BaseSize;
+                    if (t.IsString)
+                    {
+                        count++;
+                    }
+
+                    size = count * (ulong)t.ComponentSize + (ulong)t.BaseSize;
                 }
-                if (size < minObjSize) size = minObjSize;
+                if (size < minObjSize)
+                {
+                    size = minObjSize;
+                }
 
                 // Reported size matches ClrMD's GetObjectSize: clamped, NOT aligned. Alignment only
                 // advances the walk to the next object, it isn't stored.
@@ -158,7 +165,11 @@ public sealed class HeapGraphExtractor(DumpSession session)
                 int degree = 0;
                 foreach ((ulong reference, int _) in t.GCDesc.WalkObject(buffer, (int)size))
                 {
-                    if (reference == 0) continue;
+                    if (reference == 0)
+                    {
+                        continue;
+                    }
+
                     int v = index.IndexOf(reference);
                     if (v >= 0) { edges.Add(v); degree++; }
                 }
@@ -178,7 +189,10 @@ public sealed class HeapGraphExtractor(DumpSession session)
         {
             cancellationToken.ThrowIfCancellationRequested();
             int v = index.IndexOf(root.Object.Address);
-            if (v >= 0 && rootSeen.Add(v)) roots.Add(v);
+            if (v >= 0 && rootSeen.Add(v))
+            {
+                roots.Add(v);
+            }
         }
 
         long objectEdges = 0;

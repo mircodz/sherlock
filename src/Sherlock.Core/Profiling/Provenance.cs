@@ -74,7 +74,7 @@ public sealed class ProvenanceWriter
         _stacks.WriteTo(w);
         if (_allocs.Count > 0)
         {
-            w.AddRecords<AllocationRecord>(SectionType.Allocations, ProfileFormat.Version, CollectionsMarshal.AsSpan(_allocs));
+            w.AddRecords(SectionType.Allocations, ProfileFormat.Version, CollectionsMarshal.AsSpan(_allocs));
         }
         if (_corr.Count > 0)
         {
@@ -82,7 +82,7 @@ public sealed class ProvenanceWriter
             // stay under the reader's per-section cap: one 16-byte record per live object overflows a
             // single section past ~134M objects.
             _corr.Sort(static (a, b) => a.Address.CompareTo(b.Address));
-            w.AddChunkedRecords<CorrelationRecord>(SectionType.Correlation, ProfileFormat.Version, CollectionsMarshal.AsSpan(_corr));
+            w.AddChunkedRecords(SectionType.Correlation, ProfileFormat.Version, CollectionsMarshal.AsSpan(_corr));
         }
     }
 }

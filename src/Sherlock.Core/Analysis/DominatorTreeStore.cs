@@ -20,10 +20,10 @@ public static class DominatorTreeStore
     public static void Save(string path, DominatorAnalyzer.DominatorResult result, ulong graphContentHash)
     {
         var writer = new ContainerWriter();
-        writer.AddRecords<ulong>(SectionType.DomMeta, Version, [graphContentHash]);
-        writer.AddRecords<int>(SectionType.DomNodeByRpo, Version, result.NodeByRpo);
-        writer.AddRecords<ulong>(SectionType.DomRetained, Version, result.Retained);
-        writer.AddRecords<int>(SectionType.DomIdom, Version, result.Idom);
+        writer.AddRecords(SectionType.DomMeta, Version, [graphContentHash]);
+        writer.AddRecords(SectionType.DomNodeByRpo, Version, result.NodeByRpo);
+        writer.AddRecords(SectionType.DomRetained, Version, result.Retained);
+        writer.AddRecords(SectionType.DomIdom, Version, result.Idom);
         File.WriteAllBytes(path, writer.ToArray());
     }
 

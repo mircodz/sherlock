@@ -125,7 +125,11 @@ public sealed unsafe class ChunkedMmap : IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
+        if (_disposed)
+        {
+            return;
+        }
+
         _disposed = true;
         Cleanup(_views, _pointers);
         _file.Dispose();
@@ -135,8 +139,16 @@ public sealed unsafe class ChunkedMmap : IDisposable
     {
         for (int i = 0; i < views.Length; i++)
         {
-            if (views[i] is null) continue;
-            if (pointers[i] != null) views[i].SafeMemoryMappedViewHandle.ReleasePointer();
+            if (views[i] is null)
+            {
+                continue;
+            }
+
+            if (pointers[i] != null)
+            {
+                views[i].SafeMemoryMappedViewHandle.ReleasePointer();
+            }
+
             views[i].Dispose();
         }
     }

@@ -41,7 +41,7 @@ public class ColumnTests : IDisposable
     public void SingleSectionColumnRoundTrips()
     {
         var recs = new ulong[] { 10, 20, 30, 40, 50 };
-        using var slab = WriteSlab<ulong>(SectionType.GraphAddresses, 3, recs, sections: 1);
+        using var slab = WriteSlab(SectionType.GraphAddresses, 3, recs, sections: 1);
         Column<ulong> col = slab.GetColumn<ulong>(SectionType.GraphAddresses);
         Assert.Equal(5L, col.Length);
         for (long i = 0; i < col.Length; i++) Assert.Equal(recs[i], col[i]);
@@ -53,7 +53,7 @@ public class ColumnTests : IDisposable
         var recs = new long[20];
         for (int i = 0; i < recs.Length; i++) recs[i] = i * 1000L;
         // 4 sections of 5 elements each.
-        using var slab = WriteSlab<long>(SectionType.GraphOffsets, 3, recs, sections: 4);
+        using var slab = WriteSlab(SectionType.GraphOffsets, 3, recs, sections: 4);
         Column<long> col = slab.GetColumn<long>(SectionType.GraphOffsets);
         Assert.Equal(20L, col.Length);
         for (long i = 0; i < col.Length; i++)
@@ -71,7 +71,7 @@ public class ColumnTests : IDisposable
         var recs = new Corr[30];
         for (int i = 0; i < recs.Length; i++)
             recs[i] = new Corr { Address = (ulong)((i + 1) * 0x1000), StackId = (uint)(i % 3), Reserved = 0 };
-        using var slab = WriteSlab<Corr>(SectionType.Correlation, 2, recs, sections: 6);
+        using var slab = WriteSlab(SectionType.Correlation, 2, recs, sections: 6);
         Column<Corr> col = slab.GetColumn<Corr>(SectionType.Correlation);
         Assert.Equal(30L, col.Length);
 
@@ -82,8 +82,19 @@ public class ColumnTests : IDisposable
             {
                 long mid = lo + ((hi - lo) >> 1);
                 ulong a = col[mid].Address;
-                if (a == addr) return col[mid].StackId;
-                if (a < addr) lo = mid + 1; else hi = mid - 1;
+                if (a == addr)
+                {
+                    return col[mid].StackId;
+                }
+
+                if (a < addr)
+                {
+                    lo = mid + 1;
+                }
+                else
+                {
+                    hi = mid - 1;
+                }
             }
             return uint.MaxValue;
         }
@@ -98,7 +109,7 @@ public class ColumnTests : IDisposable
     {
         var recs = new uint[24];
         for (uint i = 0; i < recs.Length; i++) recs[i] = i * 7;
-        using var slab = WriteSlab<uint>(SectionType.GraphSizes, 3, recs, sections: 3); // 8/section
+        using var slab = WriteSlab(SectionType.GraphSizes, 3, recs, sections: 3); // 8/section
         Column<uint> col = slab.GetColumn<uint>(SectionType.GraphSizes);
 
         // Slice within one section → zero-copy span.
@@ -117,7 +128,7 @@ public class ColumnTests : IDisposable
     [Fact]
     public void EmptyAndAbsentColumns()
     {
-        using var slab = WriteSlab<ulong>(SectionType.GraphAddresses, 3, Array.Empty<ulong>(), sections: 1);
+        using var slab = WriteSlab(SectionType.GraphAddresses, 3, Array.Empty<ulong>(), sections: 1);
         Assert.Equal(0L, slab.GetColumn<ulong>(SectionType.GraphAddresses).Length); // empty column
         Assert.Equal(0L, slab.GetColumn<ulong>(SectionType.GraphSizes).Length);     // absent section
         Assert.False(slab.Has(SectionType.GraphSizes));
@@ -127,7 +138,7 @@ public class ColumnTests : IDisposable
     public void WrongElementWidthThrows()
     {
         var recs = new ulong[] { 1, 2, 3 };
-        using var slab = WriteSlab<ulong>(SectionType.GraphAddresses, 3, recs, sections: 1);
+        using var slab = WriteSlab(SectionType.GraphAddresses, 3, recs, sections: 1);
         // Section recordSize is 8 (ulong); reading as uint (4) must be rejected, not silently misread.
         Assert.Throws<InvalidDataException>(() => slab.GetColumn<uint>(SectionType.GraphAddresses));
     }
@@ -148,7 +159,7 @@ public class ColumnTests : IDisposable
     public void IndexOutOfRangeThrows()
     {
         var recs = new ulong[] { 1, 2, 3 };
-        using var slab = WriteSlab<ulong>(SectionType.GraphAddresses, 3, recs, sections: 1);
+        using var slab = WriteSlab(SectionType.GraphAddresses, 3, recs, sections: 1);
         Column<ulong> col = slab.GetColumn<ulong>(SectionType.GraphAddresses);
         Assert.Throws<ArgumentOutOfRangeException>(() => col[3]);
         Assert.Throws<ArgumentOutOfRangeException>(() => col[-1]);
@@ -160,7 +171,7 @@ public class ColumnTests : IDisposable
         // A zero-length slice at the very end (offset == Length) must succeed, guarding the
         // ChunkedMmap.TryGetPointer end-of-file edge case.
         var recs = new uint[] { 1, 2, 3, 4 };
-        using var slab = WriteSlab<uint>(SectionType.GraphSizes, 3, recs, sections: 1);
+        using var slab = WriteSlab(SectionType.GraphSizes, 3, recs, sections: 1);
         Column<uint> col = slab.GetColumn<uint>(SectionType.GraphSizes);
         Assert.True(col.TrySlice(col.Length, 0, out ReadOnlySpan<uint> tail));
         Assert.Equal(0, tail.Length);

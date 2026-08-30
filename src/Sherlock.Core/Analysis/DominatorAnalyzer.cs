@@ -94,7 +94,11 @@ public sealed class DominatorAnalyzer(DumpSession session)
         long reachableEdges = 0;
         for (int node = 0; node < nodeCount; node++)
         {
-            if (rpoNumber[node] < 0) continue;
+            if (rpoNumber[node] < 0)
+            {
+                continue;
+            }
+
             foreach (int v in graph.Successors(node))
             {
                 int vRpo = rpoNumber[v];
@@ -116,11 +120,18 @@ public sealed class DominatorAnalyzer(DumpSession session)
         for (int node = 0; node < nodeCount; node++)
         {
             int uRpo = rpoNumber[node];
-            if (uRpo < 0) continue;
+            if (uRpo < 0)
+            {
+                continue;
+            }
+
             foreach (int v in graph.Successors(node))
             {
                 int vRpo = rpoNumber[v];
-                if (vRpo >= 0) predEdges[cursor[vRpo]++] = uRpo;
+                if (vRpo >= 0)
+                {
+                    predEdges[cursor[vRpo]++] = uRpo;
+                }
             }
         }
 
@@ -139,7 +150,11 @@ public sealed class DominatorAnalyzer(DumpSession session)
                 for (int e = predOffsets[b]; e < predOffsets[b + 1]; e++)
                 {
                     int p = predEdges[e];
-                    if (idom[p] == -1) continue;
+                    if (idom[p] == -1)
+                    {
+                        continue;
+                    }
+
                     newIdom = newIdom == -1 ? p : Intersect(p, newIdom, idom);
                 }
                 if (newIdom != -1 && idom[b] != newIdom) { idom[b] = newIdom; changed = true; }

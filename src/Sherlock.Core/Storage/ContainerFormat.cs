@@ -4,7 +4,6 @@ namespace Sherlock.Core.Storage;
 
 public static class ContainerFormat
 {
-    /// <summary>File magic: ASCII <c>SHRK</c>.</summary>
     public static ReadOnlySpan<byte> Magic => "SHRK"u8;
 
     public const ushort FormatVersion = 1;
