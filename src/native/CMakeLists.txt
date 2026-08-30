@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.14)
+cmake_minimum_required(VERSION 3.16)
 
 project(SherlockProfiler CXX)
 
@@ -11,8 +11,7 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 option(SHERLOCK_ASAN "Build with Address/UndefinedBehavior sanitizers (dev/test)" OFF)
-# -march=native is unsafe for the shipped .so: it's injected into arbitrary processes that may run on
-# an older CPU. On by default only for local dev builds on the same machine.
+option(SHERLOCK_BUILD_TESTS "Build native unit tests" OFF)
 option(SHERLOCK_NATIVE_ARCH "Tune for the build machine's CPU (-march=native); unsafe for shipped builds" OFF)
 
 find_program(CCACHE_PROGRAM ccache)
@@ -45,12 +44,9 @@ if(NOT WIN32)
     if(SHERLOCK_NATIVE_ARCH)
         add_compile_options($<$<NOT:$<CONFIG:Debug>>:-march=native>)
     elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
-        # Portable x86-64 floor (SSE4.2/POPCNT, ~2010+). ARM64 has no equivalent sub-baseline, so it's x86-only.
         add_compile_options($<$<NOT:$<CONFIG:Debug>>:-march=x86-64-v2>)
     endif()
 
-    # Hide all symbols (only the DllGetClassObject/DllCanUnloadNow entry points are exported); initial-exec
-    # TLS for the dlopen'd lib's hot-path thread_locals.
     add_compile_options(-fvisibility=hidden -fvisibility-inlines-hidden -ftls-model=initial-exec)
     add_compile_options("-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.")
 endif()
@@ -65,7 +61,6 @@ endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_link_options(-Wl,-z,relro,-z,now)
     add_link_options(-Wl,--build-id)
-    # Carry our own C++ runtime so the injected .so can't clash with the target's (not under ASan).
     if(NOT SHERLOCK_ASAN)
         add_link_options(-static-libstdc++ -static-libgcc)
     endif()
@@ -95,5 +90,7 @@ endif(WIN32)
 
 add_library(SherlockProfiler SHARED ${SOURCES})
 
-enable_testing()
-add_subdirectory(tests)
+if(SHERLOCK_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()

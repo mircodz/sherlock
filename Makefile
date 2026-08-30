@@ -1,4 +1,4 @@
-.PHONY: help build build-release native test clean pack install uninstall reinstall setup all
+.PHONY: help build build-release native test test-native clean pack install uninstall reinstall setup all
 
 VERSION   := $(shell cat version)
 NUPKG_DIR := ./nupkgs
@@ -29,8 +29,13 @@ native: ## Build the native profiler and stage it under runtimes/<host-rid>/nati
 	mkdir -p $$dest; cp src/native/bin/$$lib $$dest/; \
 	echo "staged $$lib -> $$dest"
 
-test: ## Run all tests
+test: ## Run managed tests
 	dotnet test $(SOLUTION)
+
+test-native: ## Build and run native tests
+	cmake -S src/native -B src/native/out -DCMAKE_BUILD_TYPE=Release -DSHERLOCK_BUILD_TESTS=ON
+	cmake --build src/native/out --config Release
+	ctest --test-dir src/native/out -C Release --output-on-failure
 
 clean: ## Clean build artifacts
 	dotnet clean $(SOLUTION) || true
@@ -57,18 +62,5 @@ reinstall: uninstall install ## Reinstall the tool (clean install)
 
 setup: ## Restore packages
 	dotnet restore $(SOLUTION)
-
-# Release: bump the version file
-bump-major: ## Bump major version
-	@echo $(VERSION) | awk -F. '{print $$1+1".0.0"}' > version
-	@echo "Version: $(VERSION) -> $$(cat version)"
-
-bump-minor: ## Bump minor version
-	@echo $(VERSION) | awk -F. '{print $$1"."$$2+1".0"}' > version
-	@echo "Version: $(VERSION) -> $$(cat version)"
-
-bump-patch: ## Bump patch version
-	@echo $(VERSION) | awk -F. '{print $$1"."$$2"."$$3+1}' > version
-	@echo "Version: $(VERSION) -> $$(cat version)"
 
 all: clean build test ## Clean, build, and test

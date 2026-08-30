@@ -5,8 +5,39 @@ on:
     branches: [ main ]
   pull_request:
   workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_NOLOGO: true
 
 jobs:
+  managed:
+    name: managed ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore Sherlock.slnx
+
+      - name: Build (Release)
+        run: dotnet build Sherlock.slnx -c Release --no-restore --warnaserror
+
+      - name: Test (Release)
+        run: dotnet test tests/Sherlock.Core.Tests/Sherlock.Core.Tests.csproj -c Release --no-build --no-restore
+
   native:
     name: native ${{ matrix.rid }}
     runs-on: ${{ matrix.os }}
@@ -31,8 +62,11 @@ jobs:
           CC: clang
           CXX: clang++
         run: |
-          cmake -S src/native -B src/native/out -DCMAKE_BUILD_TYPE=Release
+          cmake -S src/native -B src/native/out -DCMAKE_BUILD_TYPE=Release -DSHERLOCK_BUILD_TESTS=ON
           cmake --build src/native/out --config Release
+
+      - name: Test (Release)
+        run: ctest --test-dir src/native/out -C Release --output-on-failure
 
       - name: Stage library under its RID
         shell: bash
@@ -47,22 +81,9 @@ jobs:
           name: native-${{ matrix.rid }}
           path: dist/
 
-  test:
-    name: managed tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-
-      - name: Test (Release)
-        run: dotnet test tests/Sherlock.Core.Tests/Sherlock.Core.Tests.csproj -c Release
-
   pack:
     name: pack dotnet tool
-    needs: native
+    needs: [managed, native]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -134,7 +134,8 @@ TEST(Profile, ChunkedCorrelationBinarySearchesAcrossChunks) {
 
     ContainerWriter cw;
     w.writeTo(cw, /*chunkBytes*/ 48); // 3 records/chunk → 4 chunks
-    ContainerReader c(asBytes(cw.finish()));
+    const std::string bytes = cw.finish();
+    ContainerReader c(asBytes(bytes));
     ASSERT_TRUE(c.valid());
     ASSERT_GE(c.findAll(SectionType::Correlation).size(), 2u); // actually chunked
 

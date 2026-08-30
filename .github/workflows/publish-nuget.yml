@@ -9,49 +9,12 @@ permissions:
   packages: write
 
 jobs:
-  native:
-    name: native ${{ matrix.rid }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { os: macos-14,         rid: osx-arm64,   lib: libSherlockProfiler.dylib }
-          # - { os: macos-13,         rid: osx-x64,     lib: libSherlockProfiler.dylib }
-          - { os: ubuntu-latest,    rid: linux-x64,   lib: libSherlockProfiler.so }
-          - { os: ubuntu-24.04-arm, rid: linux-arm64, lib: libSherlockProfiler.so }
-          - { os: windows-latest,   rid: win-x64,     lib: SherlockProfiler.dll }
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install clang (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y clang
-
-      - name: Configure & build (Release)
-        env:
-          CC: clang
-          CXX: clang++
-        run: |
-          cmake -S src/native -B src/native/out -DCMAKE_BUILD_TYPE=Release
-          cmake --build src/native/out --config Release
-
-      - name: Stage library under its RID
-        shell: bash
-        run: |
-          mkdir -p "dist/runtimes/${{ matrix.rid }}/native"
-          found="$(find src/native/out -name '${{ matrix.lib }}' -type f | head -1)"
-          test -n "$found" || { echo "library not found"; exit 1; }
-          cp "$found" "dist/runtimes/${{ matrix.rid }}/native/${{ matrix.lib }}"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: native-${{ matrix.rid }}
-          path: dist/
+  build:
+    uses: ./.github/workflows/ci.yml
 
   publish:
-    name: tag & publish
-    needs: native
+    name: publish
+    needs: build
     if: github.actor == 'mircodz'
     environment: publish
     runs-on: ubuntu-latest
@@ -80,28 +43,20 @@ jobs:
             exit 1
           fi
 
-      - name: Create and push tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "${{ steps.version.outputs.VERSION }}" -m "Release ${{ steps.version.outputs.VERSION }}"
-          git push origin "${{ steps.version.outputs.VERSION }}"
-
-      - name: Collect native libraries
+      - name: Download package
         uses: actions/download-artifact@v4
         with:
-          pattern: native-*
-          merge-multiple: true
-          path: dist
+          name: sherlock-tools-nupkg
+          path: ${{ env.OUT_DIR }}
 
-      - name: Stage libraries into the tool project
+      - name: Verify package
         run: |
-          mkdir -p src/Sherlock.CLI/runtimes
-          cp -r dist/runtimes/* src/Sherlock.CLI/runtimes/
-          find src/Sherlock.CLI/runtimes -type f
-
-      - name: Pack
-        run: dotnet pack src/Sherlock.CLI -c Release -o $OUT_DIR /p:Version=${{ steps.version.outputs.VERSION }}
+          test -f "$OUT_DIR/sherlock-tools.${{ steps.version.outputs.VERSION }}.nupkg"
+          dotnet tool install --tool-path artifacts/tool \
+            --add-source "$OUT_DIR" \
+            sherlock-tools \
+            --version "${{ steps.version.outputs.VERSION }}"
+          artifacts/tool/sl --help
 
       - name: NuGet login
         id: nuget_login
@@ -125,3 +80,12 @@ jobs:
             --source "https://nuget.pkg.github.com/${OWNER}/index.json" \
             --api-key "$GITHUB_TOKEN" \
             --skip-duplicate
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.version.outputs.VERSION }}" "$OUT_DIR"/*.nupkg \
+            --target "$GITHUB_SHA" \
+            --title "Sherlock ${{ steps.version.outputs.VERSION }}" \
+            --generate-notes
