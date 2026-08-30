@@ -115,7 +115,7 @@ public sealed class ProcessSupervisor : IDisposable
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
-        
+
         foreach (string arg in args)
         {
             psi.ArgumentList.Add(arg);

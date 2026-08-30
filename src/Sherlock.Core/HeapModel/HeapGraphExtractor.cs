@@ -36,7 +36,7 @@ public sealed class HeapGraphExtractor(DumpSession session)
         IMemoryReader reader = session.DataTarget.DataReader;
         int pointerSize = reader.PointerSize;
         uint minObjSize = (uint)(pointerSize * 3);
-        
+
         static ulong Align(ulong size) => (size + 7) & ~7UL; // object alignment is 8 on 64-bit
 
         // --- Metadata (ClrMD, once): allocation-context gaps, address-ordered segments, per-type layout. ---
@@ -45,7 +45,7 @@ public sealed class HeapGraphExtractor(DumpSession session)
         {
             allocContexts[r.Start] = r.End;
         }
-        
+
         ClrSegment[] segments = heap.Segments
             .Where(s => s.ObjectRange.Length > 0)
             .OrderBy(s => s.ObjectRange.Start)
@@ -125,10 +125,10 @@ public sealed class HeapGraphExtractor(DumpSession session)
         var index = new AddressIndex(addresses);
 
         // --- 2. Reference walk (raw, parallel): apply each type's GCDesc to raw object bytes. ---
-        int workers = session.DataTarget.DataReader.IsThreadSafe 
-            ? Math.Clamp(Environment.ProcessorCount, 1, MaxWorkers) 
+        int workers = session.DataTarget.DataReader.IsThreadSafe
+            ? Math.Clamp(Environment.ProcessorCount, 1, MaxWorkers)
             : 1;
-        
+
         var blockDegrees = new int[workers][];
         var blockEdges = new int[workers][];
         Parallel.For(0, workers, w =>
@@ -148,7 +148,7 @@ public sealed class HeapGraphExtractor(DumpSession session)
                     ArrayPool<byte>.Shared.Return(buffer);
                     buffer = ArrayPool<byte>.Shared.Rent((int)size);
                 }
-                
+
                 if (reader.Read(addresses[i], buffer.AsSpan(0, (int)size)) < (int)size)
                 {
                     degrees[i - lo] = 0;
@@ -162,10 +162,10 @@ public sealed class HeapGraphExtractor(DumpSession session)
                     int v = index.IndexOf(reference);
                     if (v >= 0) { edges.Add(v); degree++; }
                 }
-                
+
                 degrees[i - lo] = degree;
             }
-            
+
             ArrayPool<byte>.Shared.Return(buffer);
             blockDegrees[w] = degrees;
             blockEdges[w] = edges.ToArray();

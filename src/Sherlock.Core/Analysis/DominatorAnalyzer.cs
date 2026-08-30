@@ -38,7 +38,7 @@ public sealed class DominatorAnalyzer(DumpSession session)
         // re-enters the DAC to name a node. Falls back to ClrMD when the graph has no types.
         Func<ulong, string>? typeNames = graph.HasTypes
             ? address => { int id = graph.IndexOf(address); return id >= 0 ? graph.TypeNameOf(id) ?? "<unknown>" : "<unknown>"; }
-            : null;
+        : null;
 
         return new DominatorTree(session.Runtime.Heap, r.Address, r.Own, r.Retained, r.Idom, rpoOf, typeNames);
     }

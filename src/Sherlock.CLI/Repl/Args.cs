@@ -1,5 +1,5 @@
-using Sherlock.Core;
 using Sherlock.CLI.Rendering;
+using Sherlock.Core;
 
 namespace Sherlock.CLI.Repl;
 

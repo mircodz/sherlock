@@ -91,11 +91,11 @@ public static class LineEditor
                         continue;
 
                     case ConsoleKey.W: // kill previous word
-                    {
-                        int start = PrevWord(buffer, pos);
-                        if (start < pos) { buffer.Remove(start, pos - start); pos = start; Render(prompt, buffer, pos); }
-                        continue;
-                    }
+                        {
+                            int start = PrevWord(buffer, pos);
+                            if (start < pos) { buffer.Remove(start, pos - start); pos = start; Render(prompt, buffer, pos); }
+                            continue;
+                        }
 
                     case ConsoleKey.L: // clear screen, keep the line
                         Console.Write($"{Esc}[2J{Esc}[H");

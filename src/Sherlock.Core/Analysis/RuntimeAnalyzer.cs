@@ -20,7 +20,7 @@ public sealed class RuntimeAnalyzer(DumpSession session)
                 Size: module.Size,
                 IsDynamic: module.IsDynamic));
         }
-        
+
         return modules
             .OrderBy(m => Path.GetFileName(m.Name), StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -37,7 +37,7 @@ public sealed class RuntimeAnalyzer(DumpSession session)
                 Length: segment.Length,
                 Kind: segment.Kind.ToString()));
         }
-        
+
         return segments
             .OrderBy(s => s.Kind, StringComparer.Ordinal)
             .ThenBy(s => s.Start)

@@ -4,19 +4,19 @@ using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Sherlock.Core;
-using Sherlock.Core.Analysis;
-using Sherlock.Core.Diagnostics;
-using Sherlock.Core.Profiling;
-using Sherlock.Core.Store;
-using Cellar.Widgets.Charts;
 using Cellar.Layout;
 using Cellar.Primitives;
 using Cellar.Terminal;
 using Cellar.Text;
 using Cellar.Theming;
 using Cellar.Widgets;
+using Cellar.Widgets.Charts;
 using Cellar.Widgets.Charts.Trees;
+using Sherlock.Core;
+using Sherlock.Core.Analysis;
+using Sherlock.Core.Diagnostics;
+using Sherlock.Core.Profiling;
+using Sherlock.Core.Store;
 
 namespace Sherlock.CLI.Tui;
 
@@ -285,7 +285,8 @@ public static class SnapshotExplorer
             {
                 return new Panel(new Padding(new Label(new StyledText(
                     "No allocation profile in this snapshot. Capture with `run --profile` or `run --correlate`.", Theme.Current.MutedStyle)), new Thickness(1)),
-                    " Allocations ") { BorderStyle = BorderStyle.Rounded };
+                    " Allocations ")
+                { BorderStyle = BorderStyle.Rounded };
             }
 
             // Inner tabs are lazy too: the call-tree flamegraph and hot-methods table each fold the
@@ -351,7 +352,8 @@ public static class SnapshotExplorer
             {
                 return new Panel(new Padding(new Label(new StyledText(
                     "No allocation profile in this snapshot. Capture with `run --profile` or `run --correlate`.", Theme.Current.MutedStyle)), new Thickness(1)),
-                    " Call tree ") { BorderStyle = BorderStyle.Rounded };
+                    " Call tree ")
+                { BorderStyle = BorderStyle.Rounded };
             }
             AllocationTreeNode root = AllocationTreeNode.Build(profile.OfType(typeName));
             return Hinted(new Panel(AllocTreeTable(snap, root.Children, root.AllocBytes), $" Where {Short(typeName)} came from — {ByteFormat.Human(root.AllocBytes)} ") { BorderStyle = BorderStyle.Rounded },

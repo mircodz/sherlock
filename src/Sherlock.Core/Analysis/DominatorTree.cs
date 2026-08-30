@@ -99,7 +99,7 @@ public sealed class DominatorTree
             .OrderByDescending(rpo => _retained[rpo])
             .Take(maxNodes)
             .ToList();
-        
+
         var included = new HashSet<int>(top);
 
         var nodes = new List<DominatorGraphNode>(top.Count);

@@ -168,7 +168,8 @@ public sealed class HeapDoctor(DumpSession session)
 
         findings.Add(new Finding(FindingSeverity.Info, "growth",
             $"{suspect.Count:N0} instances of {ShortType(suspect.TypeName)} ({Bytes(suspect.TotalSize)})",
-            "A large population - check for unbounded growth (a cache or list that never shrinks).")        {
+            "A large population - check for unbounded growth (a cache or list that never shrinks).")
+        {
             Type = suspect.TypeName,
             Bytes = (long)suspect.TotalSize,
             Count = suspect.Count,

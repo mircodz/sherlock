@@ -207,10 +207,10 @@ public sealed class SnapshotStore
         {
             TryDeleteDir(snap.Dir); // the bundle folder (heap.dmp + allocations + correlation)
         }
-        
+
         WriteMetadata(owner);
         Save();
-        
+
         return true;
     }
 
@@ -247,8 +247,8 @@ public sealed class SnapshotStore
 
     private static void TryDeleteDir(string dir)
     {
-        try 
-        { 
+        try
+        {
             if (Directory.Exists(dir))
             {
                 Directory.Delete(dir, recursive: true);
@@ -270,7 +270,7 @@ public sealed class SnapshotStore
         {
             // A corrupt catalog shouldn't brick the tool; start fresh.
         }
-        
+
         return new Catalog();
     }
 

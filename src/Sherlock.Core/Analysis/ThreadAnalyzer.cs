@@ -49,7 +49,7 @@ public sealed class ThreadAnalyzer(DumpSession session)
                 names.Add(flag.ToString().Replace("TS_", ""));
             }
         }
-        
+
         return names.Count == 0 ? $"0x{bits:x}" : string.Join(",", names);
     }
 
@@ -63,7 +63,7 @@ public sealed class ThreadAnalyzer(DumpSession session)
                 ?? "<unknown>";
             frames.Add(new StackFrameInfo(frame.InstructionPointer, description));
         }
-        
+
         return frames;
     }
 }

@@ -55,7 +55,7 @@ public static class ProfilerLibrary
         string os = OperatingSystem.IsWindows() ? "win"
             : OperatingSystem.IsMacOS() ? "osx"
             : "linux";
-        
+
         string arch = RuntimeInformation.ProcessArchitecture switch
         {
             Architecture.X64 => "x64",
@@ -64,7 +64,7 @@ public static class ProfilerLibrary
             Architecture.Arm => "arm",
             _ => RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(),
         };
-        
+
         return os + "-" + arch;
     }
 }

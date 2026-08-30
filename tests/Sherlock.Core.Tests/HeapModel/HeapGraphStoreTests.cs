@@ -165,6 +165,7 @@ public sealed class HeapGraphStoreTests : IDisposable
 
         Assert.True(loaded.HasTypes);
         Assert.Equal([0, 1, 1, 2], loaded.TypeIds!.Value.ToArray());
+        Assert.NotNull(loaded.TypeNames);
         Assert.Equal(["System.String", "MyApp.Node", "System.Byte[]"], loaded.TypeNames);
         Assert.Equal("System.String", loaded.TypeNameOf(0));
         Assert.Equal("MyApp.Node", loaded.TypeNameOf(1));

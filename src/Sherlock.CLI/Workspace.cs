@@ -113,7 +113,7 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
                 (captured ??= []).Add((entry, probe));
             }
         }
-        
+
         return (IReadOnlyList<(SnapshotEntry, string)>?)captured ?? [];
     }
 
@@ -141,7 +141,7 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
         {
             Load(session, entry);
         }
-        
+
         return entry;
     }
 
@@ -196,7 +196,7 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
         {
             return existing;
         }
-        
+
         return Store.BeginSession(fallbackKind, target.RootName);
     }
 
