@@ -90,6 +90,10 @@ endif(WIN32)
 
 add_library(SherlockProfiler SHARED ${SOURCES})
 
+if(WIN32)
+    target_link_libraries(SherlockProfiler PRIVATE ws2_32)
+endif()
+
 if(SHERLOCK_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)

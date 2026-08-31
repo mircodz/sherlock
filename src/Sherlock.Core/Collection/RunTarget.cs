@@ -39,7 +39,7 @@ public sealed record RunOptions
 }
 
 /// <summary>A launched process tree and its profiler connection.</summary>
-public sealed class RunTarget : IDisposable
+public sealed partial class RunTarget : IDisposable
 {
     private Process? _root;
     private readonly HashSet<string> _seenAllocations = [];
@@ -472,6 +472,11 @@ public sealed class RunTarget : IDisposable
 
     private static Dictionary<int, List<int>> ChildrenByParent()
     {
+        if (OperatingSystem.IsWindows())
+        {
+            return WindowsChildrenByParent();
+        }
+
         var map = new Dictionary<int, List<int>>();
         try
         {
@@ -500,9 +505,81 @@ public sealed class RunTarget : IDisposable
         }
         catch
         {
-            // No `ps` (e.g. Windows): the tree collapses to just the root.
+            // Process discovery is advisory; the launched root remains usable.
         }
         return map;
+    }
+
+    private static Dictionary<int, List<int>> WindowsChildrenByParent()
+    {
+        var map = new Dictionary<int, List<int>>();
+        nint snapshot = WindowsProcessSnapshot.CreateToolhelp32Snapshot(WindowsProcessSnapshot.Process, 0);
+        if (snapshot == -1)
+        {
+            return map;
+        }
+
+        try
+        {
+            var entry = new WindowsProcessSnapshot.ProcessEntry { Size = (uint)Marshal.SizeOf<WindowsProcessSnapshot.ProcessEntry>() };
+            if (!WindowsProcessSnapshot.Process32First(snapshot, ref entry))
+            {
+                return map;
+            }
+
+            do
+            {
+                if (entry.ProcessId > int.MaxValue || entry.ParentProcessId > int.MaxValue)
+                {
+                    continue;
+                }
+                int pid = (int)entry.ProcessId;
+                int parent = (int)entry.ParentProcessId;
+                (map.TryGetValue(parent, out List<int>? children) ? children : map[parent] = []).Add(pid);
+                entry.Size = (uint)Marshal.SizeOf<WindowsProcessSnapshot.ProcessEntry>();
+            }
+            while (WindowsProcessSnapshot.Process32Next(snapshot, ref entry));
+        }
+        finally
+        {
+            WindowsProcessSnapshot.CloseHandle(snapshot);
+        }
+        return map;
+    }
+
+    private static partial class WindowsProcessSnapshot
+    {
+        public const uint Process = 0x00000002;
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        public unsafe struct ProcessEntry
+        {
+            public uint Size;
+            public uint Usage;
+            public uint ProcessId;
+            public nuint DefaultHeapId;
+            public uint ModuleId;
+            public uint Threads;
+            public uint ParentProcessId;
+            public int BasePriority;
+            public uint Flags;
+            public fixed char ExeFile[260];
+        }
+
+        [LibraryImport("kernel32.dll", SetLastError = true)]
+        public static partial nint CreateToolhelp32Snapshot(uint flags, uint processId);
+
+        [LibraryImport("kernel32.dll", EntryPoint = "Process32FirstW", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static partial bool Process32First(nint snapshot, ref ProcessEntry entry);
+
+        [LibraryImport("kernel32.dll", EntryPoint = "Process32NextW", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static partial bool Process32Next(nint snapshot, ref ProcessEntry entry);
+
+        [LibraryImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static partial bool CloseHandle(nint handle);
     }
 
     private (bool Ok, string[] Fields) Request(int pid, string cmd, TimeSpan timeout, params string[] args) =>

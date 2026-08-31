@@ -14,6 +14,7 @@ namespace Sherlock.Core.Collection;
 internal sealed class ProfilerControl : IDisposable
 {
     private const int MaxFrameBytes = 16 * 1024 * 1024;
+    private static readonly TimeSpan MaxClientWait = TimeSpan.FromSeconds(10);
     internal const string EmitCorrelation = "emit-correlation";
     internal const string FlushAllocations = "flush-allocations";
     internal const string ArmTrigger = "arm-trigger";
@@ -65,7 +66,7 @@ internal sealed class ProfilerControl : IDisposable
 
     public async Task<(bool Ok, string[] Fields)> RequestAsync(int pid, string cmd, TimeSpan timeout, params string[] args)
     {
-        Client? client = await WaitForClientAsync(pid, timeout);
+        Client? client = await WaitForClientAsync(pid, timeout < MaxClientWait ? timeout : MaxClientWait);
         if (client is null)
         {
             return (false, []);

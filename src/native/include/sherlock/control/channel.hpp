@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -15,6 +16,18 @@ class Logger;
 }
 
 namespace Sherlock::control {
+
+// Storage for the OS socket handle. Windows' SOCKET is an unsigned, pointer-width handle (not a
+// small int, and its invalid value is all-bits-set rather than -1), so it can't be stored in an
+// `int` without truncation/UB on 64-bit. We use a plain uintptr_t here (rather than <winsock2.h>'s
+// SOCKET) so this header never pulls in Windows headers - channel.cpp owns the winsock2.h/windows.h
+// include order.
+#ifdef _WIN32
+using SocketHandle = std::uintptr_t;
+#else
+using SocketHandle = int;
+#endif
+inline constexpr SocketHandle kInvalidSocket = static_cast<SocketHandle>(-1); // matches INVALID_SOCKET's bit pattern too
 
 /// A handler's answer to a request: ok + optional detail, or an error message.
 struct Reply {
@@ -54,20 +67,23 @@ public:
 
     void stop();
 
-    [[nodiscard]] bool connected() const { return fd_.load(std::memory_order_acquire) >= 0; }
+    [[nodiscard]] bool connected() const { return fd_.load(std::memory_order_acquire) != kInvalidSocket; }
 
 private:
     void serve();
     bool sendAll(std::span<const char> bytes); // best-effort; callers ignore the result
 
     Logger* logger_;
-    // The socket fd is read on the worker thread (serve/sendAll) and by connected() from other
+    // The socket handle is read on the worker thread (serve/sendAll) and by connected() from other
     // threads, while stop() closes and resets it — make it atomic to avoid a torn/racy read.
-    std::atomic<int> fd_{-1};
+    std::atomic<SocketHandle> fd_{kInvalidSocket};
     Handler handler_;
     std::atomic<bool> running_{false};
     std::thread worker_;
-    std::mutex writeMutex_;
+    std::mutex writeMutex_; // also serializes stop()'s close() against an in-flight sendAll()
+#ifdef _WIN32
+    bool wsaOwned_ = false; // true once this instance has bumped the process-wide WSAStartup refcount
+#endif
 };
 
 } // namespace Sherlock::control

@@ -30,7 +30,7 @@ native: ## Build the native profiler and stage it under runtimes/<host-rid>/nati
 	echo "staged $$lib -> $$dest"
 
 test: ## Run managed tests
-	dotnet test $(SOLUTION)
+	dotnet test --solution $(SOLUTION)
 
 test-native: ## Build and run native tests
 	cmake -S src/native -B src/native/out -DCMAKE_BUILD_TYPE=Release -DSHERLOCK_BUILD_TESTS=ON

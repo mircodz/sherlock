@@ -317,12 +317,22 @@ TEST(AggregatorSnapshot, RepeatedProfilesAreIndependentAndParseable) {
 TEST(AggregatorSnapshot, DumpIsSafeWhileAnotherThreadRecords) {
     Aggregator aggregator(nullptr, nullptr);
     std::atomic<std::uint64_t> recorded{0};
-    std::jthread writer([&](std::stop_token stop) {
-        while (!stop.stop_requested()) {
+    std::atomic<bool> stop{false};
+    std::thread writer([&] {
+        while (!stop.load(std::memory_order_relaxed)) {
             std::uint64_t n = recorded.fetch_add(1, std::memory_order_relaxed);
             alloc(aggregator, 0x1000 + n * 0x20);
         }
     });
+    struct WriterGuard {
+        std::atomic<bool>& stop;
+        std::thread& writer;
+        ~WriterGuard() {
+            stop.store(true, std::memory_order_relaxed);
+            if (writer.joinable())
+                writer.join();
+        }
+    } guard{stop, writer};
 
     while (recorded.load(std::memory_order_relaxed) < 100) {
         std::this_thread::yield();
@@ -340,8 +350,6 @@ TEST(AggregatorSnapshot, DumpIsSafeWhileAnotherThreadRecords) {
         std::filesystem::remove(path);
     }
 
-    writer.request_stop();
-    writer.join();
 }
 
 TEST(AggregatorSnapshot, WriteFailureIsReportedAndLeavesNoTemporaryFile) {

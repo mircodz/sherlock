@@ -36,7 +36,7 @@ jobs:
         run: dotnet build Sherlock.slnx -c Release --no-restore --warnaserror
 
       - name: Test (Release)
-        run: dotnet test tests/Sherlock.Core.Tests/Sherlock.Core.Tests.csproj -c Release --no-build --no-restore
+        run: dotnet test --project tests/Sherlock.Core.Tests/Sherlock.Core.Tests.csproj --configuration Release --no-build --no-restore
 
   native:
     name: native ${{ matrix.rid }}
@@ -46,7 +46,6 @@ jobs:
       matrix:
         include:
           - { os: macos-14,         rid: osx-arm64,   lib: libSherlockProfiler.dylib }
-          # - { os: macos-13,         rid: osx-x64,     lib: libSherlockProfiler.dylib }
           - { os: ubuntu-latest,    rid: linux-x64,   lib: libSherlockProfiler.so }
           - { os: ubuntu-24.04-arm, rid: linux-arm64, lib: libSherlockProfiler.so }
           - { os: windows-latest,   rid: win-x64,     lib: SherlockProfiler.dll }
