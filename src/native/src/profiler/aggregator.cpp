@@ -513,7 +513,7 @@ bool Aggregator::emitCorrelation(const std::string& path) noexcept {
             return false;
         }
         if (logger_) {
-            logger_->info("wrote provenance ({} stacks, {} live objects) to {}", merged.size(), live.size(), path);
+            logger_->trace("wrote provenance ({} stacks, {} live objects) to {}", merged.size(), live.size(), path);
         }
         return true;
     } catch (const std::exception& ex) {
@@ -540,7 +540,7 @@ bool Aggregator::dump(const std::string& path) noexcept {
             return false;
         }
         if (logger_) {
-            logger_->info("wrote {} stacks to {}", merged.size(), path);
+            logger_->trace("wrote {} stacks to {}", merged.size(), path);
         }
         return true;
     } catch (const std::exception& ex) {

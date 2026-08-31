@@ -157,7 +157,7 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
                 while (!one.empty() && (one.back() == ' ' || one.back() == '\t')) one.pop_back();
                 if (!one.empty()) armTrigger(one, false);
             }
-            logger->info("snapshot-on: {}", triggerEnv);
+            logger->trace("snapshot-on: {}", triggerEnv);
         }
     }
 
@@ -191,13 +191,13 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
                     fireTrigger((phase == ProbePhase::Enter ? "call:" : "call-exit:") + name);
                 });
             }
-            logger->info("control channel connected");
+            logger->trace("control channel connected");
         }
     }
 
     isInitialized = true;
 
-    logger->info("profiler initialized; aggregating allocations by call stack");
+    logger->trace("profiler initialized; aggregating allocations by call stack");
     return S_OK;
 }
 
@@ -331,11 +331,11 @@ HRESULT STDMETHODCALLTYPE Profiler::Shutdown() {
     if (control) {
         control->stop(); // stop serving requests before we tear down the aggregator
     }
-    logger->info(
+    logger->trace(
         "profiler shutting down: {} allocations, {} bytes",
         totalAllocations.load(), totalBytes.load());
     if (shadowInstr) {
-        logger->info(
+        logger->trace(
             "shadow-stack instrumentation: {} methods instrumented, {} skipped",
             shadowInstr->instrumentedCount(), shadowInstr->skippedCount());
     }

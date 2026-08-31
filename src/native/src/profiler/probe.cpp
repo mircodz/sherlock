@@ -288,7 +288,7 @@ std::size_t ProbeManager::resolveInModule(ModuleID moduleId, bool requestRejit) 
         return 0;
     }
     if (logger_) {
-        logger_->info("armed {} method(s) for probing", reToks.size());
+        logger_->trace("armed {} method(s) for probing", reToks.size());
     }
     return reToks.size();
 }

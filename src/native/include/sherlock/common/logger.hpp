@@ -12,12 +12,14 @@ namespace Sherlock {
 class Logger {
 public:
     enum class LogLevel {
-        Info = 0,
-        Warning = 1,
-        Error = 2,
+        Trace = 0,
+        Info = 1,
+        Warning = 2,
+        Error = 3,
+        Off = 4,
     };
 
-    Logger() = default;
+    Logger() noexcept;
 
     Logger(const Logger&) = delete;
     Logger& operator=(const Logger&) = delete;
@@ -25,9 +27,15 @@ public:
     void setLogLevel(LogLevel level) { min_level_.store(level, std::memory_order_relaxed); }
     LogLevel getLogLevel() const { return min_level_.load(std::memory_order_relaxed); }
 
+    void trace(std::string_view message) noexcept { write(LogLevel::Trace, message); }
     void info(std::string_view message) noexcept { write(LogLevel::Info, message); }
     void warn(std::string_view message) noexcept { write(LogLevel::Warning, message); }
     void error(std::string_view message) noexcept { write(LogLevel::Error, message); }
+
+    template <typename... Args>
+    void trace(std::format_string<Args...> format, Args&&... args) noexcept {
+        writeFormatted(LogLevel::Trace, format, std::forward<Args>(args)...);
+    }
 
     template <typename... Args>
     void info(std::format_string<Args...> format, Args&&... args) noexcept {
@@ -66,7 +74,7 @@ private:
     void writeEnabled(LogLevel level, std::string_view message) noexcept;
     static std::string_view levelName(LogLevel level) noexcept;
 
-    std::atomic<LogLevel> min_level_{LogLevel::Info};
+    std::atomic<LogLevel> min_level_{LogLevel::Warning};
     std::mutex mutex_;
 };
 

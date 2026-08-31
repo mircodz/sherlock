@@ -500,7 +500,7 @@ void ShadowStackInstrumenter::onModuleLoaded(ModuleID moduleId) {
         return;
     HRESULT hr = info_->RequestReJIT(static_cast<ULONG>(reToks.size()), reMods.data(), reToks.data());
     if (logger_) {
-        logger_->info(
+        logger_->trace(
             "shadow ReJIT requested {} method(s), hr=0x{:08x}",
             reToks.size(), static_cast<unsigned>(hr));
     }
