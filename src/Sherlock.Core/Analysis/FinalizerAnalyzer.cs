@@ -11,7 +11,7 @@ namespace Sherlock.Core.Analysis;
 /// never ran (a proper Dispose calls <c>GC.SuppressFinalize</c>), so a large population is the classic
 /// "forgot to dispose" leak, and those objects survive an extra GC.
 /// </summary>
-public sealed class FinalizerAnalyzer(DumpSession session)
+public sealed class FinalizerAnalyzer(Snapshot snapshot)
 {
     public FinalizerReport Analyze(CancellationToken cancellation = default)
     {
@@ -19,7 +19,7 @@ public sealed class FinalizerAnalyzer(DumpSession session)
         long total = 0;
         ulong totalBytes = 0;
 
-        foreach (ClrObject obj in session.Runtime.Heap.EnumerateFinalizableObjects())
+        foreach (ClrObject obj in snapshot.Runtime.Heap.EnumerateFinalizableObjects())
         {
             cancellation.ThrowIfCancellationRequested();
             if (obj.Type is not { } type)

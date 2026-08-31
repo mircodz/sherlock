@@ -20,7 +20,7 @@ public enum DumpKind
 /// <summary>
 /// Collects a memory dump from a live .NET process over the diagnostics IPC channel. The runtime
 /// writes the dump in-process (its own <c>createdump</c>), producing a minidump that
-/// <see cref="DumpSession"/> can open directly.
+/// <see cref="Snapshot"/> can open directly.
 /// </summary>
 public static class DumpCollector
 {

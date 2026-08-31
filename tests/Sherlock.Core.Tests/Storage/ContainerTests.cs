@@ -3,6 +3,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using Sherlock.Core.Storage;
 using Sherlock.Core.Tests.Common;
+using Xunit;
 
 namespace Sherlock.Core.Tests.Storage;
 
@@ -159,5 +160,20 @@ public class ContainerTests : IDisposable
             Column<uint> col = r.GetColumn<uint>(SectionType.Frames);
             Assert.Equal(new uint[] { 9, 8, 7, 6 }, col.AsMemory().ToArray());
         }
+    }
+
+    [Fact]
+    public void SaveAtomicallyReplacesTheFile()
+    {
+        string path = _tmp.File();
+        File.WriteAllText(path, "old");
+        var writer = new ContainerWriter();
+        writer.AddRecords(SectionType.GraphSizes, 1, new uint[] { 1, 2, 3 });
+
+        writer.Save(path);
+
+        using var slab = SlabFile.Open(path);
+        Assert.Equal(new uint[] { 1, 2, 3 }, slab.GetColumn<uint>(SectionType.GraphSizes).AsMemory().ToArray());
+        Assert.Empty(Directory.EnumerateFiles(_tmp.Path, "*.tmp"));
     }
 }

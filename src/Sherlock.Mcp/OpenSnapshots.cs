@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using Sherlock.Core;
+using Sherlock.Core.Store;
 
 namespace Sherlock.Mcp;
 
@@ -9,7 +10,7 @@ namespace Sherlock.Mcp;
 /// Caches open snapshots for the server's lifetime so repeated queries reuse the loaded dump.
 /// Queries are serialized: ClrMD (and the cached analyses) are not thread-safe.
 /// </summary>
-public sealed class OpenSnapshots(SnapshotLibrary library) : IDisposable
+public sealed class OpenSnapshots(SnapshotStore store) : IDisposable
 {
     private readonly Dictionary<string, Snapshot> _cache = [];
     private readonly Lock _gate = new();
@@ -21,7 +22,7 @@ public sealed class OpenSnapshots(SnapshotLibrary library) : IDisposable
         {
             if (!_cache.TryGetValue(idOrLabel, out Snapshot? snapshot))
             {
-                snapshot = library.Open(idOrLabel);
+                snapshot = store.Open(idOrLabel);
                 _cache[idOrLabel] = snapshot;
             }
             return query(snapshot);

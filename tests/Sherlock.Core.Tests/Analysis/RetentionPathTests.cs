@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Sherlock.Core.Analysis;
 using Sherlock.Core.HeapModel;
+using Xunit;
 
 namespace Sherlock.Core.Tests.Analysis;
 
@@ -39,8 +40,7 @@ public sealed class RetentionPathTests
         return new HeapGraph(addresses, sizes, offsets, edgeList.ToArray(), typeIds, typeNames);
     }
 
-    // Constructs a graph-backed DominatorTree (no ClrMD) from a computed result — mirrors
-    // DominatorAnalyzer.Build but without a DumpSession.
+    // Constructs a graph-backed DominatorTree without opening a dump.
     private static DominatorTree TreeOf(HeapGraph g)
     {
         DominatorAnalyzer.DominatorResult r = DominatorAnalyzer.Compute(g);

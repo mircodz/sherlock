@@ -119,8 +119,22 @@ public sealed class ContainerWriter
     /// <summary>Writes the container to a file, streaming (so it supports files &gt; 2&nbsp;GB).</summary>
     public void Save(string path)
     {
-        using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20);
-        WriteTo(fs);
+        string tmp = $"{path}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            using (var file = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 20))
+            {
+                WriteTo(file);
+                file.Flush(flushToDisk: true);
+            }
+            File.Move(tmp, path, overwrite: true);
+        }
+        finally
+        {
+            try { File.Delete(tmp); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
     }
 
     /// <summary>Materializes the whole container as one array. Only valid for containers under

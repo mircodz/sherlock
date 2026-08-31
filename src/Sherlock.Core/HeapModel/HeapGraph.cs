@@ -55,6 +55,7 @@ public sealed class HeapGraph : IDisposable
     private readonly IDisposable? _backing;
 
     private AddressIndex? _index; // lazy address→id acceleration
+    private bool _disposed;
 
     public HeapGraph(ReadOnlyMemory<ulong> addresses, ReadOnlyMemory<uint> sizes, ReadOnlyMemory<long> offsets, EdgeColumn edges,
         ReadOnlyMemory<int>? typeIds = null, string[]? typeNames = null, ulong freeBytes = 0, long freeCount = 0,
@@ -100,7 +101,15 @@ public sealed class HeapGraph : IDisposable
         return wide;
     }
 
-    public void Dispose() => _backing?.Dispose();
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+        _disposed = true;
+        _backing?.Dispose();
+    }
 
     /// <summary>Number of real objects (excludes the synthetic root).</summary>
     public int ObjectCount => Addresses.Length;
@@ -114,6 +123,7 @@ public sealed class HeapGraph : IDisposable
     /// <summary>The outbound edges of a node (object references, or GC roots for <see cref="Root"/>).</summary>
     public ReadOnlySpan<int> Successors(int node)
     {
+        ThrowIfDisposed();
         ReadOnlySpan<long> offsets = Offsets.Span;
         long start = offsets[node];
         return Edges.Slice(start, (int)(offsets[node + 1] - start)); // out-degree always fits int
@@ -121,11 +131,18 @@ public sealed class HeapGraph : IDisposable
 
     /// <summary>The dense id of an object address, or -1 if there is no such object (a lazy
     /// <see cref="AddressIndex"/> built on first use).</summary>
-    public int IndexOf(ulong address) => (_index ??= new AddressIndex(Addresses)).IndexOf(address);
+    public int IndexOf(ulong address)
+    {
+        ThrowIfDisposed();
+        return (_index ??= new AddressIndex(Addresses)).IndexOf(address);
+    }
 
     /// <summary>The type name of an object id, or null if the graph carries no type column.</summary>
-    public string? TypeNameOf(int objectId) =>
-        TypeIds is { } ids && TypeNames is { } names ? names[ids.Span[objectId]] : null;
+    public string? TypeNameOf(int objectId)
+    {
+        ThrowIfDisposed();
+        return TypeIds is { } ids && TypeNames is { } names ? names[ids.Span[objectId]] : null;
+    }
 
     private ulong _contentHash;
     private bool _hashed;
@@ -140,6 +157,7 @@ public sealed class HeapGraph : IDisposable
     {
         get
         {
+            ThrowIfDisposed();
             if (_hashed)
             {
                 return _contentHash;
@@ -177,6 +195,7 @@ public sealed class HeapGraph : IDisposable
     /// Computed directly off the graph, no ClrMD heap walk.</summary>
     public (string TypeName, long Count, ulong TotalSize)[]? Histogram()
     {
+        ThrowIfDisposed();
         if (TypeIds is not { } idsMem || TypeNames is not { } names)
         {
             return null;
@@ -205,5 +224,10 @@ public sealed class HeapGraph : IDisposable
             result[names.Length] = ("Free", FreeCount, FreeBytes);
         }
         return result;
+    }
+
+    private void ThrowIfDisposed()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
     }
 }

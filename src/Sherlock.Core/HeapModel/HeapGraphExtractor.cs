@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -22,7 +23,7 @@ namespace Sherlock.Core.HeapModel;
 /// thread-safe), so this scales across cores.</item>
 /// </list>
 /// </summary>
-public sealed class HeapGraphExtractor(DumpSession session)
+public sealed class HeapGraphExtractor(Snapshot snapshot)
 {
     private const int MaxWorkers = 16;
 
@@ -32,8 +33,8 @@ public sealed class HeapGraphExtractor(DumpSession session)
 
     public HeapGraph Extract(CancellationToken cancellationToken = default)
     {
-        ClrHeap heap = session.Runtime.Heap;
-        IMemoryReader reader = session.DataTarget.DataReader;
+        ClrHeap heap = snapshot.Runtime.Heap;
+        IMemoryReader reader = snapshot.DataTarget.DataReader;
         int pointerSize = reader.PointerSize;
         uint minObjSize = (uint)(pointerSize * 3);
 
@@ -68,13 +69,13 @@ public sealed class HeapGraphExtractor(DumpSession session)
             {
                 if (!reader.ReadPointer(obj, out ulong mtRaw) || mtRaw == 0)
                 {
-                    break;
+                    throw new InvalidDataException($"Could not read an object method table at 0x{obj:x}.");
                 }
                 int typeIndex = types.IndexOf(mtRaw & ~7UL);
                 ref readonly TypeInfo t = ref types[typeIndex];
-                if (t.BaseSize == 0)
+                if (t.BaseSize <= 0)
                 {
-                    break; // unresolvable method table; stop this segment
+                    throw new InvalidDataException($"Could not resolve method table 0x{mtRaw & ~7UL:x} at object 0x{obj:x}.");
                 }
 
                 ulong size;
@@ -84,13 +85,12 @@ public sealed class HeapGraphExtractor(DumpSession session)
                 }
                 else
                 {
-                    reader.Read(obj + (ulong)pointerSize, out uint count);
-                    if (t.IsString)
+                    if (!reader.Read(obj + (ulong)pointerSize, out uint count))
                     {
-                        count++;
+                        throw new InvalidDataException($"Could not read the component count at object 0x{obj:x}.");
                     }
-
-                    size = count * (ulong)t.ComponentSize + (ulong)t.BaseSize;
+                    ulong componentCount = t.IsString ? (ulong)count + 1 : count;
+                    size = checked(componentCount * (ulong)t.ComponentSize + (ulong)t.BaseSize);
                 }
                 if (size < minObjSize)
                 {
@@ -103,8 +103,16 @@ public sealed class HeapGraphExtractor(DumpSession session)
 
                 if (!t.IsFree)
                 {
+                    if (reportedSize > uint.MaxValue)
+                    {
+                        throw new NotSupportedException($"Object 0x{obj:x} is larger than the 4 GB graph-size limit.");
+                    }
+                    if (t.HasPointers && reportedSize > int.MaxValue)
+                    {
+                        throw new NotSupportedException($"Object 0x{obj:x} is too large for reference extraction.");
+                    }
                     addressList.Add(obj);
-                    sizeList.Add((uint)Math.Min(reportedSize, uint.MaxValue));
+                    sizeList.Add((uint)reportedSize);
                     typeList.Add(typeIndex);
                 }
                 else
@@ -113,7 +121,7 @@ public sealed class HeapGraphExtractor(DumpSession session)
                     freeCount++;
                 }
 
-                obj += Align(size);
+                obj = checked(obj + Align(size));
                 if (skipContexts)
                 {
                     while (allocContexts.TryGetValue(obj, out ulong end))
@@ -132,52 +140,61 @@ public sealed class HeapGraphExtractor(DumpSession session)
         var index = new AddressIndex(addresses);
 
         // --- 2. Reference walk (raw, parallel): apply each type's GCDesc to raw object bytes. ---
-        int workers = session.DataTarget.DataReader.IsThreadSafe
+        int workers = snapshot.DataTarget.DataReader.IsThreadSafe
             ? Math.Clamp(Environment.ProcessorCount, 1, MaxWorkers)
             : 1;
 
         var blockDegrees = new int[workers][];
         var blockEdges = new int[workers][];
-        Parallel.For(0, workers, w =>
+        Parallel.For(0, workers, new ParallelOptions { CancellationToken = cancellationToken }, w =>
         {
             int lo = (int)((long)n * w / workers), hi = (int)((long)n * (w + 1) / workers);
             var degrees = new int[hi - lo];
             var edges = new List<int>((hi - lo) * 3);
             byte[] buffer = ArrayPool<byte>.Shared.Rent(4096);
-            for (int i = lo; i < hi; i++)
+            try
             {
-                ref readonly TypeInfo t = ref types[typeOf[i]];
-                if (!t.HasPointers) { degrees[i - lo] = 0; continue; }
-
-                uint size = sizes[i];
-                if (size > buffer.Length)
+                for (int i = lo; i < hi; i++)
                 {
-                    ArrayPool<byte>.Shared.Return(buffer);
-                    buffer = ArrayPool<byte>.Shared.Rent((int)size);
-                }
+                    cancellationToken.ThrowIfCancellationRequested();
+                    ref readonly TypeInfo t = ref types[typeOf[i]];
+                    if (!t.HasPointers) { degrees[i - lo] = 0; continue; }
 
-                if (reader.Read(addresses[i], buffer.AsSpan(0, (int)size)) < (int)size)
-                {
-                    degrees[i - lo] = 0;
-                    continue;
-                }
-
-                int degree = 0;
-                foreach ((ulong reference, int _) in t.GCDesc.WalkObject(buffer, (int)size))
-                {
-                    if (reference == 0)
+                    uint size = sizes[i];
+                    if (size > buffer.Length)
                     {
-                        continue;
+                        ArrayPool<byte>.Shared.Return(buffer);
+                        buffer = ArrayPool<byte>.Shared.Rent((int)size);
                     }
 
-                    int v = index.IndexOf(reference);
-                    if (v >= 0) { edges.Add(v); degree++; }
+                    if (reader.Read(addresses[i], buffer.AsSpan(0, (int)size)) < (int)size)
+                    {
+                        throw new InvalidDataException($"Could not read object 0x{addresses[i]:x}.");
+                    }
+
+                    int degree = 0;
+                    foreach ((ulong reference, int _) in t.GCDesc.WalkObject(buffer, (int)size))
+                    {
+                        if (reference == 0)
+                        {
+                            continue;
+                        }
+
+                        int v = index.IndexOf(reference);
+                        if (v < 0)
+                        {
+                            throw new InvalidDataException($"Object 0x{addresses[i]:x} references unknown object 0x{reference:x}.");
+                        }
+                        edges.Add(v);
+                        degree++;
+                    }
+                    degrees[i - lo] = degree;
                 }
-
-                degrees[i - lo] = degree;
             }
-
-            ArrayPool<byte>.Shared.Return(buffer);
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
             blockDegrees[w] = degrees;
             blockEdges[w] = edges.ToArray();
         });
@@ -188,15 +205,21 @@ public sealed class HeapGraphExtractor(DumpSession session)
         foreach (ClrRoot root in heap.EnumerateRoots())
         {
             cancellationToken.ThrowIfCancellationRequested();
-            int v = index.IndexOf(root.Object.Address);
-            if (v >= 0 && rootSeen.Add(v))
+            ulong address = root.Object.Address;
+            if (address == 0)
+            {
+                continue;
+            }
+            int v = index.IndexOf(address);
+            if (v < 0)
+            {
+                throw new InvalidDataException($"GC root references unknown object 0x{address:x}.");
+            }
+            if (rootSeen.Add(v))
             {
                 roots.Add(v);
             }
         }
-
-        long objectEdges = 0;
-        foreach (int[] e in blockEdges) objectEdges += e.Length;
 
         var offsets = new long[n + 2];
         long edge = 0;

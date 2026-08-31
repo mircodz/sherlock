@@ -144,21 +144,25 @@ public sealed unsafe class Column<T> where T : unmanaged
         }
     }
 
-    /// <summary>A zero-copy <see cref="ReadOnlyMemory{T}"/> over the whole column, only when it's a single
-    /// section within one mmap chunk (e.g. one edge chunk); throws otherwise. Valid until the owning
-    /// <see cref="SlabFile"/> is disposed.</summary>
+    /// <summary>Returns one section as memory, using the mmap directly when contiguous and copying only
+    /// when the section crosses an mmap view boundary.</summary>
     public ReadOnlyMemory<T> AsMemory()
     {
         if (Length == 0)
         {
             return ReadOnlyMemory<T>.Empty;
         }
-        if (_segs.Length == 1 && Length <= int.MaxValue &&
-            _mmap.TryGetPointer(_segs[0].ByteOffset, (int)(Length * Width), out nint ptr))
+        if (_segs.Length != 1 || Length > int.MaxValue)
+        {
+            throw new InvalidOperationException("column has multiple sections or exceeds the managed array limit");
+        }
+        if (_mmap.TryGetPointer(_segs[0].ByteOffset, checked((int)(Length * Width)), out nint ptr))
         {
             return new PointerMemory<T>((T*)ptr, (int)Length).Memory;
         }
-        throw new InvalidOperationException("column is not a single contiguous mmap chunk; index or CopyTo instead");
+        var copy = GC.AllocateUninitializedArray<T>((int)Length);
+        CopyTo(0, copy);
+        return copy;
     }
 
     // Binary search the (small) section list for the one owning global index i.

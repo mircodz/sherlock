@@ -11,13 +11,13 @@ namespace Sherlock.Core.Analysis;
 /// long-lived publisher pins every subscriber that never unsubscribed (<c>-=</c>), because the
 /// event holds each delegate's <c>_target</c>.
 /// </summary>
-public sealed class EventHandlerAnalyzer(DumpSession session)
+public sealed class EventHandlerAnalyzer(Snapshot snapshot)
 {
     public IReadOnlyList<EventSubscription> Analyze(int minSubscribers = 16, int limit = 25, CancellationToken cancellation = default)
     {
         var results = new List<EventSubscription>();
 
-        foreach (ClrObject obj in session.Runtime.Heap.EnumerateObjects())
+        foreach (ClrObject obj in snapshot.Runtime.Heap.EnumerateObjects())
         {
             cancellation.ThrowIfCancellationRequested();
             if (obj.Type is not { } type || !IsDelegate(type))

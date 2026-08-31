@@ -73,6 +73,19 @@ public sealed class SnapshotStore
         }
     }
 
+    public Snapshot Open(string idOrLabel)
+    {
+        if (FindSnapshot(idOrLabel) is not (_, { } entry))
+        {
+            throw new DumpAnalysisException($"No snapshot '{idOrLabel}'.");
+        }
+        if (!entry.Exists)
+        {
+            throw new DumpAnalysisException($"Snapshot '{idOrLabel}' is missing its heap dump.");
+        }
+        return Snapshot.Open(entry.Path, entry);
+    }
+
     public Session BeginSession(SessionKind kind, string? command = null, bool withLog = false)
     {
         lock (_lock)

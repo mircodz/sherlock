@@ -5,7 +5,7 @@ using Microsoft.Diagnostics.Runtime;
 namespace Sherlock.Core.Analysis;
 
 /// <summary>Reads a single object's identity and contents (the <c>dumpobj</c> view).</summary>
-public sealed class ObjectInspector(DumpSession session)
+public sealed class ObjectInspector(Snapshot snapshot)
 {
     private const int StringPreviewLength = 256;
     private const int MaxElements = 100;
@@ -13,7 +13,7 @@ public sealed class ObjectInspector(DumpSession session)
     /// <exception cref="DumpAnalysisException">The address is not a valid managed object.</exception>
     public ObjectDetail Inspect(ulong address)
     {
-        ClrObject obj = session.Runtime.Heap.GetObject(address);
+        ClrObject obj = snapshot.Runtime.Heap.GetObject(address);
         if (!obj.IsValid || obj.Type is null)
         {
             throw new DumpAnalysisException($"0x{address:x} is not a valid managed object address.");

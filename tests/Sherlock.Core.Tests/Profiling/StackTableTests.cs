@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using Sherlock.Core.Profiling;
 using Sherlock.Core.Storage;
 using Sherlock.Core.Tests.Common;
+using Xunit;
 
 namespace Sherlock.Core.Tests.Profiling;
 

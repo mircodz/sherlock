@@ -1,6 +1,7 @@
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
+using System.IO;
 using System.Text;
 using Sherlock.Core.Storage;
 
@@ -27,9 +28,9 @@ public static class HeapGraphStore
     // v3: long CSR offsets + chunked edge column (GraphEdgesChunk / GraphEdgeChunkMeta).
     // v4: per-object columns chunked so a >268M-object graph no longer overflows the writer's int-length
     //     span or the reader's per-section cap.
-    private const ushort Version = 4;
+    private const ushort Version = 5;
 
-    public static void Save(string path, HeapGraph graph)
+    public static void Save(string path, HeapGraph graph, string? sourcePath = null)
     {
         var writer = new ContainerWriter();
         // Per-object columns are chunked (N same-typed sections of uniform element count): a large graph
@@ -49,7 +50,8 @@ public static class HeapGraphStore
         }
         writer.AddRecords(SectionType.GraphEdgeChunkMeta, Version, edges.ChunkStarts);
 
-        writer.AddRecords(SectionType.GraphMeta, Version, [graph.FreeBytes, (ulong)graph.FreeCount]);
+        (long sourceLength, long sourceModified) = SourceStamp(sourcePath);
+        writer.AddRecords(SectionType.GraphMeta, Version, [graph.FreeBytes, (ulong)graph.FreeCount, (ulong)sourceLength, (ulong)sourceModified]);
         if (graph.TypeIds is { } typeIds && graph.TypeNames is { } typeNames)
         {
             writer.AddChunkedRecords(SectionType.GraphTypeIds, Version, typeIds.Span);
@@ -68,7 +70,7 @@ public static class HeapGraphStore
     /// column stays memory-mapped (chunked, not materialized), so the returned graph owns the
     /// <see cref="SlabFile"/> and frees it on dispose. Materializing the per-object columns caps at ~2.1B
     /// objects (int array element count), far past any real dump.</summary>
-    public static HeapGraph? Load(string path)
+    public static HeapGraph? Load(string path, string? sourcePath = null)
     {
         SlabFile slab = SlabFile.Open(path);
         try
@@ -81,10 +83,21 @@ public static class HeapGraphStore
                 slab.Dispose();
                 return null;
             }
-            if (slab.SectionVersion(SectionType.GraphOffsets) != Version)
+            if (slab.SectionVersion(SectionType.GraphOffsets) != Version || slab.SectionVersion(SectionType.GraphMeta) != Version)
             {
                 slab.Dispose();
                 return null; // stale format; caller rebuilds from the dump
+            }
+
+            Column<ulong> meta = slab.GetColumn<ulong>(SectionType.GraphMeta);
+            if (sourcePath is not null)
+            {
+                (long sourceLength, long sourceModified) = SourceStamp(sourcePath);
+                if (meta.Length < 4 || meta[2] != (ulong)sourceLength || meta[3] != (ulong)sourceModified)
+                {
+                    slab.Dispose();
+                    return null;
+                }
             }
 
             ReadOnlyMemory<ulong> addresses = Materialize(slab.GetColumn<ulong>(SectionType.GraphAddresses));
@@ -112,7 +125,6 @@ public static class HeapGraphStore
 
             ulong freeBytes = 0;
             long freeCount = 0;
-            Column<ulong> meta = slab.GetColumn<ulong>(SectionType.GraphMeta);
             if (meta.Length >= 1)
             {
                 freeBytes = meta[0];
@@ -137,6 +149,16 @@ public static class HeapGraphStore
     // contiguous ReadOnlyMemory<T> view so the analyzers and dominator hot loops are unchanged.
     private static ReadOnlyMemory<T> Materialize<T>(Column<T> col) where T : unmanaged =>
         MaterializeArray(col);
+
+    private static (long Length, long Modified) SourceStamp(string? path)
+    {
+        if (path is null)
+        {
+            return (0, 0);
+        }
+        var file = new FileInfo(path);
+        return (file.Length, file.LastWriteTimeUtc.Ticks);
+    }
 
     private static T[] MaterializeArray<T>(Column<T> col) where T : unmanaged
     {

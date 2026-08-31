@@ -44,13 +44,13 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
     /// <summary>Loads a catalogued snapshot as the current target.</summary>
     public void Load(Session session, SnapshotEntry entry)
     {
-        Swap(new Snapshot(DumpSession.Open(entry.Path), entry), session, entry, entry.Id);
+        Swap(Store.Open(entry.Id), session, entry, entry.Id);
     }
 
     /// <summary>Loads a dump file directly, without adding it to the library.</summary>
     public void LoadTransient(string path)
     {
-        Swap(new Snapshot(DumpSession.Open(path)), session: null, entry: null, Path.GetFileName(path));
+        Swap(Snapshot.Open(path), session: null, entry: null, Path.GetFileName(path));
     }
 
     /// <summary>Marks exit-time allocation profiles from exited <c>run --profile</c> targets.</summary>

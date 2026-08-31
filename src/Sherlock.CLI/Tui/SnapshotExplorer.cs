@@ -36,7 +36,6 @@ public static class SnapshotExplorer
     public static async Task<int> Run()
     {
         var store = SnapshotStore.Default();
-        var library = new SnapshotLibrary(store);
 
         var entries = store.Sessions
             .SelectMany(s => s.Processes.SelectMany(p => p.Snapshots.Select(snap => (Process: p, Snap: snap))))
@@ -634,7 +633,7 @@ public static class SnapshotExplorer
         {
             string id = snaps.Rows[i][0];
             current?.Dispose();
-            current = library.Open(id);
+            current = store.Open(id);
             nav.Push(new Page(id, Workspace(current, id)));
         };
 

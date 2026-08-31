@@ -35,9 +35,9 @@ public sealed class DiffReplCommand : IReplCommand
         (Dictionary<string, HeapTypeStat> baseline, Dictionary<string, HeapTypeStat> target) =
             context.Console.Status().Start("Comparing snapshots…", _ =>
             {
-                using DumpSession a = DumpSession.Open(baseSnap.Path);
-                using DumpSession b = DumpSession.Open(targetSnap.Path);
-                return (Index(a.GetHistogram()), Index(b.GetHistogram()));
+                using Snapshot a = Snapshot.Open(baseSnap.Path);
+                using Snapshot b = Snapshot.Open(targetSnap.Path);
+                return (Index(a.Histogram), Index(b.Histogram));
             });
 
         // Per-type deltas over the union of types in both snapshots.

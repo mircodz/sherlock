@@ -7,7 +7,7 @@ using Microsoft.Diagnostics.Runtime;
 namespace Sherlock.Core.Analysis;
 
 /// <summary>Walks the managed heap and aggregates object statistics by type.</summary>
-public sealed class HeapAnalyzer(DumpSession session)
+public sealed class HeapAnalyzer(Snapshot snapshot)
 {
     /// <summary>
     /// Groups live objects by type name with counts and total sizes, ordered by total size descending.
@@ -18,7 +18,7 @@ public sealed class HeapAnalyzer(DumpSession session)
     {
         var stats = new Dictionary<string, (long Count, ulong Size)>(StringComparer.Ordinal);
 
-        foreach (ClrObject obj in session.Runtime.Heap.EnumerateObjects())
+        foreach (ClrObject obj in snapshot.Runtime.Heap.EnumerateObjects())
         {
             if (obj.Type is null)
             {
@@ -57,7 +57,7 @@ public sealed class HeapAnalyzer(DumpSession session)
         long totalMatched = 0;
         ulong totalSize = 0;
 
-        foreach (ClrObject obj in session.Runtime.Heap.EnumerateObjects())
+        foreach (ClrObject obj in snapshot.Runtime.Heap.EnumerateObjects())
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -109,7 +109,7 @@ public sealed class HeapAnalyzer(DumpSession session)
     {
         var groups = new Dictionary<string, (long Count, ulong TotalSize)>(StringComparer.Ordinal);
 
-        foreach (ClrObject obj in session.Runtime.Heap.EnumerateObjects())
+        foreach (ClrObject obj in snapshot.Runtime.Heap.EnumerateObjects())
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (obj.Type?.IsString != true)

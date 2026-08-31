@@ -1,5 +1,6 @@
 using System;
 using Sherlock.Core.HeapModel;
+using Xunit;
 
 namespace Sherlock.Core.Tests.HeapModel;
 

@@ -24,7 +24,7 @@ public static class DominatorTreeStore
         writer.AddRecords(SectionType.DomNodeByRpo, Version, result.NodeByRpo);
         writer.AddRecords(SectionType.DomRetained, Version, result.Retained);
         writer.AddRecords(SectionType.DomIdom, Version, result.Idom);
-        File.WriteAllBytes(path, writer.ToArray());
+        writer.Save(path);
     }
 
     /// <summary>Loads the cached dominator result, reconstructing the address/own-size columns from

@@ -10,7 +10,7 @@ namespace Sherlock.Core.HeapModel;
 /// <c>.slab</c> beside the dump; later requests (including a fresh process opening the same snapshot)
 /// load that file and skip extraction.
 /// </summary>
-public sealed class HeapGraphProvider(DumpSession session) : IDisposable
+public sealed class HeapGraphProvider(Snapshot snapshot) : IDisposable
 {
     private HeapGraph? _cached;
 
@@ -23,13 +23,13 @@ public sealed class HeapGraphProvider(DumpSession session) : IDisposable
             return _cached;
         }
 
-        string path = SidecarPath(session.DumpPath);
+        string path = SidecarPath(snapshot.DumpPath);
         if (TryLoad(path) is { } loaded)
         {
             return _cached = loaded;
         }
 
-        HeapGraph graph = new HeapGraphExtractor(session).Extract(cancellationToken);
+        HeapGraph graph = new HeapGraphExtractor(snapshot).Extract(cancellationToken);
         if (persist)
         {
             TrySave(path, graph);
@@ -38,7 +38,7 @@ public sealed class HeapGraphProvider(DumpSession session) : IDisposable
     }
 
     /// <summary>The sidecar path for a dump: <c>&lt;dump&gt;.heapgraph.slab</c>, next to the dump.</summary>
-    public static string SidecarPath(string dumpPath) => dumpPath + ".heapgraph.slab";
+    public static string SidecarPath(string dumpPath) => Path.GetFileName(dumpPath) == "heap.dmp" ? Path.Combine(Path.GetDirectoryName(dumpPath)!, "heapgraph.slab") : dumpPath + ".heapgraph.slab";
 
     /// <summary>Returns the graph only if already available (cached this session or loadable from the
     /// sidecar), without triggering a fresh extraction. Lets a cheap analysis (e.g. histogram) ride an
@@ -49,10 +49,10 @@ public sealed class HeapGraphProvider(DumpSession session) : IDisposable
         {
             return _cached;
         }
-        return _cached = TryLoad(SidecarPath(session.DumpPath));
+        return _cached = TryLoad(SidecarPath(snapshot.DumpPath));
     }
 
-    private static HeapGraph? TryLoad(string path)
+    private HeapGraph? TryLoad(string path)
     {
         if (!File.Exists(path))
         {
@@ -60,7 +60,7 @@ public sealed class HeapGraphProvider(DumpSession session) : IDisposable
         }
         try
         {
-            return HeapGraphStore.Load(path);
+            return HeapGraphStore.Load(path, snapshot.DumpPath);
         }
         catch
         {
@@ -68,11 +68,11 @@ public sealed class HeapGraphProvider(DumpSession session) : IDisposable
         }
     }
 
-    private static void TrySave(string path, HeapGraph graph)
+    private void TrySave(string path, HeapGraph graph)
     {
         try
         {
-            HeapGraphStore.Save(path, graph);
+            HeapGraphStore.Save(path, graph, snapshot.DumpPath);
         }
         catch
         {

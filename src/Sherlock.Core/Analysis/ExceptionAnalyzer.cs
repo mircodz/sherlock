@@ -7,14 +7,14 @@ using Microsoft.Diagnostics.Runtime;
 namespace Sherlock.Core.Analysis;
 
 /// <summary>Finds managed exception objects, both on threads and loose on the heap.</summary>
-public sealed class ExceptionAnalyzer(DumpSession session)
+public sealed class ExceptionAnalyzer(Snapshot snapshot)
 {
     public IReadOnlyList<ExceptionInfo> FindExceptions(CancellationToken cancellationToken = default)
     {
         var byAddress = new Dictionary<ulong, ExceptionInfo>();
 
         // Exceptions in flight on a thread are the most interesting.
-        foreach (ClrThread thread in session.Runtime.Threads)
+        foreach (ClrThread thread in snapshot.Runtime.Threads)
         {
             ClrException? current = thread.CurrentException;
             if (current is not null)
@@ -24,7 +24,7 @@ public sealed class ExceptionAnalyzer(DumpSession session)
         }
 
         // Plus other exception objects still alive on the heap.
-        foreach (ClrObject obj in session.Runtime.Heap.EnumerateObjects())
+        foreach (ClrObject obj in snapshot.Runtime.Heap.EnumerateObjects())
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!obj.IsException || byAddress.ContainsKey(obj.Address))

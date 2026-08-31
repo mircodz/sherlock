@@ -2,6 +2,7 @@ using System;
 using Sherlock.Core.Analysis;
 using Sherlock.Core.HeapModel;
 using Sherlock.Core.Tests.Common;
+using Xunit;
 
 namespace Sherlock.Core.Tests.HeapModel;
 

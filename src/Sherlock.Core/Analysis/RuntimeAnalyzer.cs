@@ -7,12 +7,12 @@ using Microsoft.Diagnostics.Runtime;
 namespace Sherlock.Core.Analysis;
 
 /// <summary>Lists runtime structure: loaded modules and GC heap segments.</summary>
-public sealed class RuntimeAnalyzer(DumpSession session)
+public sealed class RuntimeAnalyzer(Snapshot snapshot)
 {
     public IReadOnlyList<ModuleInfo> GetModules()
     {
         var modules = new List<ModuleInfo>();
-        foreach (ClrModule module in session.Runtime.EnumerateModules())
+        foreach (ClrModule module in snapshot.Runtime.EnumerateModules())
         {
             modules.Add(new ModuleInfo(
                 Name: module.Name ?? "<dynamic>",
@@ -29,7 +29,7 @@ public sealed class RuntimeAnalyzer(DumpSession session)
     public IReadOnlyList<SegmentInfo> GetSegments()
     {
         var segments = new List<SegmentInfo>();
-        foreach (ClrSegment segment in session.Runtime.Heap.Segments)
+        foreach (ClrSegment segment in snapshot.Runtime.Heap.Segments)
         {
             segments.Add(new SegmentInfo(
                 Start: segment.Start,

@@ -3,6 +3,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using Sherlock.Core.Storage;
 using Sherlock.Core.Tests.Common;
+using Xunit;
 
 namespace Sherlock.Core.Tests.Storage;
 
@@ -152,6 +153,25 @@ public class ColumnTests : IDisposable
         w.AddSection(SectionType.GraphSizes, version: 3, recordSize: 4,
             new byte[] { 1, 0, 0, 0, 2, 0, 0, 0 }, count: 100); // 8 bytes, but claims 100 uints
         using var slab = _tmp.WriteSlab(w);
+        Assert.Throws<InvalidDataException>(() => slab.GetColumn<uint>(SectionType.GraphSizes));
+    }
+
+    [Fact]
+    public void HugeCorruptCountIsRejectedAsInvalidData()
+    {
+        var writer = new ContainerWriter();
+        writer.AddSection(SectionType.GraphSizes, 3, 4, new byte[4], (ulong)long.MaxValue);
+        using var slab = _tmp.WriteSlab(writer);
+        Assert.Throws<InvalidDataException>(() => slab.GetColumn<uint>(SectionType.GraphSizes));
+    }
+
+    [Fact]
+    public void MixedSectionVersionsAreRejected()
+    {
+        var writer = new ContainerWriter();
+        writer.AddRecords(SectionType.GraphSizes, 3, new uint[] { 1 });
+        writer.AddRecords(SectionType.GraphSizes, 4, new uint[] { 2 });
+        using var slab = _tmp.WriteSlab(writer);
         Assert.Throws<InvalidDataException>(() => slab.GetColumn<uint>(SectionType.GraphSizes));
     }
 

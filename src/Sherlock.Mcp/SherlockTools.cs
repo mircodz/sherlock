@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Globalization;
 using ModelContextProtocol.Server;
 using Sherlock.Core;
+using Sherlock.Core.Store;
 
 namespace Sherlock.Mcp;
 
@@ -15,7 +16,7 @@ public static class SherlockTools
 {
     [McpServerTool(Name = "list_snapshots")]
     [Description("List catalogued heap snapshots with their process, size and whether allocation provenance is available.")]
-    public static object ListSnapshots(SnapshotLibrary library) => Dto.Snapshots(library.Store);
+    public static object ListSnapshots(SnapshotStore store) => Dto.Snapshots(store);
 
     [McpServerTool(Name = "info")]
     [Description("High-level summary of a snapshot: runtime, architecture, GC mode, heap size, thread and module counts.")]

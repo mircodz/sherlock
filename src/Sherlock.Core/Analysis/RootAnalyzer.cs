@@ -10,12 +10,12 @@ namespace Sherlock.Core.Analysis;
 /// target is reached. The first path found is the shortest in edges. Slow on very large heaps; kept as
 /// a fallback behind the dominator-backed <see cref="RootAnalyzerV2"/>.
 /// </summary>
-public sealed class RootAnalyzer(DumpSession session)
+public sealed class RootAnalyzer(Snapshot snapshot)
 {
     /// <summary>Returns up to <paramref name="maxPaths"/> root paths reaching <paramref name="targetAddress"/>.</summary>
     public IReadOnlyList<GcRootPath> FindRoots(ulong targetAddress, int maxPaths = 1, CancellationToken cancellationToken = default)
     {
-        ClrHeap heap = session.Runtime.Heap;
+        ClrHeap heap = snapshot.Runtime.Heap;
         var results = new List<GcRootPath>();
 
         foreach (ClrRoot root in heap.EnumerateRoots())

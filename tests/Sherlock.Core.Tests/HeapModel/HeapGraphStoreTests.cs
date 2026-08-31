@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using Sherlock.Core.HeapModel;
 using Sherlock.Core.Tests.Common;
+using Xunit;
 
 namespace Sherlock.Core.Tests.HeapModel;
 
@@ -120,6 +121,7 @@ public sealed class HeapGraphStoreTests : IDisposable
         Assert.Equal("System.String", loaded.TypeNameOf(0));
 
         loaded.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => loaded.Successors(0));
         File.Delete(_path); // mapping released, so the file is deletable
         Assert.False(File.Exists(_path));
     }
@@ -236,5 +238,18 @@ public sealed class HeapGraphStoreTests : IDisposable
         Assert.Throws<ArgumentException>(() => new HeapGraph(addr, sizes, offsets, edges, (int[])[0, 0], null));
         // typeIds length must equal object count.
         Assert.Throws<ArgumentException>(() => new HeapGraph(addr, sizes, offsets, edges, (int[])[0], ["T"]));
+    }
+
+    [Fact]
+    public void LoadRejectsCacheFromAChangedDump()
+    {
+        string dump = _tmp.File(".dmp");
+        File.WriteAllBytes(dump, [1, 2, 3]);
+        HeapGraphStore.Save(_path, SampleGraph(), dump);
+        Assert.NotNull(HeapGraphStore.Load(_path, dump));
+
+        File.WriteAllBytes(dump, [1, 2, 3, 4]);
+
+        Assert.Null(HeapGraphStore.Load(_path, dump));
     }
 }

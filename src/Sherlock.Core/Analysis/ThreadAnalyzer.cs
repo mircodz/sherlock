@@ -5,13 +5,13 @@ using Microsoft.Diagnostics.Runtime;
 namespace Sherlock.Core.Analysis;
 
 /// <summary>Enumerates managed threads and their call stacks.</summary>
-public sealed class ThreadAnalyzer(DumpSession session)
+public sealed class ThreadAnalyzer(Snapshot snapshot)
 {
     public IReadOnlyList<ThreadInfo> GetThreads(bool includeStacks = true)
     {
         var result = new List<ThreadInfo>();
 
-        foreach (ClrThread thread in session.Runtime.Threads)
+        foreach (ClrThread thread in snapshot.Runtime.Threads)
         {
             var frames = includeStacks
                 ? ReadStack(thread)

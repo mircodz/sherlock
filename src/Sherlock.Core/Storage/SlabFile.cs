@@ -146,6 +146,7 @@ public sealed class SlabFile : IDisposable
     public Column<T> GetColumn<T>(SectionType type) where T : unmanaged
     {
         int width = Unsafe.SizeOf<T>();
+        ushort version = 0;
         var segs = new List<(long byteOffset, long count)>();
         foreach (SectionInfo s in _sections)
         {
@@ -154,7 +155,7 @@ public sealed class SlabFile : IDisposable
                 continue;
             }
 
-            Validate<T>(type, s, width);
+            version = Validate<T>(type, s, width, version);
             segs.Add((s.ByteOffset, s.Count));
         }
         return segs.Count == 0
@@ -167,6 +168,7 @@ public sealed class SlabFile : IDisposable
     public IReadOnlyList<Column<T>> SectionColumns<T>(SectionType type) where T : unmanaged
     {
         int width = Unsafe.SizeOf<T>();
+        ushort version = 0;
         var result = new List<Column<T>>();
         foreach (SectionInfo s in _sections)
         {
@@ -175,7 +177,7 @@ public sealed class SlabFile : IDisposable
                 continue;
             }
 
-            Validate<T>(type, s, width);
+            version = Validate<T>(type, s, width, version);
             result.Add(new Column<T>(_mmap, [(s.ByteOffset, s.Count)]));
         }
         return result;
@@ -183,16 +185,21 @@ public sealed class SlabFile : IDisposable
 
     // Guards a typed section against a corrupt/mismatched descriptor before it's exposed as a column:
     // a wrong record size or a Count that overruns the section's bytes would otherwise read garbage.
-    private static void Validate<T>(SectionType type, SectionInfo s, int width) where T : unmanaged
+    private static ushort Validate<T>(SectionType type, SectionInfo s, int width, ushort version) where T : unmanaged
     {
         if (s.RecordSize != width)
         {
             throw new InvalidDataException($"section {type} record size {s.RecordSize} != sizeof({typeof(T).Name}) {width}");
         }
-        if (checked(s.Count * width) > s.ByteLength)
+        if (s.ByteLength % width != 0 || s.Count != s.ByteLength / width)
         {
             throw new InvalidDataException($"section {type} count {s.Count} overruns its {s.ByteLength} bytes");
         }
+        if (version != 0 && s.Version != version)
+        {
+            throw new InvalidDataException($"section {type} mixes versions {version} and {s.Version}");
+        }
+        return s.Version;
     }
 
     /// <summary>Copies a whole single-section blob into an owned array (variable-width sections: the

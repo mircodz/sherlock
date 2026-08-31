@@ -16,7 +16,7 @@ namespace Sherlock.Core.Analysis;
 /// gcroot view wants; true multi-/shortest-path search needs a persisted reverse-edge column (a later
 /// tier), so <see cref="RootAnalyzer"/> is kept as a fallback.
 /// </summary>
-public sealed class RootAnalyzerV2(DumpSession session)
+public sealed class RootAnalyzerV2(Snapshot snapshot)
 {
     /// <summary>
     /// Returns the retention path that keeps <paramref name="targetAddress"/> alive, or empty if the
@@ -25,7 +25,7 @@ public sealed class RootAnalyzerV2(DumpSession session)
     /// </summary>
     public IReadOnlyList<GcRootPath> FindRoots(ulong targetAddress, int maxPaths = 1, CancellationToken cancellationToken = default)
     {
-        DominatorTree dom = session.GetDominatorTree(cancellationToken);
+        DominatorTree dom = snapshot.GetDominatorTree(cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
 
         IReadOnlyList<(ulong Address, string TypeName)>? chain = dom.RetentionPath(targetAddress);

@@ -13,7 +13,7 @@ namespace Sherlock.Core.Analysis;
 /// dominator math (Cooper-Harvey-Kennedy + retained sizes) is identical and produces the same
 /// <see cref="DominatorTree"/>, kept separate until we make it the default.
 /// </summary>
-public sealed class DominatorAnalyzer(DumpSession session)
+public sealed class DominatorAnalyzer(Snapshot snapshot)
 {
     /// <summary>Pure result of the dominator computation over a <see cref="HeapGraph"/>: per RPO-ordered
     /// node its address, own (shallow) size, retained size, and immediate dominator (in RPO space). No
@@ -22,11 +22,11 @@ public sealed class DominatorAnalyzer(DumpSession session)
 
     public DominatorTree Build(CancellationToken cancellationToken = default)
     {
-        HeapGraph graph = session.GetHeapGraph(cancellationToken);
+        HeapGraph graph = snapshot.GetHeapGraph(cancellationToken);
 
         // Derived cache: load from the sidecar (validated against the graph's content hash) if present,
         // else compute and persist so reopen skips the recompute.
-        string path = SidecarPath(session.DumpPath);
+        string path = SidecarPath(snapshot.DumpPath);
         DominatorResult r = TryLoad(path, graph)
             ?? ComputeAndPersist(graph, path, cancellationToken);
 
@@ -40,11 +40,11 @@ public sealed class DominatorAnalyzer(DumpSession session)
             ? address => { int id = graph.IndexOf(address); return id >= 0 ? graph.TypeNameOf(id) ?? "<unknown>" : "<unknown>"; }
         : null;
 
-        return new DominatorTree(session.Runtime.Heap, r.Address, r.Own, r.Retained, r.Idom, rpoOf, typeNames);
+        return new DominatorTree(snapshot.Runtime.Heap, r.Address, r.Own, r.Retained, r.Idom, rpoOf, typeNames);
     }
 
     /// <summary>The dominator-cache sidecar path for a dump: <c>&lt;dump&gt;.dominators.slab</c>.</summary>
-    public static string SidecarPath(string dumpPath) => dumpPath + ".dominators.slab";
+    public static string SidecarPath(string dumpPath) => System.IO.Path.GetFileName(dumpPath) == "heap.dmp" ? System.IO.Path.Combine(System.IO.Path.GetDirectoryName(dumpPath)!, "dominators.slab") : dumpPath + ".dominators.slab";
 
     private static DominatorResult? TryLoad(string path, HeapGraph graph)
     {
