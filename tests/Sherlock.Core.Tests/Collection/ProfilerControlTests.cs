@@ -42,6 +42,11 @@ public sealed class ProfilerControlTests
         (int pid, string[] message) = await received.Task.WaitAsync(TimeSpan.FromSeconds(2), cancellation);
         Assert.Equal(4242, pid);
         Assert.Equal(["EVENT", "snapshot-trigger", "throw:MarkerException"], message);
+
+        var disconnected = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        control.ClientDisconnected += pid => disconnected.TrySetResult(pid);
+        client.Shutdown(SocketShutdown.Both);
+        Assert.Equal(4242, await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(2), cancellation));
     }
 
     private static async Task SendAsync(Socket socket, string payload, CancellationToken cancellation)

@@ -121,6 +121,12 @@ public:
 
     void accept() { clientFd_ = ::accept(listenFd_, nullptr, nullptr); }
 
+    void disconnect() {
+        ::shutdown(clientFd_, SHUT_RDWR);
+        ::close(clientFd_);
+        clientFd_ = -1;
+    }
+
     // Reads exactly one framed payload (blocking).
     std::string readFrame() {
         std::string buffer;
@@ -231,7 +237,7 @@ TEST(ControlChannel, ConnectsSendsHelloAndServesRequestsAndEvents) {
     EXPECT_EQ(handlerCalls.load(), 1);
 
     // Unsolicited EVENT frame.
-    channel.sendEvent({"snapshot-trigger", "GC#3"});
+    EXPECT_TRUE(channel.sendEvent({"snapshot-trigger", "GC#3"}));
     std::string eventPayload = server.readFrame();
     std::vector<std::string_view> event = splitFields(eventPayload);
     ASSERT_EQ(event.size(), 3u);
@@ -253,6 +259,31 @@ TEST(ControlChannel, ConnectFailsWithAnActionableMessageWhenNothingIsListening) 
     ASSERT_TRUE(err.has_value());
     EXPECT_FALSE(err->empty());
     EXPECT_FALSE(channel.connected());
+}
+
+TEST(ControlChannel, ReportsPeerDisconnect) {
+    std::filesystem::path path = tempSocketPath("disconnect");
+    FakeServer server(path);
+
+    ControlChannel channel(nullptr);
+    ASSERT_FALSE(channel.connect(path.string()).has_value());
+    server.accept();
+
+    std::atomic<bool> disconnected{false};
+    channel.start("1.2.3", {}, [](std::string_view, std::span<const std::string_view>) {
+        return Reply::success();
+    }, [&] {
+        disconnected.store(true);
+    });
+    (void)server.readFrame();
+    server.disconnect();
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!disconnected.load() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    EXPECT_TRUE(disconnected.load());
+    channel.stop();
 }
 
 #endif // !_WIN32

@@ -11,11 +11,11 @@ namespace Sherlock.CLI;
 /// <summary>Parses and starts runs for both the CLI and REPL.</summary>
 public static class RunLauncher
 {
-    public const string Usage = "run [--profile] [--correlate] [--children] [--snapshot-on <event>] [--profiler-log <level>] [--] <path> [args...]";
+    public const string Usage = "run [--profile] [--correlate] [--children] [--experimental-gc-barrier] [--snapshot-on <event>] [--profiler-log <level>] [--] <path> [args...]";
 
     public static RunOptions? Parse(IReadOnlyList<string> args, IAnsiConsole console)
     {
-        bool profile = false, correlate = false, children = false;
+        bool profile = false, correlate = false, children = false, experimentalGcBarrier = false;
         string? snapshotOn = null;
         ProfilerLogLevel logLevel = ProfilerLogLevel.Warning;
         var command = new List<string>();
@@ -29,6 +29,7 @@ public static class RunLauncher
                 case "--profile": profile = true; break;
                 case "--correlate": correlate = true; break;
                 case "--children": children = true; break;
+                case "--experimental-gc-barrier": experimentalGcBarrier = true; break;
                 case "--snapshot-on" when i + 1 < args.Count: snapshotOn = args[++i]; break;
                 case "--profiler-log" when i + 1 < args.Count:
                     if (!Enum.TryParse(args[++i], true, out logLevel) || !Enum.IsDefined(logLevel))
@@ -50,7 +51,12 @@ public static class RunLauncher
             Output.Error(console, $"Usage: [bold]{Usage}[/]");
             return null;
         }
-        return new RunOptions { Command = command, Profile = profile, Correlate = correlate, CollectChildren = children, SnapshotOn = snapshotOn, ProfilerLogLevel = logLevel };
+        if (experimentalGcBarrier && !correlate)
+        {
+            Output.Error(console, $"[bold]--experimental-gc-barrier[/] requires [bold]--correlate[/].");
+            return null;
+        }
+        return new RunOptions { Command = command, Profile = profile, Correlate = correlate, CollectChildren = children, ExperimentalGcBarrier = experimentalGcBarrier, SnapshotOn = snapshotOn, ProfilerLogLevel = logLevel };
     }
 
     public static (RunTarget Target, Session Session)? Launch(Workspace workspace, IAnsiConsole console, RunOptions options)

@@ -3,12 +3,15 @@
 #include "sherlock/control/protocol.hpp"
 #include "sherlock/profiler/shadowstack.hpp"
 
+#include <chrono>
+#include <cstdio>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <format>
 #include <span>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -171,6 +174,7 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
         } else {
             std::vector<std::string> features = {"allocations"};
             if (correlate) features.push_back("correlate");
+            if (correlate) features.push_back("coherent-capture");
             if (triggersEnabled) features.push_back("snapshot-triggers");
             control->start("0.1", features,
                            [this](std::string_view cmd, std::span<const std::string_view> args) {
@@ -183,6 +187,9 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
                                    logger->error("control request failed");
                                    return control::Reply::error("internal profiler error");
                                }
+                           },
+                           [this] {
+                               coherentCapture_.forceRelease();
                            });
             // `call:` currently arms entry only. The embedded probe also supports exit events so
             // a later span capture can use the same composed rewrite.
@@ -283,6 +290,84 @@ control::Reply Profiler::handleControl(std::string_view cmd, std::span<const std
             ? control::Reply::success("armed")
             : control::Reply::error("could not arm (unknown kind, or method not loaded yet)");
     }
+    if (cmd == control::commands::kBeginCoherentCapture) {
+        if (args.empty() || args[0].empty()) {
+            return control::Reply::error("begin-coherent-capture needs a <token>");
+        }
+        if (!correlate || !aggregator) {
+            return control::Reply::error("coherent capture needs SHERLOCK_CORRELATE");
+        }
+        if (corProfilerInfo == nullptr) {
+            return control::Reply::error("no profiler info");
+        }
+        std::string token(args[0]);
+        if (coherentCapture_.active()) {
+            return control::Reply::error("a coherent capture is already in progress");
+        }
+        if (coherentForceGcRunning_.load(std::memory_order_acquire)) {
+            return control::Reply::error("the previous coherent capture GC is still finishing");
+        }
+        if (coherentForceGcThread_.joinable()) {
+            coherentForceGcThread_.join();
+        }
+        if (!coherentCapture_.begin(token)) {
+            return control::Reply::error("a coherent capture is already in progress");
+        }
+        // Runs on its own native thread: ForceGC cannot be called with a profiler callback on the
+        // stack, and calling it inline here would block this control (reader) thread until release
+        // - but complete-coherent-capture/abort-coherent-capture can only arrive on that same
+        // reader thread, so it would never be able to release itself. Returns immediately.
+        coherentForceGcRunning_.store(true, std::memory_order_release);
+        try {
+            coherentForceGcThread_ = std::thread(&Profiler::runCoherentForceGc, this, token);
+        } catch (...) {
+            coherentForceGcRunning_.store(false, std::memory_order_release);
+            (void)coherentCapture_.abort(token);
+            throw;
+        }
+        return control::Reply::success("armed");
+    }
+    if (cmd == control::commands::kCompleteCoherentCapture || cmd == control::commands::kAbortCoherentCapture) {
+        if (args.empty() || args[0].empty()) {
+            return control::Reply::error("token required");
+        }
+        const bool complete = (cmd == control::commands::kCompleteCoherentCapture);
+        const std::string token(args[0]);
+
+        if (!complete) {
+            if (!coherentCapture_.abort(token)) {
+                return control::Reply::error("no coherent capture is active for this token");
+            }
+            return control::Reply::success("aborted");
+        }
+
+        std::string path;
+        if (!coherentCapture_.isParkedFor(token)) {
+            return control::Reply::error("no coherent capture is parked for this token");
+        }
+        // The GC callback is parked past endGc(), so no extra ForceGC is needed.
+        path = withCaptureId(correlationPath, snapshotSequence.fetch_add(1, std::memory_order_relaxed));
+        if (!aggregator->emitCorrelation(path)) {
+            (void)coherentCapture_.abort(token);
+            if (coherentForceGcThread_.joinable()) {
+                coherentForceGcThread_.join();
+            }
+            return control::Reply::error("could not write coherent capture snapshot");
+        }
+
+        std::uint64_t gcCountAtReady = 0;
+        if (!coherentCapture_.release(token, gcCountAtReady)) {
+            std::remove(path.c_str());
+            if (coherentForceGcThread_.joinable()) {
+                coherentForceGcThread_.join();
+            }
+            return control::Reply::error("no coherent capture is parked for this token");
+        }
+        if (coherentForceGcThread_.joinable()) {
+            coherentForceGcThread_.join();
+        }
+        return control::Reply::success(path + "\t" + std::to_string(gcCountAtReady));
+    }
     return control::Reply::error("unknown command");
 }
 
@@ -314,12 +399,79 @@ bool Profiler::armTrigger(const std::string& spec, bool live) {
 void Profiler::fireTrigger(const std::string& display) noexcept {
     try {
         if (control) {
-            control->sendEvent({std::string(control::events::kSnapshotTrigger), display});
+            (void)control->sendEvent({std::string(control::events::kSnapshotTrigger), display});
         }
     } catch (const std::exception& ex) {
         logger->error("could not send snapshot trigger: {}", ex.what());
     } catch (...) {
         logger->error("could not send snapshot trigger");
+    }
+}
+
+// EXPERIMENTAL "coherent capture". Runs on its own native thread (never the control reader thread
+// or a profiler-callback thread - ForceGC forbids the latter). ForceGC blocks until the induced GC
+// (and, if it's the armed one, the park in handleCoherentCaptureGc) fully completes, so this thread
+// stays alive for the whole barrier lifetime.
+void Profiler::runCoherentForceGc(std::string token) noexcept {
+    try {
+        HRESULT hr = corProfilerInfo->ForceGC();
+        if (FAILED(hr)) {
+            if (coherentCapture_.abort(token) && control) {
+                (void)control->sendEvent({
+                    std::string(control::events::kCoherentCaptureFailed),
+                    token,
+                    std::format("ForceGC failed: 0x{:08x}", static_cast<unsigned>(hr))});
+            }
+        }
+        // On success the armed GC's GarbageCollectionFinished has already parked and been released
+        // by the time ForceGC() returns; nothing left to do here.
+    } catch (const std::exception& ex) {
+        (void)coherentCapture_.abort(token);
+        logger->error("coherent capture: ForceGC thread failed: {}", ex.what());
+    } catch (...) {
+        (void)coherentCapture_.abort(token);
+        logger->error("coherent capture: ForceGC thread failed");
+    }
+    coherentForceGcRunning_.store(false, std::memory_order_release);
+}
+
+// Called from GarbageCollectionFinished, after aggregator->endGc() has remapped the live set, only
+// when coherentCapture_.active() is true (Arming or Parked somewhere). Must not throw across the
+// callback boundary.
+void Profiler::handleCoherentCaptureGc() noexcept {
+    try {
+        const std::uint64_t gc = gcCount.load(std::memory_order_relaxed);
+        if (!coherentCapture_.markReady(gc)) {
+            return; // not the armed GC (barrier idle, or a foreign GC raced in)
+        }
+        const std::string armedToken = coherentCapture_.token(); // still set: park() clears it on exit
+        bool readySent = false;
+        try {
+            readySent = control && control->sendEvent({
+                std::string(control::events::kCoherentCaptureReady),
+                armedToken,
+                std::to_string(gc)});
+        } catch (const std::exception& ex) {
+            logger->error("coherent capture: could not send ready event: {}", ex.what());
+        } catch (...) {
+            logger->error("coherent capture: could not send ready event");
+        }
+        if (!readySent) {
+            logger->error("coherent capture: could not send ready event; releasing GC barrier");
+            coherentCapture_.forceRelease();
+        }
+        // Blocks this GC callback - and so the CLR, which stays GC-stalled - until complete/abort
+        // releases it or the hard timeout below fires. The timeout always releases: it's a safety
+        // net against a crashed or hung sl leaving the target process wedged forever.
+        control::CoherentCaptureBarrier::ParkResult result =
+            coherentCapture_.park(std::chrono::seconds(60));
+        if (result == control::CoherentCaptureBarrier::ParkResult::TimedOut) {
+            logger->error("coherent capture: 60s timeout waiting for complete/abort; releasing GC barrier (token {})", armedToken);
+        }
+    } catch (const std::exception& ex) {
+        logger->error("coherent capture: GC callback failed: {}", ex.what());
+    } catch (...) {
+        logger->error("coherent capture: GC callback failed");
     }
 }
 
@@ -330,6 +482,14 @@ HRESULT STDMETHODCALLTYPE Profiler::Shutdown() {
     isInitialized = false;
     if (control) {
         control->stop(); // stop serving requests before we tear down the aggregator
+    }
+    // Only safe to touch coherentForceGcThread_/coherentCapture_ here because control->stop() just
+    // above has already joined the reader thread, so no in-flight begin/complete/abort call can be
+    // racing this. Wake a barrier that's Arming or Parked (bounded by its own 60s hard timeout if
+    // it's genuinely stuck) and join, before the aggregator it may still be reading gets torn down.
+    coherentCapture_.forceRelease();
+    if (coherentForceGcThread_.joinable()) {
+        coherentForceGcThread_.join();
     }
     logger->trace(
         "profiler shutting down: {} allocations, {} bytes",
@@ -564,6 +724,12 @@ HRESULT STDMETHODCALLTYPE Profiler::GarbageCollectionFinished() {
     if (triggers && triggers->wantsGc()) {
         if (auto display = triggers->onGc(maxGenCollected.load(std::memory_order_relaxed)))
             fireTrigger(*display);
+    }
+    // EXPERIMENTAL coherent capture: active() is a lock-free check, so this costs nothing when no
+    // capture is in flight (the overwhelmingly common case for this opt-in feature). endGc() above
+    // has already remapped the live set, which is the precondition for parking here.
+    if (coherentCapture_.active()) {
+        handleCoherentCaptureGc();
     }
     return S_OK;
 }

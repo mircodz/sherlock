@@ -4,11 +4,13 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <thread>
 
 // CLR Profiling headers - profilercommon.h handles OS detection automatically
 #include "profilercommon.h"
 #include "sherlock/common/logger.hpp"
 #include "sherlock/control/channel.hpp"
+#include "sherlock/control/protocol.hpp"
 #include "sherlock/profiler/aggregator.hpp"
 #include "sherlock/profiler/probe.hpp"
 #include "sherlock/profiler/shadowstack.hpp"
@@ -162,6 +164,14 @@ private:
     // for an unknown kind or (live call) an unresolved method. `live` = from the REPL.
     bool armTrigger(const std::string& spec, bool live);
     void fireTrigger(const std::string& display) noexcept; // emit a snapshot-trigger event to sl
+
+    // ForceGC needs its own thread so the control reader remains free to release the GC callback.
+    // Shutdown stops that reader before touching the thread.
+    control::CoherentCaptureBarrier coherentCapture_;
+    std::thread coherentForceGcThread_;
+    std::atomic<bool> coherentForceGcRunning_{false};
+    void runCoherentForceGc(std::string token) noexcept; // dedicated thread body: calls ForceGC
+    void handleCoherentCaptureGc() noexcept;             // called from GarbageCollectionFinished
 };
 
 } // namespace Sherlock

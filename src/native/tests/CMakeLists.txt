@@ -13,6 +13,7 @@ endif()
 
 add_executable(SherlockTests
     aggregator.cpp
+    coherent_capture.cpp
     container.cpp
     control_channel.cpp
     intervals.cpp

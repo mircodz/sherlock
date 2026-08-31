@@ -1,6 +1,10 @@
 #pragma once
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -26,11 +30,19 @@ inline constexpr std::string_view kFlushAllocations = "flush-allocations";
 inline constexpr std::string_view kArmTrigger = "arm-trigger";
 inline constexpr std::string_view kGcCount = "gc-count";
 inline constexpr std::string_view kHeapSize = "heap-size";
+
+// EXPERIMENTAL: snapshot correlation while GarbageCollectionFinished keeps the heap still.
+inline constexpr std::string_view kBeginCoherentCapture = "begin-coherent-capture";
+inline constexpr std::string_view kCompleteCoherentCapture = "complete-coherent-capture";
+inline constexpr std::string_view kAbortCoherentCapture = "abort-coherent-capture";
 } // namespace commands
 
 /// Event names pushed in an EVENT frame. Mirrored on the C# side in ControlEvents.
 namespace events {
 inline constexpr std::string_view kSnapshotTrigger = "snapshot-trigger";
+
+inline constexpr std::string_view kCoherentCaptureReady = "coherent-capture-ready";
+inline constexpr std::string_view kCoherentCaptureFailed = "coherent-capture-failed";
 } // namespace events
 
 /// Prepends the 4-byte little-endian length to a payload.
@@ -94,5 +106,110 @@ template <typename Range>
     }
     return out;
 }
+
+/// Single-flight rendezvous between a GC callback and the control thread.
+class CoherentCaptureBarrier {
+public:
+    enum class State { Idle, Arming, Parked };
+    enum class ParkResult { Released, TimedOut };
+
+    [[nodiscard]] bool begin(std::string token) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (state_ != State::Idle) {
+            return false;
+        }
+        state_ = State::Arming;
+        token_ = std::move(token);
+        gcCountAtReady_ = 0;
+        released_ = false;
+        active_.store(true, std::memory_order_release);
+        return true;
+    }
+
+    [[nodiscard]] bool abort(const std::string& token) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (state_ == State::Idle || token_ != token || released_) {
+            return false;
+        }
+        if (state_ == State::Arming) {
+            state_ = State::Idle;
+            token_.clear();
+            active_.store(false, std::memory_order_release);
+        } else {
+            released_ = true;
+            cv_.notify_all();
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool active() const noexcept { return active_.load(std::memory_order_acquire); }
+
+    [[nodiscard]] bool markReady(std::uint64_t gcCount) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (state_ != State::Arming) {
+            return false;
+        }
+        state_ = State::Parked;
+        gcCountAtReady_ = gcCount;
+        // Preserve a shutdown release that raced with the GC while Arming.
+        return true;
+    }
+
+    [[nodiscard]] ParkResult park(std::chrono::milliseconds timeout) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        const bool wasReleased = cv_.wait_for(lock, timeout, [this] { return released_; });
+        state_ = State::Idle;
+        token_.clear();
+        released_ = false;
+        active_.store(false, std::memory_order_release);
+        return wasReleased ? ParkResult::Released : ParkResult::TimedOut;
+    }
+
+    [[nodiscard]] bool release(const std::string& token, std::uint64_t& gcCount) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (state_ != State::Parked || token_ != token || released_) {
+            return false;
+        }
+        gcCount = gcCountAtReady_;
+        released_ = true;
+        cv_.notify_all();
+        return true;
+    }
+
+    [[nodiscard]] bool isParkedFor(const std::string& token) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return state_ == State::Parked && token_ == token;
+    }
+
+    void forceRelease() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (state_ == State::Idle) {
+            return;
+        }
+        released_ = true;
+        cv_.notify_all();
+    }
+
+    [[nodiscard]] State state() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return state_;
+    }
+
+    [[nodiscard]] std::string token() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return token_;
+    }
+
+private:
+    mutable std::mutex mutex_;
+    std::condition_variable cv_;
+    State state_ = State::Idle;
+    std::string token_;
+    std::uint64_t gcCountAtReady_ = 0;
+    bool released_ = false;
+
+    // Avoid a mutex on every GC when the experiment is unused.
+    std::atomic<bool> active_{false};
+};
 
 } // namespace Sherlock::control

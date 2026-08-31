@@ -20,7 +20,12 @@ internal sealed class ProfilerControl : IDisposable
     internal const string ArmTrigger = "arm-trigger";
     internal const string GcCount = "gc-count";
     internal const string HeapSize = "heap-size";
+    internal const string BeginCoherentCapture = "begin-coherent-capture";
+    internal const string CompleteCoherentCapture = "complete-coherent-capture";
+    internal const string AbortCoherentCapture = "abort-coherent-capture";
     internal const string SnapshotTrigger = "snapshot-trigger";
+    internal const string CoherentCaptureReady = "coherent-capture-ready";
+    internal const string CoherentCaptureFailed = "coherent-capture-failed";
 
     private readonly Socket _listener;
     private readonly string _path;
@@ -41,7 +46,10 @@ internal sealed class ProfilerControl : IDisposable
     public IReadOnlyList<string> Features =>
         _clients.Values.SelectMany(c => c.Features).Distinct().ToArray();
 
+    public bool IsConnected(int pid) => _clients.ContainsKey(pid);
+
     public event Action<int, string[]>? EventReceived;
+    public event Action<int>? ClientDisconnected;
 
     public ProfilerControl(string path)
     {
@@ -180,9 +188,10 @@ internal sealed class ProfilerControl : IDisposable
         }
         finally
         {
+            bool removed = false;
             if (pid != 0)
             {
-                _clients.TryRemove(new KeyValuePair<int, Client>(pid, client));
+                removed = _clients.TryRemove(new KeyValuePair<int, Client>(pid, client));
             }
             foreach ((int id, TaskCompletionSource<string[]> pending) in client.Pending)
             {
@@ -192,6 +201,10 @@ internal sealed class ProfilerControl : IDisposable
                 }
             }
             try { socket.Dispose(); } catch { /* ignore */ }
+            if (removed)
+            {
+                ClientDisconnected?.Invoke(pid);
+            }
         }
     }
 

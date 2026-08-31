@@ -140,13 +140,23 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
             RunTarget? target = _targets.FirstOrDefault(t => !t.HasExited && Owns(t, pid));
             bool profiled = target?.AllocationPath is not null;
             bool correlationRequested = target is { HasCorrelation: true };
+            bool coherentCapture = correlationRequested && target!.Options.ExperimentalGcBarrier;
 
             string? provenance = null;
             string? dumpPath = null;
             long gcAtEmit = -1;
+            ProvenanceState state = ProvenanceState.None;
             try
             {
-                if (profiled)
+                if (coherentCapture)
+                {
+                    CoherentCaptureResult capture = target!.CaptureCoherentSnapshot(pid, CaptureTimeout);
+                    dumpPath = capture.DumpPath;
+                    provenance = capture.ProvenancePath;
+                    gcAtEmit = capture.GcCount;
+                    state = ProvenanceState.Exact;
+                }
+                else if (profiled)
                 {
                     if (correlationRequested)
                     {
@@ -157,6 +167,10 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
                         provenance = target!.CaptureAllocations(pid, CaptureTimeout);
                     }
 
+                }
+
+                if (profiled)
+                {
                     if (provenance is null)
                     {
                         throw new DumpAnalysisException($"Could not capture allocations from process {pid}; no snapshot was created.");
@@ -171,10 +185,9 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
                     }
                 }
 
-                dumpPath = DumpCollector.Collect(pid, DumpKind.Heap);
+                dumpPath ??= DumpCollector.Collect(pid, DumpKind.Heap);
 
-                ProvenanceState state = ProvenanceState.None;
-                if (correlationRequested)
+                if (correlationRequested && !coherentCapture)
                 {
                     long gcAfterDump = target!.GcCount(pid, DriftTimeout);
                     state = gcAtEmit < 0 || gcAfterDump < 0

@@ -230,11 +230,16 @@ std::optional<std::string> ControlChannel::connect(const std::string& socketPath
 #endif
 }
 
-void ControlChannel::start(std::string_view version, const std::vector<std::string>& features, Handler handler) {
+void ControlChannel::start(
+    std::string_view version,
+    const std::vector<std::string>& features,
+    Handler handler,
+    DisconnectHandler disconnected) {
     if (fd_.load(std::memory_order_acquire) == kInvalidSocket) {
         return;
     }
     handler_ = std::move(handler);
+    disconnected_ = std::move(disconnected);
 
     std::string featureList;
     for (std::size_t i = 0; i < features.size(); ++i) {
@@ -296,9 +301,18 @@ void ControlChannel::serve() {
             sendAll(framed);
         }
     }
+    if (running_.exchange(false) && disconnected_) {
+        try {
+            disconnected_();
+        } catch (const std::exception& ex) {
+            if (logger_) logger_->error("control channel disconnect handler failed: {}", ex.what());
+        } catch (...) {
+            if (logger_) logger_->error("control channel disconnect handler failed");
+        }
+    }
 }
 
-void ControlChannel::sendEvent(const std::vector<std::string>& fields) {
+bool ControlChannel::sendEvent(const std::vector<std::string>& fields) {
     std::vector<std::string> all;
     all.reserve(fields.size() + 1);
     all.emplace_back("EVENT");
@@ -306,7 +320,7 @@ void ControlChannel::sendEvent(const std::vector<std::string>& fields) {
         all.push_back(f);
     }
     std::string framed = frame(joinFields(all));
-    sendAll(framed);
+    return sendAll(framed);
 }
 
 bool ControlChannel::sendAll(std::span<const char> bytes) {

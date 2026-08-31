@@ -37,6 +37,10 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         [Description("Also capture allocation profiles for child processes, not just the root.")]
         public bool Children { get; init; }
 
+        [CommandOption("--experimental-gc-barrier")]
+        [Description("Experimental: hold the capture GC while taking a correlated dump.")]
+        public bool ExperimentalGcBarrier { get; init; }
+
         [CommandOption("--live")]
         [Description("Open a live TUI: heap usage + process tree; snapshot a process on demand.")]
         public bool Live { get; init; }
@@ -70,7 +74,13 @@ public sealed class RunCommand : Command<RunCommand.Settings>
             return 1;
         }
 
-        var options = new RunOptions { Command = command, Profile = settings.Profile, Correlate = settings.Correlate, CollectChildren = settings.Children, SnapshotOn = settings.SnapshotOn, ProfilerLogLevel = settings.ProfilerLogLevel };
+        if (settings.ExperimentalGcBarrier && !settings.Correlate)
+        {
+            Output.Error(console, $"[bold]--experimental-gc-barrier[/] requires [bold]--correlate[/].");
+            return 1;
+        }
+
+        var options = new RunOptions { Command = command, Profile = settings.Profile, Correlate = settings.Correlate, CollectChildren = settings.Children, ExperimentalGcBarrier = settings.ExperimentalGcBarrier, SnapshotOn = settings.SnapshotOn, ProfilerLogLevel = settings.ProfilerLogLevel };
 
         if (settings.Live && !options.NeedsProfiler)
         {

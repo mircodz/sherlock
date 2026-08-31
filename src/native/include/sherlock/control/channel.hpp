@@ -47,6 +47,7 @@ public:
     /// cmd + args -> Reply. Runs on the channel's reader thread (a native thread, so it's
     /// safe to call ForceGC etc. from here).
     using Handler = std::function<Reply(std::string_view cmd, std::span<const std::string_view> args)>;
+    using DisconnectHandler = std::function<void()>;
 
     explicit ControlChannel(Logger* logger);
     ~ControlChannel();
@@ -60,10 +61,14 @@ public:
     [[nodiscard]] std::optional<std::string> connect(const std::string& socketPath);
 
     /// Sends HELLO (version + features), then serves requests on a background thread.
-    void start(std::string_view version, const std::vector<std::string>& features, Handler handler);
+    void start(
+        std::string_view version,
+        const std::vector<std::string>& features,
+        Handler handler,
+        DisconnectHandler disconnected = {});
 
     /// Pushes an unsolicited EVENT frame to sl (fields after the "EVENT" verb). Thread-safe.
-    void sendEvent(const std::vector<std::string>& fields);
+    [[nodiscard]] bool sendEvent(const std::vector<std::string>& fields);
 
     void stop();
 
@@ -78,6 +83,7 @@ private:
     // threads, while stop() closes and resets it — make it atomic to avoid a torn/racy read.
     std::atomic<SocketHandle> fd_{kInvalidSocket};
     Handler handler_;
+    DisconnectHandler disconnected_;
     std::atomic<bool> running_{false};
     std::thread worker_;
     std::mutex writeMutex_; // also serializes stop()'s close() against an in-flight sendAll()

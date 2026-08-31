@@ -15,6 +15,7 @@ namespace Sherlock.Core.Collection;
 public sealed record RunProcess(int Pid, string Name, bool IsRoot, bool IsDotnet, int ParentPid = 0);
 
 public sealed record HeapStats(long Total, long Gen0, long Gen1, long Gen2, long Loh, long Poh);
+public sealed record CoherentCaptureResult(string DumpPath, string ProvenancePath, long GcCount);
 
 public enum ProfilerLogLevel
 {
@@ -31,11 +32,12 @@ public sealed record RunOptions
     public bool Profile { get; init; }
     public bool Correlate { get; init; }
     public bool CollectChildren { get; init; }
+    public bool ExperimentalGcBarrier { get; init; }
     public string? SnapshotOn { get; init; }
     public string? OutputDirectory { get; init; }
     public string? ProfilerPath { get; init; }
     public ProfilerLogLevel ProfilerLogLevel { get; init; } = ProfilerLogLevel.Warning;
-    public bool NeedsProfiler => Profile || Correlate || CollectChildren || SnapshotOn is not null || ProfilerPath is not null;
+    public bool NeedsProfiler => Profile || Correlate || CollectChildren || ExperimentalGcBarrier || SnapshotOn is not null || ProfilerPath is not null;
 }
 
 /// <summary>A launched process tree and its profiler connection.</summary>
@@ -55,6 +57,11 @@ public sealed partial class RunTarget : IDisposable
     private ProfilerControl? _control;
 
     private readonly ConcurrentQueue<(int Pid, string Name)> _triggerHits = new();
+    private sealed record CoherentCaptureWaiter(
+        int Pid,
+        TaskCompletionSource<(long Gc, string? Error)> Signal);
+    private readonly ConcurrentDictionary<string, CoherentCaptureWaiter> _coherentCaptures = new();
+    private static readonly TimeSpan CoherentReadyTimeout = TimeSpan.FromSeconds(60);
 
     private readonly ConcurrentDictionary<int, string> _names = new();
 
@@ -206,6 +213,29 @@ public sealed partial class RunTarget : IDisposable
             if (fields.Length >= 3 && fields[1] == ProfilerControl.SnapshotTrigger)
             {
                 _triggerHits.Enqueue((pid, fields[2]));
+            }
+            else if (fields.Length >= 4 && fields[1] == ProfilerControl.CoherentCaptureReady &&
+                     _coherentCaptures.TryGetValue(fields[2], out CoherentCaptureWaiter? ready) &&
+                     ready.Pid == pid)
+            {
+                long gc = long.TryParse(fields[3], out long value) ? value : -1;
+                ready.Signal.TrySetResult((gc, null));
+            }
+            else if (fields.Length >= 4 && fields[1] == ProfilerControl.CoherentCaptureFailed &&
+                     _coherentCaptures.TryGetValue(fields[2], out CoherentCaptureWaiter? failed) &&
+                     failed.Pid == pid)
+            {
+                failed.Signal.TrySetResult((-1, fields[3]));
+            }
+        };
+        _control.ClientDisconnected += pid =>
+        {
+            foreach (CoherentCaptureWaiter capture in _coherentCaptures.Values)
+            {
+                if (capture.Pid == pid)
+                {
+                    capture.Signal.TrySetResult((-1, "profiler control channel disconnected"));
+                }
             }
         };
         psi.Environment["SHERLOCK_CONTROL_SOCKET"] = _control.SocketPath;
@@ -401,6 +431,78 @@ public sealed partial class RunTarget : IDisposable
             return path;
         }
         throw new DumpAnalysisException(ok ? $"Profiler in process {pid} reported a missing allocation file." : fields.FirstOrDefault() ?? $"Profiler in process {pid} did not produce allocation data.");
+    }
+
+    public CoherentCaptureResult CaptureCoherentSnapshot(int pid, TimeSpan timeout)
+    {
+        if (!_correlate || _control is null || !IsAlive(pid))
+        {
+            throw new DumpAnalysisException($"Process {pid} has no live correlation control channel.");
+        }
+
+        string token = Guid.NewGuid().ToString("N");
+        var signal = new TaskCompletionSource<(long Gc, string? Error)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_coherentCaptures.TryAdd(token, new CoherentCaptureWaiter(pid, signal)))
+        {
+            throw new InvalidOperationException("Could not register coherent capture.");
+        }
+
+        string? dumpPath = null;
+        bool begun = false;
+        try
+        {
+            (bool ok, string[] fields) = Request(pid, ProfilerControl.BeginCoherentCapture, TimeSpan.FromSeconds(10), token);
+            if (!ok)
+            {
+                throw new DumpAnalysisException(fields.FirstOrDefault() ?? "Profiler could not start coherent capture.");
+            }
+            begun = true;
+
+            TimeSpan readyTimeout = timeout < CoherentReadyTimeout ? timeout : CoherentReadyTimeout;
+            (long gc, string? error) result;
+            try
+            {
+                result = signal.Task.WaitAsync(readyTimeout).GetAwaiter().GetResult();
+            }
+            catch (TimeoutException ex)
+            {
+                throw new DumpAnalysisException(
+                    $"Profiler did not reach the coherent capture barrier within {readyTimeout.TotalSeconds:0} seconds.",
+                    ex);
+            }
+            (long gc, string? error) = result;
+            if (error is not null)
+            {
+                throw new DumpAnalysisException($"Profiler could not park the capture GC: {error}");
+            }
+
+            dumpPath = DumpCollector.Collect(pid, DumpKind.Heap);
+            (ok, fields) = Request(pid, ProfilerControl.CompleteCoherentCapture, timeout, token);
+            if (!ok || fields.Length == 0 || !File.Exists(fields[0]))
+            {
+                throw new DumpAnalysisException(fields.FirstOrDefault() ?? "Profiler could not complete coherent capture.");
+            }
+
+            string provenance = fields[0];
+            long completedGc = fields.Length > 1 && long.TryParse(fields[1], out long value) ? value : gc;
+            return new CoherentCaptureResult(dumpPath, provenance, completedGc);
+        }
+        catch
+        {
+            if (begun && _control.IsConnected(pid))
+            {
+                _ = Request(pid, ProfilerControl.AbortCoherentCapture, TimeSpan.FromSeconds(5), token);
+            }
+            if (dumpPath is not null)
+            {
+                try { File.Delete(dumpPath); } catch { /* best-effort cleanup */ }
+            }
+            throw;
+        }
+        finally
+        {
+            _coherentCaptures.TryRemove(token, out _);
+        }
     }
 
     /// <summary>Returns the live process tree, root first.</summary>
