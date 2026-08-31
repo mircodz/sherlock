@@ -45,7 +45,7 @@ public sealed class StringsReplCommand : IReplCommand
         {
             totalWasted += dupString.WastedBytes;
             table.AddRow(
-                dupString.Count.ToString("N0"),
+                Counts.Format(dupString.Count),
                 $"[bold green]{ByteSize.Format((long)dupString.WastedBytes)}[/]",
                 $"[aqua]{Markup.Escape(TextUtil.Preview(dupString.Value, 80))}[/]");
         }

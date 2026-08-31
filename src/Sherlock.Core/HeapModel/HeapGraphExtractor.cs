@@ -201,6 +201,7 @@ public sealed class HeapGraphExtractor(Snapshot snapshot)
 
         // --- 3. Assemble CSR (+ the synthetic root -> GC roots). ---
         var roots = new List<int>();
+        var rootRecords = new List<HeapRootRecord>();
         var rootSeen = new HashSet<int>();
         foreach (ClrRoot root in heap.EnumerateRoots())
         {
@@ -215,6 +216,7 @@ public sealed class HeapGraphExtractor(Snapshot snapshot)
             {
                 throw new InvalidDataException($"GC root references unknown object 0x{address:x}.");
             }
+            rootRecords.Add(new HeapRootRecord(v, root.Address, root.RootKind, root.IsInterior, root.IsPinned));
             if (rootSeen.Add(v))
             {
                 roots.Add(v);
@@ -242,7 +244,7 @@ public sealed class HeapGraphExtractor(Snapshot snapshot)
         edgeSegments.Add(roots.ToArray());
         var edges = EdgeColumn.Build(edgeSegments, offsets, MaxEdgesPerChunk);
 
-        return new HeapGraph(addresses, sizes, offsets, edges, (ReadOnlyMemory<int>)typeOf, types.Names(), freeBytes, freeCount);
+        return new HeapGraph(addresses, sizes, offsets, edges, typeOf, types.Names(), freeBytes, freeCount, rootRecords.ToArray());
     }
 
     /// <summary>Cached per-type layout keyed by method table: size-formula inputs, type name, and the

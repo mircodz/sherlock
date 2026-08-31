@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
@@ -25,6 +26,12 @@ public sealed class ContainerWriter
     public void AddRecords<T>(SectionType type, ushort version, ReadOnlySpan<T> records) where T : struct
         => AddSection(type, version, (ushort)Unsafe.SizeOf<T>(), MemoryMarshal.AsBytes(records), (ulong)records.Length);
 
+    public void AddMemoryRecords<T>(SectionType type, ushort version, ReadOnlyMemory<T> records) where T : unmanaged
+    {
+        ReadOnlyMemory<byte> bytes = records.Length == 0 ? ReadOnlyMemory<byte>.Empty : new UnmanagedByteMemory<T>(records).Memory;
+        _sections.Add(new Sec(type, version, (ushort)Unsafe.SizeOf<T>(), (ulong)records.Length, [bytes], bytes.Length));
+    }
+
     /// <summary>Adds a large fixed-width column as one or more same-typed sections, each at most
     /// <paramref name="chunkBytes"/> bytes and holding a uniform element count (last is short). Mirrors
     /// the native <c>addChunkedRecords</c> layout so <see cref="Column{T}"/> reassembles either side's
@@ -39,6 +46,18 @@ public sealed class ContainerWriter
         {
             int n = Math.Min(elemsPerChunk, records.Length - i);
             AddRecords(type, version, records.Slice(i, n));
+        }
+    }
+
+    public void AddChunkedMemoryRecords<T>(SectionType type, ushort version, ReadOnlyMemory<T> records,
+                                           long chunkBytes = ContainerFormat.DefaultChunkBytes) where T : unmanaged
+    {
+        int width = Unsafe.SizeOf<T>();
+        int elemsPerChunk = (int)Math.Max(1, chunkBytes / width);
+        for (int i = 0; i < records.Length; i += elemsPerChunk)
+        {
+            int count = Math.Min(elemsPerChunk, records.Length - i);
+            AddMemoryRecords(type, version, records.Slice(i, count));
         }
     }
 
@@ -154,4 +173,32 @@ public sealed class ContainerWriter
     }
 
     private static long Align(long n) => (n + ContainerFormat.Alignment - 1) & ~((long)ContainerFormat.Alignment - 1);
+}
+
+internal sealed unsafe class UnmanagedByteMemory<T>(ReadOnlyMemory<T> source) : MemoryManager<byte> where T : unmanaged
+{
+    private readonly ReadOnlyMemory<T> _source = source;
+
+    public override Span<byte> GetSpan() => MemoryMarshal.AsBytes(MemoryMarshal.AsMemory(_source).Span);
+
+    public override MemoryHandle Pin(int elementIndex = 0)
+    {
+        if ((uint)elementIndex > (uint)GetSpan().Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(elementIndex));
+        }
+        MemoryHandle sourceHandle = _source.Pin();
+        var pin = new SourcePin(sourceHandle);
+        return new MemoryHandle((byte*)sourceHandle.Pointer + elementIndex, default, pin);
+    }
+
+    public override void Unpin() { }
+    protected override void Dispose(bool disposing) { }
+
+    private sealed class SourcePin(MemoryHandle handle) : IPinnable
+    {
+        private MemoryHandle _handle = handle;
+        public MemoryHandle Pin(int elementIndex) => throw new NotSupportedException();
+        public void Unpin() => _handle.Dispose();
+    }
 }

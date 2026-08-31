@@ -10,7 +10,7 @@ public sealed class ListReplCommand : IReplCommand
 {
     public string Name => "ls";
     public string Summary => "List workspaces and their snapshots.";
-    public string Usage => "snapshots";
+    public string Usage => "ls";
     public string Category => "Library";
 
     public void Execute(ReplContext context, string[] args)

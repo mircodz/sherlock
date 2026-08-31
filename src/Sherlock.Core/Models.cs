@@ -137,8 +137,15 @@ public sealed record EventSubscription(
 
 /// <summary>One path from a GC root to a target object, found by <c>gcroot</c>.</summary>
 public sealed record GcRootPath(
-    string RootDescription,
+    GcRootInfo Root,
     IReadOnlyList<GcRootNode> Path);
+
+/// <summary>A GC root that keeps an object alive.</summary>
+public sealed record GcRootInfo(
+    ulong Address,
+    string Kind,
+    bool IsInterior,
+    bool IsPinned);
 
 /// <summary>A node along a GC root path: an object address and its type.</summary>
 public sealed record GcRootNode(

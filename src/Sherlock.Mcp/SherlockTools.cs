@@ -48,15 +48,14 @@ public static class SherlockTools
         snapshots.Query(snapshot, s => Dto.Inspect(s.Inspect(ParseAddress(address))));
 
     [McpServerTool(Name = "gcroot")]
-    [Description("Why an object is still alive: paths from a GC root to the object at a hex address.")]
+    [Description("Why an object is still alive: one real reference path from a GC root to the object.")]
     public static object GcRoot(
         OpenSnapshots snapshots,
         [Description("snapshot id or label")] string snapshot,
-        [Description("object address in hex")] string address,
-        [Description("how many root paths to return")] int maxPaths = 3)
+        [Description("object address in hex")] string address)
     {
         ulong target = ParseAddress(address);
-        return snapshots.Query(snapshot, s => Dto.Roots(target, s.Roots(target, maxPaths)));
+        return snapshots.Query(snapshot, s => Dto.Roots(target, s.Roots(target)));
     }
 
     [McpServerTool(Name = "whoalloc")]

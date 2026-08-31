@@ -22,6 +22,7 @@ public enum SectionType : uint
     GraphEdgesChunk = 14, // int[] one node-aligned slice of the CSR successor ids; repeated, in order, so
                           //   the edge column can exceed the ~2.1B single-array ceiling
     GraphEdgeChunkMeta = 15, // long[] first global edge index of each chunk (length chunkCount + 1, last = total)
+    GraphRoots = 16,
 
     // Derived dominator-tree cache (computed from the graph, cached beside the dump so reopen skips the
     // recompute, see Sherlock.Core.Analysis.DominatorTreeStore). RPO-indexed; index 0 is the root.

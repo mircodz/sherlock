@@ -16,6 +16,15 @@ public sealed record RunProcess(int Pid, string Name, bool IsRoot, bool IsDotnet
 
 public sealed record HeapStats(long Total, long Gen0, long Gen1, long Gen2, long Loh, long Poh);
 
+public enum ProfilerLogLevel
+{
+    Trace,
+    Info,
+    Warning,
+    Error,
+    Off,
+}
+
 public sealed record RunOptions
 {
     public required IReadOnlyList<string> Command { get; init; }
@@ -25,6 +34,7 @@ public sealed record RunOptions
     public string? SnapshotOn { get; init; }
     public string? OutputDirectory { get; init; }
     public string? ProfilerPath { get; init; }
+    public ProfilerLogLevel ProfilerLogLevel { get; init; } = ProfilerLogLevel.Warning;
     public bool NeedsProfiler => Profile || Correlate || CollectChildren || SnapshotOn is not null || ProfilerPath is not null;
 }
 
@@ -178,6 +188,7 @@ public sealed class RunTarget : IDisposable
         psi.Environment["CORECLR_PROFILER_PATH"] = profilerPath;
         _allocationTemplate = Path.Combine(_captureDir!, "allocations.slab");
         psi.Environment["SHERLOCK_PROFILE_OUT"] = _allocationTemplate;
+        psi.Environment["SHERLOCK_LOG_LEVEL"] = options.ProfilerLogLevel.ToString().ToLowerInvariant();
 
         if (!string.IsNullOrWhiteSpace(options.SnapshotOn))
         {

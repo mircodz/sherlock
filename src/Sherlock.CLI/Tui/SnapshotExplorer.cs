@@ -480,7 +480,7 @@ public static class SnapshotExplorer
             {
                 var roots = new TreeView<RootRow> { RenderLabel = RootLabel, ShowGuides = true };
                 roots.OnLinkClick = p => Follow(snap, p);
-                IReadOnlyList<GcRootPath> paths = snap.Roots(address, 3, ct);
+                IReadOnlyList<GcRootPath> paths = snap.Roots(address, ct);
                 if (paths.Count == 0)
                 {
                     roots.AddRoot(new RootRow("(not reachable from any GC root — collectable)", null));
@@ -488,7 +488,7 @@ public static class SnapshotExplorer
 
                 foreach (GcRootPath path in paths)
                 {
-                    TreeNode<RootRow> root = roots.AddRoot(new RootRow(path.RootDescription, null));
+                    TreeNode<RootRow> root = roots.AddRoot(new RootRow($"{path.Root.Kind} @ 0x{path.Root.Address:x12}", null));
                     TreeNode<RootRow> node = root;
                     foreach (GcRootNode step in path.Path) node = node.AddChild(new RootRow(Short(step.TypeName), step.Address));
                     root.ExpandAll();

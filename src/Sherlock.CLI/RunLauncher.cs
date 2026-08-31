@@ -10,12 +10,13 @@ namespace Sherlock.CLI;
 /// <summary>Parses and starts runs for both the CLI and REPL.</summary>
 public static class RunLauncher
 {
-    public const string Usage = "run [--profile] [--correlate] [--children] [--snapshot-on <event>] [--] <path> [args...]";
+    public const string Usage = "run [--profile] [--correlate] [--children] [--snapshot-on <event>] [--profiler-log <level>] [--] <path> [args...]";
 
     public static RunOptions? Parse(IReadOnlyList<string> args, IAnsiConsole console)
     {
         bool profile = false, correlate = false, children = false;
         string? snapshotOn = null;
+        ProfilerLogLevel logLevel = ProfilerLogLevel.Warning;
         var command = new List<string>();
 
         for (int i = 0; i < args.Count; i++)
@@ -28,6 +29,16 @@ public static class RunLauncher
                 case "--correlate": correlate = true; break;
                 case "--children": children = true; break;
                 case "--snapshot-on" when i + 1 < args.Count: snapshotOn = args[++i]; break;
+                case "--profiler-log" when i + 1 < args.Count:
+                    if (!Enum.TryParse(args[++i], true, out logLevel) || !Enum.IsDefined(logLevel))
+                    {
+                        console.MarkupLine("[red]error:[/] profiler log level must be trace, info, warning, error, or off.");
+                        return null;
+                    }
+                    break;
+                case "--profiler-log":
+                    console.MarkupLine("[red]error:[/] --profiler-log requires a level.");
+                    return null;
                 case "--": break;
                 default: command.Add(arg); break;
             }
@@ -38,7 +49,7 @@ public static class RunLauncher
             console.MarkupLineInterpolated($"[red]error:[/] usage: {Usage}");
             return null;
         }
-        return new RunOptions { Command = command, Profile = profile, Correlate = correlate, CollectChildren = children, SnapshotOn = snapshotOn };
+        return new RunOptions { Command = command, Profile = profile, Correlate = correlate, CollectChildren = children, SnapshotOn = snapshotOn, ProfilerLogLevel = logLevel };
     }
 
     public static (RunTarget Target, Session Session)? Launch(Workspace workspace, IAnsiConsole console, RunOptions options)

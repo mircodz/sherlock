@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace Sherlock.CLI.Rendering;
 
 /// <summary>Formats large counts compactly (e.g. 1234 -> 1.2K, 3400000 -> 3.4M).</summary>
@@ -9,7 +11,7 @@ public static class Counts
     {
         if (n < 1000)
         {
-            return n.ToString();
+            return n.ToString(CultureInfo.InvariantCulture);
         }
 
         double value = n;
@@ -20,6 +22,9 @@ public static class Counts
             unit++;
         }
 
-        return $"{value:0.#}{Suffixes[unit]}";
+        return $"{value.ToString("0.#", CultureInfo.InvariantCulture)}{Suffixes[unit]}";
     }
+
+    public static string Format(long n) => n.ToString("N0", CultureInfo.InvariantCulture);
+    public static string Percent(double value, int decimals = 1) => value.ToString(decimals == 0 ? "0" : "0.0", CultureInfo.InvariantCulture) + "%";
 }

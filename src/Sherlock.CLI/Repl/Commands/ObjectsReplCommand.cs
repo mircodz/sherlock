@@ -48,7 +48,7 @@ public sealed class ObjectsReplCommand : IReplCommand
 
         context.Console.Write(table);
         context.Console.MarkupLine(
-            $"Showing top [bold]{listing.Instances.Count}[/] of [bold]{listing.TotalMatched:N0}[/] matches, " +
+            $"Showing top [bold]{listing.Instances.Count}[/] of [bold]{Counts.Format(listing.TotalMatched)}[/] matches, " +
             $"[bold green]{ByteSize.Format((long)listing.TotalMatchedSize)}[/] total. " +
             $"[grey]Copy an address into[/] gcroot <address>.");
     }

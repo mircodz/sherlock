@@ -4,7 +4,7 @@ using Spectre.Console.Cli;
 var app = new CommandApp<AnalyzeCommand>();
 app.Configure(config =>
 {
-    config.SetApplicationName("sherlock");
+    config.SetApplicationName("sl");
     config.AddCommand<AnalyzeCommand>("analyze")
         .WithDescription("Open a .NET memory dump and analyze it interactively.")
         .WithExample("analyze", "app.dmp")

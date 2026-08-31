@@ -14,7 +14,7 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
     private Workspace? _workspace;
     private string? _lastCommand;
 
-    private string Prompt => _workspace?.CurrentName is { } name ? $"sherlock[{name}]> " : "sherlock> ";
+    private string Prompt => _workspace?.CurrentName is { } name ? $"sl[{name}]> " : "sl> ";
 
     /// <summary>Runs commands non-interactively, then returns. Used by <c>--exec</c> and scripts.</summary>
     public void RunBatch(Workspace workspace, IEnumerable<string> lines)
@@ -149,13 +149,14 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
     {
         if (workspace.Current is not null)
         {
-            console.MarkupLineInterpolated($"[bold]Sherlock[/] — loaded [aqua]{workspace.CurrentName}[/]");
+            console.MarkupLineInterpolated($"[bold]sl[/] — loaded [aqua]{workspace.CurrentName}[/]");
         }
         else
         {
             int count = workspace.Store.Sessions.Count;
-            console.MarkupLineInterpolated($"[bold]Sherlock[/] — no snapshot loaded ([aqua]{count}[/] sessions in library)");
-            console.MarkupLine("[grey]Use[/] snapshots[grey],[/] load <id>[grey],[/] collect[grey], or[/] import <file>[grey].[/]");
+            string sessions = count == 1 ? "session" : "sessions";
+            console.MarkupLineInterpolated($"[bold]sl[/] — no snapshot loaded ([aqua]{count}[/] {sessions} in library)");
+            console.MarkupLine("[grey]Use[/] ls[grey],[/] load <id>[grey],[/] collect[grey], or[/] import <file>[grey].[/]");
         }
         console.MarkupLine("Type [bold]help[/] for commands, [bold]exit[/] to quit.");
         console.WriteLine();

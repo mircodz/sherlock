@@ -84,7 +84,7 @@ public static class Dto
         rooted = paths.Count > 0,
         paths = paths.Select(p => new
         {
-            root = p.RootDescription,
+            root = new { address = Hex(p.Root.Address), kind = p.Root.Kind, pinned = p.Root.IsPinned, interior = p.Root.IsInterior },
             chain = p.Path.Select(n => new { address = Hex(n.Address), type = n.TypeName }).ToList(),
         }).ToList(),
     };

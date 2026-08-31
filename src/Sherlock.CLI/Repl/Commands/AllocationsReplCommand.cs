@@ -108,7 +108,7 @@ public sealed class AllocationsReplCommand : IReplCommand
         }
 
         context.Console.MarkupLineInterpolated(
-            $"[grey]{profile.Sites.Count:N0} call paths,[/] [bold green]{ByteSize.Format(profile.TotalAllocBytes)}[/] [grey]allocated,[/] [bold green]{ByteSize.Format(profile.TotalSurvivedBytes)}[/] [grey]survived first GC.[/]");
+            $"[grey]{Counts.Format(profile.Sites.Count)} call paths,[/] [bold green]{ByteSize.Format(profile.TotalAllocBytes)}[/] [grey]allocated,[/] [bold green]{ByteSize.Format(profile.TotalSurvivedBytes)}[/] [grey]survived first GC.[/]");
     }
 
     /// <summary>Top-down call tree: nodes carry inclusive allocated (+survived) bytes.</summary>
@@ -195,8 +195,8 @@ public sealed class AllocationsReplCommand : IReplCommand
             double pct = 100.0 * child.AllocBytes / total;
             double survPct = child.AllocBytes == 0 ? 0 : 100.0 * child.SurvivedBytes / child.AllocBytes;
             TreeNode tn = parent.AddNode(
-                $"[bold green]{ByteSize.Format(child.AllocBytes)}[/] [grey]{pct:0.0}% · {Counts.Compact(child.AllocCount)}×[/]  " +
-                $"{Markup.Escape(child.Frame)} [grey]· {survPct:0}% surv[/]");
+                $"[bold green]{ByteSize.Format(child.AllocBytes)}[/] [grey]{Counts.Percent(pct)} · {Counts.Compact(child.AllocCount)}×[/]  " +
+                $"{Markup.Escape(child.Frame)} [grey]· {Counts.Percent(survPct, 0)} surv[/]");
             AddChildren(tn, child, total, minFraction);
         }
 

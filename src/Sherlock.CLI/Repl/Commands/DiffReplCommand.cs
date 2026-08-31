@@ -76,7 +76,7 @@ public sealed class DiffReplCommand : IReplCommand
         {
             table.AddRow(
                 $"[red]+{ByteSize.Format(dBytes)}[/]",
-                $"+{dCount:N0}",
+                $"+{Counts.Format(dCount)}",
                 $"[aqua]{Markup.Escape(TypeNames.Short(type))}[/]{(isNew ? " [yellow](new)[/]" : "")}");
         }
 

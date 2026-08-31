@@ -17,7 +17,7 @@ namespace Sherlock.Core.Analysis;
 public sealed class DominatorTree
 {
     private readonly ClrHeap _heap;
-    private readonly Func<ulong, string>? _typeNameByAddress; // graph-backed name resolver (V2); null -> use _heap
+    private readonly Func<ulong, string>? _typeNameByAddress;
     private readonly ulong[] _address;              // RPO -> object address (0 for synthetic root)
     private readonly ulong[] _ownSize;              // RPO -> shallow size
     private readonly ulong[] _retained;             // RPO -> retained size

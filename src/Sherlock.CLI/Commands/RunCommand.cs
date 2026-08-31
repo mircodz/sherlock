@@ -43,6 +43,10 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         [CommandOption("--snapshot-on <EVENT>")]
         [Description("Capture a snapshot when an event fires, e.g. throw:My.Namespace.Exception.")]
         public string? SnapshotOn { get; init; }
+
+        [CommandOption("--profiler-log <LEVEL>")]
+        [Description("Native profiler log level: trace, info, warning, error, or off.")]
+        public ProfilerLogLevel ProfilerLogLevel { get; init; } = ProfilerLogLevel.Warning;
     }
 
     protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellation)
@@ -65,7 +69,7 @@ public sealed class RunCommand : Command<RunCommand.Settings>
             return 1;
         }
 
-        var options = new RunOptions { Command = command, Profile = settings.Profile, Correlate = settings.Correlate, CollectChildren = settings.Children, SnapshotOn = settings.SnapshotOn };
+        var options = new RunOptions { Command = command, Profile = settings.Profile, Correlate = settings.Correlate, CollectChildren = settings.Children, SnapshotOn = settings.SnapshotOn, ProfilerLogLevel = settings.ProfilerLogLevel };
 
         if (settings.Live && !options.NeedsProfiler)
         {
@@ -191,7 +195,14 @@ public sealed class RunCommand : Command<RunCommand.Settings>
             }
             stream.Seek(position, SeekOrigin.Begin);
             using var reader = new StreamReader(stream);
-            Console.Out.Write(reader.ReadToEnd());
+            string? line;
+            while ((line = reader.ReadLine()) is not null)
+            {
+                if (!line.StartsWith("[createdump]", StringComparison.Ordinal))
+                {
+                    Console.Out.WriteLine(line);
+                }
+            }
             Console.Out.Flush();
             return stream.Length;
         }

@@ -95,7 +95,7 @@ public sealed class Snapshot : IDisposable
     }
 
     public ObjectDetail Inspect(ulong address) => new ObjectInspector(this).Inspect(address);
-    public IReadOnlyList<GcRootPath> Roots(ulong address, int maxPaths = 1, CancellationToken cancellationToken = default) => new RootAnalyzerV2(this).FindRoots(address, maxPaths, cancellationToken);
+    public IReadOnlyList<GcRootPath> Roots(ulong address, CancellationToken cancellationToken = default) => RootAnalyzer.Find(GetHeapGraph(cancellationToken), address, cancellationToken);
     public InstanceListing Instances(string filter, int limit = 20) => new HeapAnalyzer(this).ListInstances(filter, limit);
     public IReadOnlyList<DuplicateString> DuplicateStrings(int limit = 20) => new HeapAnalyzer(this).FindDuplicateStrings(limit);
     public FinalizerReport Finalizers() => _finalizers ??= new FinalizerAnalyzer(this).Analyze();

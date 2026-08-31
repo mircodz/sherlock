@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using Microsoft.Diagnostics.Runtime;
 using Sherlock.Core.Analysis;
 using Sherlock.Core.HeapModel;
 using Xunit;
@@ -7,8 +8,7 @@ using Xunit;
 namespace Sherlock.Core.Tests.Analysis;
 
 /// <summary>
-/// Ground-truth tests for <see cref="DominatorTree.RetentionPath"/> (the graph-backed gcroot answer used
-/// by <see cref="RootAnalyzerV2"/>), over hand-built graphs whose retention chains are known by
+/// Ground-truth tests for dominator and real root paths over hand-built graphs whose chains are known by
 /// construction. No ClrMD: the tree is built from a computed <see cref="DominatorAnalyzer.DominatorResult"/>
 /// with a graph-backed type-name resolver, so the heap reference is never touched.
 /// </summary>
@@ -77,6 +77,65 @@ public sealed class RetentionPathTests
     }
 
     [Fact]
+    public void RootAnalyzerReturnsRealReferenceEdges()
+    {
+        HeapGraph g = Build([10, 10, 10, 10], roots: [0], (0, 1), (0, 2), (1, 3), (2, 3));
+        GcRootPath path = Assert.Single(RootAnalyzer.Find(g, g.Addresses.Span[3]));
+
+        Assert.Contains(g.IndexOf(path.Path[0].Address), g.Successors(g.Root).ToArray());
+        for (int i = 0; i + 1 < path.Path.Count; i++)
+        {
+            Assert.Contains(g.IndexOf(path.Path[i + 1].Address), g.Successors(g.IndexOf(path.Path[i].Address)).ToArray());
+        }
+    }
+
+    [Fact]
+    public void RootAnalyzerReturnsNoPathForUnreachableObjects()
+    {
+        HeapGraph g = Build([10, 10], roots: [0]);
+        Assert.Empty(RootAnalyzer.Find(g, g.Addresses.Span[1]));
+    }
+
+    [Fact]
+    public void RootAnalyzerReturnsEveryRoot()
+    {
+        HeapGraph g = Build([10, 10, 10], roots: [0, 1, 1], (0, 2), (1, 2));
+        IReadOnlyList<GcRootPath> paths = RootAnalyzer.Find(g, g.Addresses.Span[2]);
+
+        Assert.Equal(3, paths.Count);
+        Assert.Equal([g.Addresses.Span[0], g.Addresses.Span[1], g.Addresses.Span[1]], paths.Select(path => path.Path[0].Address));
+    }
+
+    [Fact]
+    public void RootAnalyzerPreservesClrRootMetadata()
+    {
+        HeapGraph graph = Build([10, 10], roots: [0], (0, 1));
+        HeapRootRecord[] roots = [new(0, 0x1234, ClrRootKind.PinnedHandle, true, true)];
+        var withMetadata = new HeapGraph(graph.Addresses, graph.Sizes, graph.Offsets, graph.Edges,
+            graph.TypeIds, graph.TypeNames, 0, 0, roots);
+        GcRootInfo root = Assert.Single(RootAnalyzer.Find(withMetadata, graph.Addresses.Span[1])).Root;
+
+        Assert.Equal(0x1234UL, root.Address);
+        Assert.Equal("PinnedHandle", root.Kind);
+        Assert.True(root.IsInterior);
+        Assert.True(root.IsPinned);
+    }
+
+    [Fact]
+    public void RootAnalyzerHandlesCycles()
+    {
+        HeapGraph g = Build([10, 10, 10], roots: [0], (0, 1), (1, 0), (1, 2));
+        Assert.Equal(["T0", "T1", "T2"], Assert.Single(RootAnalyzer.Find(g, g.Addresses.Span[2])).Path.Select(node => node.TypeName));
+    }
+
+    [Fact]
+    public void RootAnalyzerUsesClrMdReferenceOrder()
+    {
+        HeapGraph g = Build([10, 10, 10, 10], roots: [0], (0, 2), (0, 1), (1, 3), (2, 3));
+        Assert.Equal(["T0", "T2", "T3"], Assert.Single(RootAnalyzer.Find(g, g.Addresses.Span[3])).Path.Select(node => node.TypeName));
+    }
+
+    [Fact]
     public void Unreachable_ReturnsNull()
     {
         // Node 1 is not reachable from the root (no edge into it) → collectable → null path.
@@ -86,16 +145,4 @@ public sealed class RetentionPathTests
         Assert.Null(t.RetentionPath(g.Addresses.Span[1]));
     }
 
-    [Fact]
-    public void RootAnalyzerV2ChainMatchesRetentionPath()
-    {
-        // The analyzer wraps RetentionPath into a GcRootPath: same nodes, root-most first, target last.
-        HeapGraph g = Build([10, 10, 10], roots: [0], (0, 1), (1, 2));
-        DominatorTree t = TreeOf(g);
-
-        IReadOnlyList<(ulong, string)> chain = t.RetentionPath(g.Addresses.Span[2])!;
-        Assert.Equal(3, chain.Count);
-        Assert.Equal(g.Addresses.Span[0], chain[0].Item1); // held directly by a GC root
-        Assert.Equal(g.Addresses.Span[2], chain[^1].Item1); // the target itself
-    }
 }

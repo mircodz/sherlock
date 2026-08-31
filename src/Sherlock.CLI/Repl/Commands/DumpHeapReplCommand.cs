@@ -52,8 +52,8 @@ public sealed class DumpHeapReplCommand : IReplCommand
         foreach (HeapTypeStat stat in stats.Take(DefaultLimit))
         {
             table.AddRow(
-                $"[aqua]{Markup.Escape(stat.TypeName)}[/]",
-                stat.Count.ToString("N0"),
+                $"[aqua]{Markup.Escape(TypeNames.Short(stat.TypeName))}[/]",
+                Counts.Format(stat.Count),
                 $"[bold green]{ByteSize.Format((long)stat.TotalSize)}[/]",
                 ByteSize.Format((long)stat.AverageSize));
         }
@@ -62,10 +62,10 @@ public sealed class DumpHeapReplCommand : IReplCommand
 
         if (stats.Count > DefaultLimit)
         {
-            context.Console.MarkupLine($"[grey]… {stats.Count - DefaultLimit:N0} more types not shown. Filter with[/] dumpheap <type>.");
+            context.Console.MarkupLine($"[grey]… {Counts.Format(stats.Count - DefaultLimit)} more types not shown. Filter with[/] dumpheap <type>.");
         }
 
         context.Console.MarkupLine(
-            $"[bold]{stats.Count:N0}[/] types, [bold]{totalCount:N0}[/] objects, [bold green]{ByteSize.Format((long)totalSize)}[/] total.");
+            $"[bold]{Counts.Format(stats.Count)}[/] types, [bold]{Counts.Format(totalCount)}[/] objects, [bold green]{ByteSize.Format((long)totalSize)}[/] total.");
     }
 }

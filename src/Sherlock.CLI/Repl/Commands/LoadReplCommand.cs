@@ -17,7 +17,7 @@ public sealed class LoadReplCommand : IReplCommand
 
         if (context.Workspace.Store.FindSnapshot(args[0]) is not ({ } session, { } entry))
         {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] no snapshot '{args[0]}'. Use [bold]snapshots[/] to list.");
+            context.Console.MarkupLineInterpolated($"[red]error:[/] no snapshot '{args[0]}'. Use [bold]ls[/] to list.");
             return;
         }
 

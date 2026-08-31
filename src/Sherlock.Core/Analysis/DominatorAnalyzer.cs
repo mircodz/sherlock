@@ -5,27 +5,16 @@ using Sherlock.Core.HeapModel;
 
 namespace Sherlock.Core.Analysis;
 
-/// <summary>
-/// The V2 dominator-tree builder. Unlike <see cref="DominatorAnalyzer"/> (V1, which walks the heap
-/// through ClrMD every time: DAC-bound, ~1-2M edges/s, nothing cached), V2 computes over a
-/// <see cref="HeapGraph"/>, a compact object graph extracted once by bypassing the DAC (~4-5x faster)
-/// and persisted beside the dump as a <c>.slab</c>, so reopening a snapshot skips extraction. The
-/// dominator math (Cooper-Harvey-Kennedy + retained sizes) is identical and produces the same
-/// <see cref="DominatorTree"/>, kept separate until we make it the default.
-/// </summary>
+/// <summary>Computes and caches dominators over a persisted heap graph.</summary>
 public sealed class DominatorAnalyzer(Snapshot snapshot)
 {
-    /// <summary>Pure result of the dominator computation over a <see cref="HeapGraph"/>: per RPO-ordered
-    /// node its address, own (shallow) size, retained size, and immediate dominator (in RPO space). No
-    /// ClrMD, testable against a hand-built graph. Index 0 is the synthetic root.</summary>
+    /// <summary>RPO-indexed dominator columns. Index 0 is the synthetic root.</summary>
     public readonly record struct DominatorResult(ulong[] Address, ulong[] Own, ulong[] Retained, int[] Idom, int[] NodeByRpo);
 
     public DominatorTree Build(CancellationToken cancellationToken = default)
     {
         HeapGraph graph = snapshot.GetHeapGraph(cancellationToken);
 
-        // Derived cache: load from the sidecar (validated against the graph's content hash) if present,
-        // else compute and persist so reopen skips the recompute.
         string path = SidecarPath(snapshot.DumpPath);
         DominatorResult r = TryLoad(path, graph)
             ?? ComputeAndPersist(graph, path, cancellationToken);
@@ -34,8 +23,6 @@ public sealed class DominatorAnalyzer(Snapshot snapshot)
         for (int rpo = 1; rpo < r.Address.Length; rpo++)
             rpoOf[r.Address[rpo]] = rpo;
 
-        // If the graph carries a type column, resolve type names from it (no ClrMD) so the tree never
-        // re-enters the DAC to name a node. Falls back to ClrMD when the graph has no types.
         Func<ulong, string>? typeNames = graph.HasTypes
             ? address => { int id = graph.IndexOf(address); return id >= 0 ? graph.TypeNameOf(id) ?? "<unknown>" : "<unknown>"; }
         : null;
@@ -43,7 +30,6 @@ public sealed class DominatorAnalyzer(Snapshot snapshot)
         return new DominatorTree(snapshot.Runtime.Heap, r.Address, r.Own, r.Retained, r.Idom, rpoOf, typeNames);
     }
 
-    /// <summary>The dominator-cache sidecar path for a dump: <c>&lt;dump&gt;.dominators.slab</c>.</summary>
     public static string SidecarPath(string dumpPath) => System.IO.Path.GetFileName(dumpPath) == "heap.dmp" ? System.IO.Path.Combine(System.IO.Path.GetDirectoryName(dumpPath)!, "dominators.slab") : dumpPath + ".dominators.slab";
 
     private static DominatorResult? TryLoad(string path, HeapGraph graph)
@@ -58,7 +44,7 @@ public sealed class DominatorAnalyzer(Snapshot snapshot)
         }
         catch
         {
-            return null; // corrupt / partial sidecar, recompute
+            return null;
         }
     }
 
@@ -71,20 +57,19 @@ public sealed class DominatorAnalyzer(Snapshot snapshot)
         }
         catch
         {
-            // Best-effort persistence: a read-only dump directory just means we recompute next time.
+            // Analysis remains usable when the dump directory is read-only.
         }
         return r;
     }
 
-    /// <summary>Computes the dominator tree + retained sizes purely from the graph (Cooper-Harvey-Kennedy
-    /// over reverse-postorder), with no dependency on ClrMD.</summary>
+    /// <summary>Computes immediate dominators and retained sizes without ClrMD.</summary>
     public static DominatorResult Compute(HeapGraph graph, CancellationToken cancellationToken = default)
     {
         int root = graph.Root;
         int nodeCount = graph.NodeCount;
 
         // Reverse-postorder from the synthetic root (iterative DFS).
-        int[] rpoNumber = BuildReversePostorder(graph, root, nodeCount, out int[] nodeByRpo);
+        int[] rpoNumber = BuildReversePostorder(graph, root, nodeCount, cancellationToken, out int[] nodeByRpo);
         int m = nodeByRpo.Length;
 
         // Predecessor lists in RPO space as reverse-CSR (two flat arrays) built by counting sort: no
@@ -94,6 +79,7 @@ public sealed class DominatorAnalyzer(Snapshot snapshot)
         long reachableEdges = 0;
         for (int node = 0; node < nodeCount; node++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (rpoNumber[node] < 0)
             {
                 continue;
@@ -119,6 +105,7 @@ public sealed class DominatorAnalyzer(Snapshot snapshot)
         var cursor = (int[])predOffsets.Clone();
         for (int node = 0; node < nodeCount; node++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             int uRpo = rpoNumber[node];
             if (uRpo < 0)
             {
@@ -184,7 +171,7 @@ public sealed class DominatorAnalyzer(Snapshot snapshot)
         return new DominatorResult(address, own, retained, idom, nodeByRpo);
     }
 
-    private static int[] BuildReversePostorder(HeapGraph graph, int root, int nodeCount, out int[] nodeByRpo)
+    private static int[] BuildReversePostorder(HeapGraph graph, int root, int nodeCount, CancellationToken cancellationToken, out int[] nodeByRpo)
     {
         var rpoNumber = new int[nodeCount];
         Array.Fill(rpoNumber, -1);
@@ -196,6 +183,7 @@ public sealed class DominatorAnalyzer(Snapshot snapshot)
         stack.Push((root, 0));
         while (stack.Count > 0)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             (int node, int index) = stack.Pop();
             ReadOnlySpan<int> succ = graph.Successors(node);
             if (index < succ.Length)

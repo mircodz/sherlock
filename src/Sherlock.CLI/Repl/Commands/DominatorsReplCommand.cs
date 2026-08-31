@@ -39,14 +39,14 @@ public sealed class DominatorsReplCommand : IReplCommand
             table.AddRow(
                 $"[grey]0x{node.Address:x}[/]",
                 $"[bold green]{ByteSize.Format((long)node.RetainedSize)}[/]",
-                $"{pct:0.0}%",
+                Counts.Percent(pct),
                 ByteSize.Format((long)node.OwnSize),
                 $"[aqua]{Markup.Escape(TypeNames.Short(node.TypeName))}[/]");
         }
 
         context.Console.Write(table);
         context.Console.MarkupLine(
-            $"[grey]{tree.ObjectCount:N0} reachable objects,[/] [bold green]{ByteSize.Format((long)total)}[/] [grey]retained from roots. " +
+            $"[grey]{Counts.Format(tree.ObjectCount)} reachable objects,[/] [bold green]{ByteSize.Format((long)total)}[/] [grey]retained from roots. " +
             $"Drill in with[/] retained <address>.");
     }
 }

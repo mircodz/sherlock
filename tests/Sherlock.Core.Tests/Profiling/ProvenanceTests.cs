@@ -35,8 +35,10 @@ public class ProvenanceTests : IDisposable
         var w = new ProvenanceWriter();
         uint s1 = w.InternStack(["Program.Main", "Registry.Add"]);
         uint s2 = w.InternStack(["Program.Main", "List.Resize"]);
-        w.AddAllocation(s1, allocBytes: 2000, allocCount: 50, survivedBytes: 1600, survivedCount: 40);
-        w.AddAllocation(s2, allocBytes: 512, allocCount: 8, survivedBytes: 0, survivedCount: 0);
+        uint t1 = w.InternType("MyApp.Customer");
+        uint t2 = w.InternType("System.Byte[]");
+        w.AddAllocation(s1, t1, allocBytes: 2000, allocCount: 50, survivedBytes: 1600, survivedCount: 40);
+        w.AddAllocation(s2, t2, allocBytes: 512, allocCount: 8, survivedBytes: 0, survivedCount: 0);
 
         using SlabFile slab = Write(w);
         var r = new ProvenanceReader(slab);
@@ -50,6 +52,8 @@ public class ProvenanceTests : IDisposable
         Assert.Equal(1600ul, recs[0].SurvivedBytes);
         Assert.Equal(40ul, recs[0].SurvivedCount);
         Assert.Equal(512ul, recs[1].AllocBytes);
+        Assert.Equal("MyApp.Customer", r.Stacks.Frame(recs[0].TypeId));
+        Assert.Equal("System.Byte[]", r.Stacks.Frame(recs[1].TypeId));
 
         // stackId resolves back through the shared table.
         Assert.Equal("Program.Main;Registry.Add", r.Stacks.FormatStack(recs[0].StackId));
@@ -97,7 +101,7 @@ public class ProvenanceTests : IDisposable
     public void NoCorrelation_WhenAggregateOnly()
     {
         var w = new ProvenanceWriter();
-        w.AddAllocation(w.InternStack(["A"]), 100, 1, 100, 1);
+        w.AddAllocation(w.InternStack(["A"]), w.InternType("T"), 100, 1, 100, 1);
         using SlabFile slab = Write(w); // no AddObject → no Correlation section
         var r = new ProvenanceReader(slab);
         Assert.Equal(0L, r.CorrelationCount);
@@ -118,7 +122,7 @@ public class ProvenanceTests : IDisposable
     public void RejectsUnknownAllocationStack()
     {
         var writer = new ProvenanceWriter();
-        writer.AddAllocation(stackId: 42, allocBytes: 100, allocCount: 1, survivedBytes: 0, survivedCount: 0);
+        writer.AddAllocation(stackId: 42, typeId: writer.InternType("T"), allocBytes: 100, allocCount: 1, survivedBytes: 0, survivedCount: 0);
         using SlabFile slab = Write(writer);
 
         Assert.Throws<InvalidDataException>(() => new ProvenanceReader(slab));

@@ -44,6 +44,6 @@ public sealed class FinalizersReplCommand : IReplCommand
 
         context.Console.Write(table);
         context.Console.MarkupLineInterpolated(
-            $"[grey]{report.TotalObjects:N0} finalizable objects,[/] [green]{ByteSize.Format((long)report.TotalBytes)}[/][grey]. A live finalizer usually means Dispose() wasn't called; list a type with[/] objects <type>[grey].[/]");
+            $"[grey]{Counts.Format(report.TotalObjects)} finalizable objects,[/] [green]{ByteSize.Format((long)report.TotalBytes)}[/][grey]. A live finalizer usually means Dispose() wasn't called; list a type with[/] objects <type>[grey].[/]");
     }
 }

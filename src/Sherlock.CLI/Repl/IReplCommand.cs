@@ -18,7 +18,7 @@ public sealed record ReplContext(Workspace Workspace, IAnsiConsole Console, Func
     {
         if (Workspace.Store.FindSnapshot(idOrLabel) is not (_, { } snap))
         {
-            throw new DumpAnalysisException($"no snapshot '{idOrLabel}'. See `snapshots`.");
+            throw new DumpAnalysisException($"no snapshot '{idOrLabel}'. See `ls`.");
         }
         if (!snap.Exists)
         {

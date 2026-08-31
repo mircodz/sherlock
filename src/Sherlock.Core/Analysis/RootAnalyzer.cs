@@ -1,104 +1,213 @@
+using System;
+using System.Buffers;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
-using Microsoft.Diagnostics.Runtime;
+using Sherlock.Core.HeapModel;
 
 namespace Sherlock.Core.Analysis;
 
-/// <summary>
-/// BFS-based GC-root finder: searches outward from every GC root following object references until the
-/// target is reached. The first path found is the shortest in edges. Slow on very large heaps; kept as
-/// a fallback behind the dominator-backed <see cref="RootAnalyzerV2"/>.
-/// </summary>
-public sealed class RootAnalyzer(Snapshot snapshot)
+internal static class RootAnalyzer
 {
-    /// <summary>Returns up to <paramref name="maxPaths"/> root paths reaching <paramref name="targetAddress"/>.</summary>
-    public IReadOnlyList<GcRootPath> FindRoots(ulong targetAddress, int maxPaths = 1, CancellationToken cancellationToken = default)
+    public static IReadOnlyList<GcRootPath> Find(HeapGraph graph, ulong address, CancellationToken cancellationToken = default)
     {
-        ClrHeap heap = snapshot.Runtime.Heap;
-        var results = new List<GcRootPath>();
+        int target = graph.IndexOf(address);
+        if (target < 0)
+        {
+            return [];
+        }
 
-        foreach (ClrRoot root in heap.EnumerateRoots())
+        var search = new Search(graph, target, cancellationToken);
+        var results = new List<GcRootPath>();
+        foreach (HeapRootRecord root in graph.Roots.Span)
         {
             cancellationToken.ThrowIfCancellationRequested();
-
-            ulong rootObj = root.Object.Address;
-            if (rootObj == 0)
+            Link? link = search.FindPathFrom(root.ObjectId);
+            if (link is null)
             {
                 continue;
             }
 
-            List<GcRootNode>? path = BreadthFirstSearch(heap, rootObj, targetAddress, cancellationToken);
-            if (path is not null)
+            var path = new List<GcRootNode>();
+            for (; link is not null; link = link.Next)
             {
-                results.Add(new GcRootPath(DescribeRoot(root), path));
-                if (results.Count >= maxPaths)
-                {
-                    break;
-                }
+                path.Add(new GcRootNode(graph.Addresses.Span[link.Object], graph.TypeNameOf(link.Object) ?? "<unknown>"));
             }
+            string kind = root.Kind == Microsoft.Diagnostics.Runtime.ClrRootKind.None ? "GC root" : root.Kind.ToString();
+            results.Add(new GcRootPath(new GcRootInfo(root.Address, kind, root.IsInterior, root.IsPinned), path));
         }
-
         return results;
     }
 
-    private static List<GcRootNode>? BreadthFirstSearch(ClrHeap heap, ulong start, ulong target, CancellationToken cancellationToken)
+    private sealed class Search(HeapGraph graph, int target, CancellationToken cancellationToken)
     {
-        var visited = new HashSet<ulong> { start };
-        var parent = new Dictionary<ulong, ulong>();
-        var queue = new Queue<ulong>();
-        queue.Enqueue(start);
+        private readonly uint[] _seen = new uint[checked((int)((graph.ObjectCount + 31L) / 32))];
+        private readonly Dictionary<int, Link> _found = new() { [target] = new Link(target, null) };
 
-        while (queue.Count > 0)
+        public Link? FindPathFrom(int start)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            ulong current = queue.Dequeue();
-
-            if (current == target)
+            if (_found.TryGetValue(start, out Link? found))
             {
-                return BuildPath(heap, parent, start, target);
+                return found;
             }
 
-            ClrObject obj = heap.GetObject(current);
-            if (!obj.IsValid)
+            var stack = new List<References>();
+            try
             {
-                continue;
-            }
-
-            foreach (ClrObject reference in obj.EnumerateReferences())
-            {
-                ulong next = reference.Address;
-                if (next != 0 && visited.Add(next))
+                found = WalkObject(stack, -1, start);
+                if (found is not null)
                 {
-                    parent[next] = current;
-                    queue.Enqueue(next);
+                    DrainUnwalked(stack);
+                    return found;
+                }
+
+                while (stack.Count > 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    References current = stack[^1];
+                    int next = current.Next();
+                    if (next < 0)
+                    {
+                        stack.RemoveAt(stack.Count - 1);
+                        current.Dispose();
+                        continue;
+                    }
+
+                    found = WalkObject(stack, current.Object, next);
+                    if (found is not null)
+                    {
+                        return CompletePath(stack, found, current);
+                    }
+                }
+                return null;
+            }
+            finally
+            {
+                foreach (References references in stack)
+                {
+                    references.Dispose();
                 }
             }
         }
 
-        return null;
-    }
-
-    private static List<GcRootNode> BuildPath(ClrHeap heap, Dictionary<ulong, ulong> parent, ulong start, ulong target)
-    {
-        var addresses = new List<ulong>();
-        ulong node = target;
-        addresses.Add(node);
-        while (node != start)
+        private Link? WalkObject(List<References> stack, int parent, int current)
         {
-            node = parent[node];
-            addresses.Add(node);
+            References? references = null;
+            ReadOnlySpan<int> successors = graph.Successors(current);
+            foreach (int next in successors)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (_found.TryGetValue(next, out Link? found))
+                {
+                    var result = new Link(current, found);
+                    _found[current] = result;
+                    if (references is not null)
+                    {
+                        stack.Add(references);
+                    }
+                    return result;
+                }
+                if (MarkSeen(next))
+                {
+                    references ??= new References(current, parent, successors.Length);
+                    references.Add(next);
+                }
+            }
+            if (references is not null)
+            {
+                stack.Add(references);
+            }
+            return null;
         }
-        addresses.Reverse();
 
-        return addresses
-            .Select(addr => new GcRootNode(addr, heap.GetObject(addr).Type?.Name ?? "<unknown>"))
-            .ToList();
+        private Link CompletePath(List<References> stack, Link link, References current)
+        {
+            stack.Reverse();
+            int node = current.Object;
+            int parent = current.Parent;
+            link = AddLink(link, node);
+            foreach (References references in stack)
+            {
+                if (references.Object == node)
+                {
+                    continue;
+                }
+                node = references.Object;
+                if (node == parent)
+                {
+                    link = AddLink(link, node);
+                    parent = references.Parent;
+                }
+                else
+                {
+                    ClearSeen(node);
+                }
+            }
+            DrainUnwalked(stack);
+            return link;
+        }
+
+        private Link AddLink(Link next, int node)
+        {
+            if (!_found.TryGetValue(node, out Link? link))
+            {
+                link = new Link(node, next);
+                _found[node] = link;
+            }
+            ClearSeen(node);
+            return link;
+        }
+
+        private void DrainUnwalked(List<References> stack)
+        {
+            foreach (References references in stack)
+            {
+                int node;
+                while ((node = references.Next()) >= 0)
+                {
+                    ClearSeen(node);
+                }
+                references.Dispose();
+            }
+            stack.Clear();
+        }
+
+        private bool MarkSeen(int node)
+        {
+            ref uint word = ref _seen[node >> 5];
+            uint mask = 1u << (node & 31);
+            if ((word & mask) != 0)
+            {
+                return false;
+            }
+            word |= mask;
+            return true;
+        }
+
+        private void ClearSeen(int node) => _seen[node >> 5] &= ~(1u << (node & 31));
     }
 
-    private static string DescribeRoot(ClrRoot root)
+    private sealed class References(int @object, int parent, int capacity) : IDisposable
     {
-        string type = root.Object.Type?.Name ?? "<unknown>";
-        return $"{root.RootKind} @ {root.Address:x12} -> {type}";
+        private int[]? _items = ArrayPool<int>.Shared.Rent(Math.Max(1, capacity));
+        private int _count;
+        private int _read;
+
+        public int Object { get; } = @object;
+        public int Parent { get; } = parent;
+
+        public void Add(int value) => _items![_count++] = value;
+        public int Next() => _read < _count ? _items![_read++] : -1;
+
+        public void Dispose()
+        {
+            if (_items is null)
+            {
+                return;
+            }
+            ArrayPool<int>.Shared.Return(_items);
+            _items = null;
+        }
     }
+
+    private sealed record Link(int Object, Link? Next);
 }

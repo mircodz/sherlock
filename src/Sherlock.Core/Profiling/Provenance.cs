@@ -30,7 +30,7 @@ public struct CorrelationRecord
 /// <summary>Version constant for the profile/correlation record sections (mirrors native <c>kProfileVersion</c>).</summary>
 public static class ProfileFormat
 {
-    public const ushort Version = 1;
+    public const ushort Version = 2;
 }
 
 /// <summary>
@@ -44,6 +44,7 @@ public sealed class ProvenanceWriter
     private readonly List<CorrelationRecord> _corr = [];
 
     public uint InternFrame(string name) => _stacks.InternFrame(name);
+    public uint InternType(string name) => _stacks.InternFrame(name);
 
     /// <summary>Interns a stack (its frames, then the sequence) and returns its shared id.</summary>
     public uint InternStack(ReadOnlySpan<string> frames)
@@ -56,10 +57,11 @@ public sealed class ProvenanceWriter
         return _stacks.InternStack(ids);
     }
 
-    public void AddAllocation(uint stackId, ulong allocBytes, ulong allocCount, ulong survivedBytes, ulong survivedCount)
+    public void AddAllocation(uint stackId, uint typeId, ulong allocBytes, ulong allocCount, ulong survivedBytes, ulong survivedCount)
         => _allocs.Add(new AllocationRecord
         {
             StackId = stackId,
+            TypeId = typeId,
             AllocBytes = allocBytes,
             AllocCount = allocCount,
             SurvivedBytes = survivedBytes,

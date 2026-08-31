@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using Microsoft.Diagnostics.Runtime;
 using Sherlock.Core.HeapModel;
 using Sherlock.Core.Tests.Common;
 using Xunit;
@@ -65,6 +66,28 @@ public sealed class HeapGraphStoreTests : IDisposable
         Assert.Equal([3], loaded.Successors(2).ToArray());
         Assert.Equal([], loaded.Successors(3).ToArray());
         Assert.Equal([0], loaded.Successors(loaded.Root).ToArray()); // synthetic root -> GC roots
+    }
+
+    [Fact]
+    public void RoundTripsEveryRootRecord()
+    {
+        HeapGraph graph = SampleGraph();
+        HeapRootRecord[] roots =
+        [
+            new(0, 0xabc, ClrRootKind.Stack, true, false),
+            new(0, 0xdef, ClrRootKind.PinnedHandle, false, true),
+        ];
+        var original = new HeapGraph(graph.Addresses, graph.Sizes, graph.Offsets, graph.Edges,
+            null, null, 0, 0, roots);
+
+        HeapGraphStore.Save(_path, original);
+        using HeapGraph loaded = HeapGraphStore.Load(_path)!;
+
+        Assert.Equal(2, loaded.Roots.Length);
+        Assert.Equal(ClrRootKind.Stack, loaded.Roots.Span[0].Kind);
+        Assert.True(loaded.Roots.Span[0].IsInterior);
+        Assert.Equal(0xdefUL, loaded.Roots.Span[1].Address);
+        Assert.True(loaded.Roots.Span[1].IsPinned);
     }
 
     [Fact]

@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace Sherlock.CLI.Rendering;
 
 /// <summary>Formats byte counts as human-readable sizes (e.g. 1.5 MB).</summary>
@@ -21,7 +23,7 @@ public static class ByteSize
         }
 
         return unit == 0
-            ? $"{bytes} {Units[unit]}"
-            : $"{value:0.##} {Units[unit]}";
+            ? $"{bytes.ToString(CultureInfo.InvariantCulture)} {Units[unit]}"
+            : $"{value.ToString("0.##", CultureInfo.InvariantCulture)} {Units[unit]}";
     }
 }
