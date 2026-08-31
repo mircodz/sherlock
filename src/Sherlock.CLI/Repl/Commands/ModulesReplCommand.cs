@@ -28,7 +28,7 @@ public sealed class ModulesReplCommand : IReplCommand
 
         if (modules.Count == 0)
         {
-            context.Console.MarkupLine("[yellow]No modules matched.[/]");
+            context.Console.MarkupLine("[#FFAF00]No modules matched.[/]");
             return;
         }
 
@@ -39,14 +39,14 @@ public sealed class ModulesReplCommand : IReplCommand
 
         foreach (ModuleInfo module in modules)
         {
-            string name = module.IsDynamic ? $"{Path.GetFileName(module.Name)} [grey](dynamic)[/]" : Path.GetFileName(module.Name);
+            string name = module.IsDynamic ? $"{Path.GetFileName(module.Name)} [#808791](dynamic)[/]" : Path.GetFileName(module.Name);
             table.AddRow(
                 Markup.Escape(name),
-                module.ImageBase == 0 ? "-" : $"[grey]0x{module.ImageBase:x}[/]",
-                module.Size == 0 ? "-" : $"[bold green]{ByteSize.Format((long)module.Size)}[/]");
+                module.ImageBase == 0 ? "-" : $"[#FFD75F]0x{module.ImageBase:x}[/]",
+                module.Size == 0 ? "-" : $"[bold #F2F2F2]{ByteSize.Format((long)module.Size)}[/]");
         }
 
         context.Console.Write(table);
-        context.Console.MarkupLine($"[grey]{modules.Count} modules.[/]");
+        context.Console.MarkupLine($"[#808791]{modules.Count} modules.[/]");
     }
 }

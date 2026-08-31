@@ -25,12 +25,12 @@ public sealed class RetainedReplCommand : IReplCommand
         DominatorNode? node = tree.Find(address);
         if (node is null)
         {
-            context.Console.MarkupLine("[yellow]That object is not reachable from any GC root[/] (so its retained size is 0 — it is collectable).");
+            context.Console.MarkupLine("[#FFAF00]That object is not reachable from any GC root[/] (so its retained size is 0 — it is collectable).");
             return;
         }
 
-        context.Console.MarkupLineInterpolated($"[bold]{node.TypeName}[/] [grey]@ 0x{node.Address:x}[/]");
-        context.Console.MarkupLineInterpolated($"  [grey]shallow[/] {ByteSize.Format((long)node.OwnSize)}   [grey]retained[/] [bold green]{ByteSize.Format((long)node.RetainedSize)}[/]");
+        context.Console.MarkupLineInterpolated($"[bold]{node.TypeName}[/] [#808791]@[/] [#FFD75F]0x{node.Address:x}[/]");
+        context.Console.MarkupLineInterpolated($"  [#808791]shallow[/] {ByteSize.Format((long)node.OwnSize)}   [#808791]retained[/] [bold #AFFF00]{ByteSize.Format((long)node.RetainedSize)}[/]");
 
         IReadOnlyList<DominatorNode> children = tree.ImmediateChildren(address, ChildLimit);
         if (children.Count == 0)
@@ -38,11 +38,11 @@ public sealed class RetainedReplCommand : IReplCommand
             return;
         }
 
-        context.Console.MarkupLine("[grey]Directly dominates:[/]");
+        context.Console.MarkupLine("[#808791]Directly dominates:[/]");
         foreach (DominatorNode child in children)
         {
             context.Console.MarkupLineInterpolated(
-                $"  [bold green]{ByteSize.Format((long)child.RetainedSize)}[/]  [grey]0x{child.Address:x}[/]  [aqua]{TypeNames.Short(child.TypeName)}[/]");
+                $"  [bold #AFFF00]{ByteSize.Format((long)child.RetainedSize)}[/]  [#FFD75F]0x{child.Address:x}[/]  [#00D7FF]{TypeNames.Short(child.TypeName)}[/]");
         }
     }
 }

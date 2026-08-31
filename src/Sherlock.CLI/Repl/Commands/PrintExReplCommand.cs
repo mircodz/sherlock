@@ -25,11 +25,11 @@ public sealed class PrintExReplCommand : IReplCommand
         ClrObject root = heap.GetObject(address);
         if (!root.IsValid || root.Type is null)
         {
-            context.Console.MarkupLineInterpolated($"[yellow]No object at[/] 0x{address:x}.");
+            context.Console.MarkupLineInterpolated($"[#FFAF00]No object at[/] 0x{address:x}.");
             return;
         }
 
-        var tree = new Tree(Label(root)) { Style = new Style(foreground: Color.Grey) };
+        var tree = new Tree(Label(root)) { Style = new Style(foreground: Theme.MutedColor) };
         var visited = new HashSet<ulong> { root.Address };
         AddChildren(tree, root, depth, visited);
         context.Console.Write(tree);
@@ -45,7 +45,7 @@ public sealed class PrintExReplCommand : IReplCommand
         // Scalar/string fields as inline values.
         foreach ((string name, string value) in ScalarFields(obj))
         {
-            parent.AddNode($"{Markup.Escape(name)} [grey]=[/] {value}");
+            parent.AddNode($"{Markup.Escape(name)} [#808791]=[/] {value}");
         }
 
         if (depth <= 0)
@@ -59,17 +59,17 @@ public sealed class PrintExReplCommand : IReplCommand
         {
             if (shown++ >= MaxChildren)
             {
-                parent.AddNode("[grey]… more references (raise depth/limit)[/]");
+                parent.AddNode("[#808791]… more references (raise depth/limit)[/]");
                 break;
             }
 
             if (!visited.Add(child.Address))
             {
-                parent.AddNode($"{Markup.Escape(edge)} [grey]→[/] {Label(child)} [grey](seen)[/]");
+                parent.AddNode($"{Markup.Escape(edge)} [#808791]→[/] {Label(child)} [#808791](seen)[/]");
                 continue;
             }
 
-            TreeNode node = parent.AddNode($"{Markup.Escape(edge)} [grey]→[/] {Label(child)}");
+            TreeNode node = parent.AddNode($"{Markup.Escape(edge)} [#808791]→[/] {Label(child)}");
             AddChildren(node, child, depth - 1, visited);
         }
     }
@@ -171,7 +171,7 @@ public sealed class PrintExReplCommand : IReplCommand
     }
 
     private static string FormatString(string? value) =>
-        value is null ? "[grey]null[/]" : $"[gold1]\"{Markup.Escape(TextUtil.Preview(value, 48))}\"[/]";
+        value is null ? "[#808791]null[/]" : $"[#F2F2F2]\"{Markup.Escape(TextUtil.Preview(value, 48))}\"[/]";
 
     /// <summary>Unwraps an auto-property backing field <c>&lt;Name&gt;k__BackingField</c> to <c>Name</c>.</summary>
     private static string FieldName(string? name)
@@ -196,6 +196,6 @@ public sealed class PrintExReplCommand : IReplCommand
     private static string Label(ClrObject obj)
     {
         string type = obj.Type?.Name ?? "<unknown>";
-        return $"[aqua]{Markup.Escape(TypeNames.Short(type))}[/] [grey]0x{obj.Address:x} ·[/] [bold green]{ByteSize.Format((long)obj.Size)}[/]";
+        return $"[#00D7FF]{Markup.Escape(TypeNames.Short(type))}[/] [#FFD75F]0x{obj.Address:x}[/] [#808791]·[/] [bold #F2F2F2]{ByteSize.Format((long)obj.Size)}[/]";
     }
 }

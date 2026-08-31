@@ -19,7 +19,7 @@ public sealed class SegmentsReplCommand : IReplCommand
         IReadOnlyList<SegmentInfo> segments = context.Snapshot.Segments;
         if (segments.Count == 0)
         {
-            context.Console.MarkupLine("[yellow]No GC segments found.[/]");
+            context.Console.MarkupLine("[#FFAF00]No GC segments found.[/]");
             return;
         }
 
@@ -33,9 +33,9 @@ public sealed class SegmentsReplCommand : IReplCommand
         {
             table.AddRow(
                 Markup.Escape(segment.Kind),
-                $"[grey]0x{segment.Start:x}[/]",
-                $"[grey]0x{segment.End:x}[/]",
-                $"[bold green]{ByteSize.Format((long)segment.Length)}[/]");
+                $"[#FFD75F]0x{segment.Start:x}[/]",
+                $"[#FFD75F]0x{segment.End:x}[/]",
+                $"[bold #F2F2F2]{ByteSize.Format((long)segment.Length)}[/]");
         }
 
         context.Console.Write(table);
@@ -46,7 +46,7 @@ public sealed class SegmentsReplCommand : IReplCommand
             .Select(g => (Kind: g.Key, Size: g.Aggregate(0UL, (acc, s) => acc + s.Length)))
             .OrderByDescending(x => x.Size);
 
-        context.Console.MarkupLine($"[grey]Totals:[/] " +
+        context.Console.MarkupLine($"[#808791]Totals:[/] " +
             string.Join("  ", byKind.Select(k => $"[bold]{Markup.Escape(k.Kind)}[/] {ByteSize.Format((long)k.Size)}")));
     }
 }

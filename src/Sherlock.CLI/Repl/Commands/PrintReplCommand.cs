@@ -23,11 +23,11 @@ public sealed class PrintReplCommand : IReplCommand
         ObjectDetail detail = context.Snapshot.Inspect(address);
 
         context.Console.MarkupLineInterpolated($"[bold]{detail.TypeName}[/]");
-        context.Console.MarkupLineInterpolated($"  [grey]address[/] 0x{detail.Address:x}   [grey]size[/] [bold green]{ByteSize.Format((long)detail.Size)}[/]");
+        context.Console.MarkupLineInterpolated($"  [#808791]address[/] [#FFD75F]0x{detail.Address:x}[/]   [#808791]size[/] [bold #F2F2F2]{ByteSize.Format((long)detail.Size)}[/]");
 
         if (detail.StringValue is not null)
         {
-            context.Console.MarkupLineInterpolated($"  [grey]value[/] [aqua]\"{detail.StringValue}\"[/]");
+            context.Console.MarkupLineInterpolated($"  [#808791]value[/] [#00D7FF]\"{detail.StringValue}\"[/]");
             return;
         }
 
@@ -39,7 +39,7 @@ public sealed class PrintReplCommand : IReplCommand
 
         if (detail.Fields.Count == 0)
         {
-            context.Console.MarkupLine("  [grey]<no instance fields>[/]");
+            context.Console.MarkupLine("  [#808791]<no instance fields>[/]");
             return;
         }
 
@@ -52,7 +52,7 @@ public sealed class PrintReplCommand : IReplCommand
         foreach (FieldValue field in detail.Fields)
         {
             table.AddRow(
-                $"[grey]+0x{field.Offset:x}[/]",
+                $"[#FFD75F]+0x{field.Offset:x}[/]",
                 Markup.Escape(field.Name),
                 Markup.Escape(TypeNames.Short(field.TypeName)),
                 Markup.Escape(field.Value));
@@ -63,7 +63,7 @@ public sealed class PrintReplCommand : IReplCommand
 
     private static void PrintElements(IAnsiConsole console, ObjectDetail detail, int count, int limit)
     {
-        console.MarkupLineInterpolated($"  [grey]count[/] {count}");
+        console.MarkupLineInterpolated($"  [#808791]count[/] {count}");
         int shown = 0;
         foreach (string element in detail.Elements)
         {
@@ -78,7 +78,7 @@ public sealed class PrintReplCommand : IReplCommand
         int remaining = count - shown;
         if (remaining > 0)
         {
-            console.MarkupLineInterpolated($"  [grey]… {remaining} more (print 0x{detail.Address:x} <n> to show more)[/]");
+            console.MarkupLineInterpolated($"  [#808791]… {remaining} more (print 0x{detail.Address:x} <n> to show more)[/]");
         }
     }
 }

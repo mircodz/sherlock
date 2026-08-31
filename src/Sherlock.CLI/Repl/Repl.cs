@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using Spectre.Console;
 
@@ -23,7 +24,7 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
         _context = new ReplContext(workspace, console, RunLine);
         foreach (string line in lines)
         {
-            console.MarkupLineInterpolated($"[green]{Prompt}[/]{line}");
+            console.MarkupLineInterpolated($"[#5AF78E]{Prompt}[/]{line}");
             if (!RunLine(line))
             {
                 return;
@@ -42,7 +43,7 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
         {
             PollTargets();
 
-            string? line = LineEditor.ReadLine(Prompt, history);
+            string? line = LineEditor.ReadLine(Prompt, history, console);
             if (line is null) // EOF (Ctrl-D)
             {
                 console.WriteLine();
@@ -60,7 +61,7 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
                 }
 
                 line = _lastCommand;
-                console.MarkupLineInterpolated($"[grey]{Prompt}{line}[/]");
+                console.MarkupLineInterpolated($"[#5AF78E]{Prompt}[/][#808791]{line}[/]");
             }
             else
             {
@@ -95,7 +96,7 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
         IReplCommand? command = registry.Resolve(name);
         if (command is null)
         {
-            console.MarkupLineInterpolated($"[red]unknown command:[/] {name}. Type [bold]help[/] for a list.");
+            Output.Error(console, $"Unknown command [bold]{name}[/]. Use [bold]help[/] for a list.");
             return true;
         }
 
@@ -105,12 +106,11 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
         }
         catch (DumpAnalysisException ex)
         {
-            console.MarkupLineInterpolated($"[red]error:[/] {ex.Message}");
+            Output.Error(console, $"{ex.Message}");
         }
         catch (Exception ex)
         {
-            // One bad command shouldn't end the REPL.
-            console.MarkupLineInterpolated($"[red]{command.Name} failed:[/] {ex.Message}");
+            Output.Error(console, $"[bold]{command.Name}[/] failed: {ex.Message}");
         }
 
         return true;
@@ -125,8 +125,7 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
 
         foreach (Core.Store.Session session in _workspace.PollExitedAllocationProfiles())
         {
-            console.MarkupLineInterpolated(
-                $"[yellow]· allocation profile captured for session[/] [bold]{session.Id}[/] [grey]({session.Command})[/]");
+            Output.Success(console, $"Allocation profile captured for [bold]{session.Id}[/] [#808791]({session.Command})[/]");
         }
 
         foreach (TriggeredCaptureResult capture in _workspace.PollTriggeredSnapshots())
@@ -134,13 +133,11 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
             if (capture.Entry is { } entry)
             {
                 string contents = entry.HasAllocations ? "heap + allocations" : "heap only";
-                console.MarkupLineInterpolated(
-                    $"[yellow]●[/] [bold]{capture.Probe}[/] [yellow]fired — snapshot[/] [bold]{entry.Id}[/] [grey]captured ({contents}); load {entry.Id} to inspect[/]");
+                Output.Success(console, $"[bold]{capture.Probe}[/] fired · snapshot [bold]{entry.Id}[/] [#808791]({contents})[/]");
             }
             else
             {
-                console.MarkupLineInterpolated(
-                    $"[red]●[/] [bold]{capture.Probe}[/] [red]fired but capture failed:[/] {capture.Error}");
+                Output.Error(console, $"[bold]{capture.Probe}[/] fired but capture failed: {capture.Error}");
             }
         }
     }
@@ -149,16 +146,15 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
     {
         if (workspace.Current is not null)
         {
-            console.MarkupLineInterpolated($"[bold]sl[/] — loaded [aqua]{workspace.CurrentName}[/]");
+            console.MarkupLineInterpolated($"[bold #5AF78E]sl[/] [#808791]·[/] [#00D7FF]{workspace.CurrentName}[/] [#808791]loaded[/]");
         }
         else
         {
             int count = workspace.Store.Sessions.Count;
-            string sessions = count == 1 ? "session" : "sessions";
-            console.MarkupLineInterpolated($"[bold]sl[/] — no snapshot loaded ([aqua]{count}[/] {sessions} in library)");
-            console.MarkupLine("[grey]Use[/] ls[grey],[/] load <id>[grey],[/] collect[grey], or[/] import <file>[grey].[/]");
+            string workspaces = count == 1 ? "workspace" : "workspaces";
+            console.MarkupLineInterpolated($"[bold #5AF78E]sl[/] [#808791]·[/] {count} {workspaces} [#808791]· no snapshot loaded[/]");
         }
-        console.MarkupLine("Type [bold]help[/] for commands, [bold]exit[/] to quit.");
+        console.MarkupLine("[#808791]type `help` for commands · `exit` to quit[/]");
         console.WriteLine();
     }
 

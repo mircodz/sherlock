@@ -57,7 +57,7 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
 
         if (!TryParseKind(settings.Type, out DumpKind kind))
         {
-            console.MarkupLineInterpolated($"[red]error:[/] unknown dump type '{settings.Type}' (use mini|heap|triage|full).");
+            Output.Error(console, $"Unknown dump type '{settings.Type}'; use mini, heap, triage, or full.");
             return 1;
         }
 
@@ -71,7 +71,7 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
         }
         catch (DumpAnalysisException ex)
         {
-            console.MarkupLineInterpolated($"[red]error:[/] {ex.Message}");
+            Output.Error(console, $"{ex.Message}");
             return 1;
         }
 
@@ -84,7 +84,7 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
             sourceProcess: sourceName,
             sourcePid: pid);
 
-        console.MarkupLineInterpolated($"[green]✓[/] saved [bold]{entry.Id}[/] [grey]({ByteSize.Format(entry.SizeBytes)})[/]");
+        Output.Success(console, $"Saved [bold]{entry.Id}[/] [#808791]({ByteSize.Format(entry.SizeBytes)})[/]");
 
         if (settings.Analyze)
         {
@@ -94,7 +94,7 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
             return 0;
         }
 
-        console.MarkupLineInterpolated($"[grey]Open the library with[/] sl [grey]then[/] load {entry.Id}[grey].[/]");
+        console.MarkupLineInterpolated($"    [#808791]next: sl · load {entry.Id}[/]");
         return 0;
     }
 
@@ -109,7 +109,7 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
         IReadOnlyList<DotnetProcess> processes = ProcessLocator.List();
         if (processes.Count == 0)
         {
-            console.MarkupLine("[yellow]No dumpable .NET processes found.[/]");
+            Output.Info(console, $"No dumpable .NET processes found.");
             return 0;
         }
 
@@ -137,7 +137,7 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
 
         if (settings.Name is null)
         {
-            console.MarkupLine("[red]error:[/] specify [bold]--pid[/] or [bold]--name[/] (or [bold]--list[/] to see processes).");
+            Output.Error(console, $"Specify [bold]--pid[/] or [bold]--name[/], or use [bold]--list[/].");
             return false;
         }
 
@@ -145,17 +145,17 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
         switch (matches.Count)
         {
             case 0:
-                console.MarkupLineInterpolated($"[red]error:[/] no .NET process matches '{settings.Name}'.");
+                Output.Error(console, $"No .NET process matches '{settings.Name}'.");
                 return false;
             case 1:
                 pid = matches[0].Pid;
-                console.MarkupLineInterpolated($"[grey]Matched[/] {matches[0].Name} [grey](pid {pid}).[/]");
+                Output.Info(console, $"Matched [#00D7FF]{matches[0].Name}[/] · pid {pid}");
                 return true;
             default:
-                console.MarkupLineInterpolated($"[red]error:[/] '{settings.Name}' is ambiguous ({matches.Count} matches). Use --pid:");
+                Output.Error(console, $"'{settings.Name}' is ambiguous ({matches.Count} matches). Use [bold]--pid[/]:");
                 foreach (DotnetProcess process in matches)
                 {
-                    console.MarkupLineInterpolated($"  [grey]{process.Pid}[/]  {process.Name}");
+                    console.MarkupLineInterpolated($"  [#808791]{process.Pid}[/]  {process.Name}");
                 }
 
                 return false;

@@ -1,4 +1,5 @@
 using System.IO;
+using Sherlock.CLI.Rendering;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -17,17 +18,17 @@ public sealed class LoadReplCommand : IReplCommand
 
         if (context.Workspace.Store.FindSnapshot(args[0]) is not ({ } session, { } entry))
         {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] no snapshot '{args[0]}'. Use [bold]ls[/] to list.");
+            Output.Error(context.Console, $"No snapshot '{args[0]}'. Use [bold]ls[/] to list.");
             return;
         }
 
         if (!entry.Exists)
         {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] dump file is missing: {entry.Path}");
+            Output.Error(context.Console, $"Dump file is missing: {entry.Path}");
             return;
         }
 
         context.Workspace.Load(session, entry);
-        context.Console.MarkupLineInterpolated($"[green]loaded[/] {entry.Id} [grey]({Path.GetFileName(entry.Path)})[/]");
+        Output.Success(context.Console, $"Loaded [bold]{entry.Id}[/] [#808791]({Path.GetFileName(entry.Path)})[/]");
     }
 }

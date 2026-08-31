@@ -1,4 +1,5 @@
 using System.IO;
+using Sherlock.CLI.Rendering;
 using Sherlock.CLI.Repl;
 using Sherlock.Core;
 using Sherlock.Core.Store;
@@ -22,12 +23,12 @@ internal static class ReplHost
         }
         catch (FileNotFoundException ex)
         {
-            console.MarkupLineInterpolated($"[red]error:[/] dump file not found: {ex.FileName}");
+            Output.Error(console, $"Dump file not found: {ex.FileName}");
             return 1;
         }
         catch (DumpAnalysisException ex)
         {
-            console.MarkupLineInterpolated($"[red]error:[/] {ex.Message}");
+            Output.Error(console, $"{ex.Message}");
             return 1;
         }
 

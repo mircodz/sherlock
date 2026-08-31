@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using Sherlock.CLI.Rendering;
 using Sherlock.Core.Collection;
 using Sherlock.Core.Store;
 using Spectre.Console;
@@ -65,7 +66,7 @@ public sealed class RunCommand : Command<RunCommand.Settings>
 
         if (command.Count == 0)
         {
-            console.MarkupLineInterpolated($"[red]error:[/] no executable given. Usage: {RunLauncher.Usage}");
+            Output.Error(console, $"No executable given. Usage: [bold]{RunLauncher.Usage}[/]");
             return 1;
         }
 
@@ -73,7 +74,7 @@ public sealed class RunCommand : Command<RunCommand.Settings>
 
         if (settings.Live && !options.NeedsProfiler)
         {
-            console.MarkupLine("[yellow]--live needs the profiler for the heap graph[/] — add [bold]--profile[/] (or [bold]--correlate[/]).");
+            Output.Warning(console, $"[bold]--live[/] needs the profiler; add [bold]--profile[/] or [bold]--correlate[/].");
             return 1;
         }
 
@@ -104,21 +105,29 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         console.WriteLine();
         Session current = workspace.Store.GetSession(session.Id) ?? session;
         List<SnapshotEntry> snapshots = current.Snapshots.ToList();
-        string exit = target.ExitCode is int code ? $"exit code {code}" : "still running";
-
-        console.MarkupLineInterpolated($"[bold]{current.Id}[/] [grey]({exit}) — {snapshots.Count} snapshot(s)[/]");
+        int? exitCode = target.ExitCode;
+        string exit = exitCode is { } code ? $"exit {code}" : "still running";
+        string snapshotCount = snapshots.Count == 1 ? "1 snapshot" : $"{snapshots.Count} snapshots";
+        if (exitCode is 0)
+        {
+            Output.Success(console, $"Run complete · [bold]{current.Id}[/] · {exit} · {snapshotCount}");
+        }
+        else
+        {
+            Output.Warning(console, $"Run complete · [bold]{current.Id}[/] · {exit} · {snapshotCount}");
+        }
         foreach (SnapshotEntry snapshot in snapshots)
         {
-            console.MarkupLineInterpolated($"  [aqua]{snapshot.Id}[/] [grey]{snapshot.Reason ?? string.Empty}[/]");
+            console.MarkupLineInterpolated($"    [#00D7FF]{snapshot.Id}[/] [#808791]{snapshot.Reason ?? "manual"}[/]");
         }
 
         if (snapshots.Count > 0)
         {
-            console.MarkupLineInterpolated($"[grey]Analyze with[/] sl [grey](then[/] load {snapshots[0].Id}[grey]) or[/] sl mcp[grey].[/]");
+            console.MarkupLineInterpolated($"    [#808791]next: sl · load {snapshots[0].Id}[/]");
         }
         else
         {
-            console.MarkupLine("[grey]No snapshots captured. Try[/] --snapshot-on <event> [grey]or[/] --correlate[grey].[/]");
+            console.MarkupLine("    [#808791]no snapshots captured · use --snapshot-on <event> or capture interactively[/]");
         }
     }
 
@@ -140,7 +149,7 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         if (cancellation.IsCancellationRequested)
         {
             target.Kill();
-            console.MarkupLine("[grey](interrupted)[/]");
+            Output.Warning(console, $"Run interrupted; process tree killed.");
         }
 
         logPosition = StreamLog(target, logPosition);
@@ -159,21 +168,18 @@ public sealed class RunCommand : Command<RunCommand.Settings>
     {
         foreach (Session session in workspace.PollExitedAllocationProfiles())
         {
-            console.MarkupLineInterpolated(
-                $"[yellow]· allocation profile captured for[/] [bold]{session.Id}[/]");
+            Output.Success(console, $"Allocation profile captured for [bold]{session.Id}[/]");
         }
         foreach (TriggeredCaptureResult capture in workspace.PollTriggeredSnapshots())
         {
             if (capture.Entry is { } entry)
             {
                 string contents = entry.HasAllocations ? "heap + allocations" : "heap only";
-                console.MarkupLineInterpolated(
-                    $"[yellow]●[/] [bold]{capture.Probe}[/] [yellow]fired → snapshot[/] [bold]{entry.Id}[/] [grey]({contents})[/]");
+                Output.Success(console, $"[bold]{capture.Probe}[/] fired · snapshot [bold]{entry.Id}[/] [#808791]({contents})[/]");
             }
             else
             {
-                console.MarkupLineInterpolated(
-                    $"[red]●[/] [bold]{capture.Probe}[/] [red]fired but capture failed:[/] {capture.Error}");
+                Output.Error(console, $"[bold]{capture.Probe}[/] fired but capture failed: {capture.Error}");
             }
         }
     }

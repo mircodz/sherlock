@@ -20,24 +20,24 @@ public sealed class ExceptionsReplCommand : IReplCommand
 
         if (exceptions.Count == 0)
         {
-            context.Console.MarkupLine("[green]No exception objects found.[/]");
+            context.Console.MarkupLine("[#AFFF00]No exception objects found.[/]");
             return;
         }
 
         foreach (ExceptionInfo ex in exceptions)
         {
             string thread = ex.ThreadId is int id
-                ? $" [yellow](in-flight on thread {id})[/]"
+                ? $" [#FFAF00](in-flight on thread {id})[/]"
                 : "";
-            context.Console.MarkupLineInterpolated($"[red]{TypeNames.Short(ex.TypeName)}[/] [grey]@ 0x{ex.Address:x}[/]");
+            context.Console.MarkupLineInterpolated($"[#00D7FF]{TypeNames.Short(ex.TypeName)}[/] [#808791]@[/] [#FFD75F]0x{ex.Address:x}[/]");
             context.Console.MarkupInterpolated($"  {ex.Message ?? "<no message>"}");
             context.Console.MarkupLine(thread);
             if (ex.StackFrameCount > 0)
             {
-                context.Console.MarkupLineInterpolated($"  [grey]{ex.StackFrameCount} stack frames[/]");
+                context.Console.MarkupLineInterpolated($"  [#808791]{ex.StackFrameCount} stack frames[/]");
             }
         }
 
-        context.Console.MarkupLine($"[grey]{exceptions.Count} exception object(s).[/]");
+        context.Console.MarkupLine($"[#808791]{exceptions.Count} exception object(s).[/]");
     }
 }

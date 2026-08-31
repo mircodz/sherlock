@@ -31,7 +31,7 @@ public sealed class StringsReplCommand : IReplCommand
 
         if (duplicates.Count == 0)
         {
-            context.Console.MarkupLine("[green]No duplicated strings found.[/]");
+            context.Console.MarkupLine("[#AFFF00]No duplicated strings found.[/]");
             return;
         }
 
@@ -46,12 +46,12 @@ public sealed class StringsReplCommand : IReplCommand
             totalWasted += dupString.WastedBytes;
             table.AddRow(
                 Counts.Format(dupString.Count),
-                $"[bold green]{ByteSize.Format((long)dupString.WastedBytes)}[/]",
-                $"[aqua]{Markup.Escape(TextUtil.Preview(dupString.Value, 80))}[/]");
+                $"[bold #AFFF00]{ByteSize.Format((long)dupString.WastedBytes)}[/]",
+                $"[#00D7FF]{Markup.Escape(TextUtil.Preview(dupString.Value, 80))}[/]");
         }
 
         context.Console.Write(table);
-        context.Console.MarkupLine($"[grey]Top {duplicates.Count} duplicated strings waste[/] [bold green]{ByteSize.Format((long)totalWasted)}[/].");
+        context.Console.MarkupLine($"[#808791]Top {duplicates.Count} duplicated strings waste[/] [bold #AFFF00]{ByteSize.Format((long)totalWasted)}[/].");
     }
 
 }

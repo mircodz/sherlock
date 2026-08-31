@@ -25,7 +25,7 @@ public sealed class FinalizersReplCommand : IReplCommand
 
         if (report.TotalObjects == 0)
         {
-            context.Console.MarkupLine("[green]No finalizable objects.[/] [grey]Nothing is waiting on the finalizer queue.[/]");
+            context.Console.MarkupLine("[#AFFF00]No finalizable objects.[/] [#808791]Nothing is waiting on the finalizer queue.[/]");
             return;
         }
 
@@ -38,12 +38,12 @@ public sealed class FinalizersReplCommand : IReplCommand
         {
             table.AddRow(
                 $"[bold]{Counts.Compact(stat.Count)}[/]",
-                $"[green]{ByteSize.Format((long)stat.TotalBytes)}[/]",
-                $"[aqua]{Markup.Escape(TypeNames.Short(stat.TypeName))}[/]");
+                $"[#F2F2F2]{ByteSize.Format((long)stat.TotalBytes)}[/]",
+                $"[#00D7FF]{Markup.Escape(TypeNames.Short(stat.TypeName))}[/]");
         }
 
         context.Console.Write(table);
         context.Console.MarkupLineInterpolated(
-            $"[grey]{Counts.Format(report.TotalObjects)} finalizable objects,[/] [green]{ByteSize.Format((long)report.TotalBytes)}[/][grey]. A live finalizer usually means Dispose() wasn't called; list a type with[/] objects <type>[grey].[/]");
+            $"[#808791]{Counts.Format(report.TotalObjects)} finalizable objects,[/] [#F2F2F2]{ByteSize.Format((long)report.TotalBytes)}[/][#808791]. A live finalizer usually means Dispose() wasn't called; list a type with[/] objects <type>[#808791].[/]");
     }
 }

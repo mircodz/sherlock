@@ -39,7 +39,7 @@ public sealed class AllocationsReplCommand : IReplCommand
             {
                 if (args.Length <= i)
                 {
-                    context.Console.MarkupLineInterpolated($"[red]error:[/] usage: {Usage}");
+                    Output.Error(context.Console, $"Usage: [bold]{Usage}[/]");
                     return;
                 }
                 method = args[i++];
@@ -64,7 +64,7 @@ public sealed class AllocationsReplCommand : IReplCommand
                ?? runTarget?.AllocationPath;
         if (path is null)
         {
-            context.Console.MarkupLine("[yellow]No allocation profile.[/] Pass a path, or run something with [bold]run --profile[/].");
+            context.Console.MarkupLine("[#FFAF00]No allocation profile.[/] Pass a path, or run something with [bold]run --profile[/].");
             return;
         }
         if (!File.Exists(path))
@@ -82,13 +82,13 @@ public sealed class AllocationsReplCommand : IReplCommand
                 }
                 catch (DumpAnalysisException ex)
                 {
-                    context.Console.MarkupLineInterpolated($"[yellow]Couldn't flush[/] — {ex.Message}");
+                    context.Console.MarkupLineInterpolated($"[#FFAF00]Couldn't flush[/] — {ex.Message}");
                     return;
                 }
             }
             else
             {
-                context.Console.MarkupLineInterpolated($"[red]error:[/] profile not found: {path}");
+                Output.Error(context.Console, $"Profile not found: {path}");
                 return;
             }
         }
@@ -96,7 +96,7 @@ public sealed class AllocationsReplCommand : IReplCommand
         AllocationProfile profile = AllocationProfileReader.Read(path);
         if (profile.Sites.Count == 0)
         {
-            context.Console.MarkupLine("[yellow]Profile has no sites.[/]");
+            context.Console.MarkupLine("[#FFAF00]Profile has no sites.[/]");
             return;
         }
 
@@ -108,7 +108,7 @@ public sealed class AllocationsReplCommand : IReplCommand
         }
 
         context.Console.MarkupLineInterpolated(
-            $"[grey]{Counts.Format(profile.Sites.Count)} call paths,[/] [bold green]{ByteSize.Format(profile.TotalAllocBytes)}[/] [grey]allocated,[/] [bold green]{ByteSize.Format(profile.TotalSurvivedBytes)}[/] [grey]survived first GC.[/]");
+            $"[#808791]{Counts.Format(profile.Sites.Count)} call paths,[/] [bold #AFFF00]{ByteSize.Format(profile.TotalAllocBytes)}[/] [#808791]allocated,[/] [bold #F2F2F2]{ByteSize.Format(profile.TotalSurvivedBytes)}[/] [#808791]survived first GC.[/]");
     }
 
     /// <summary>Top-down call tree: nodes carry inclusive allocated (+survived) bytes.</summary>
@@ -118,9 +118,9 @@ public sealed class AllocationsReplCommand : IReplCommand
         long total = root.AllocBytes == 0 ? 1 : root.AllocBytes;
         const double minFraction = 0.01; // hide branches under 1% of total
 
-        var tree = new Tree("[bold]Allocation call tree[/] [grey](inclusive bytes · % of total · survived)[/]")
+        var tree = new Tree("[bold]Allocation call tree[/] [#808791](method · allocated · % total · objects · survived)[/]")
         {
-            Style = new Style(foreground: Color.Grey),
+            Style = new Style(foreground: Theme.MutedColor),
         };
         AddChildren(tree, root, total, minFraction);
         console.Write(tree);
@@ -155,9 +155,9 @@ public sealed class AllocationsReplCommand : IReplCommand
         foreach ((string method, (long Bytes, long Count) val) in self.OrderByDescending(kv => kv.Value.Bytes).Take(limit))
         {
             table.AddRow(
-                $"[bold green]{ByteSize.Format(val.Bytes)}[/]",
-                $"[green]{ByteSize.Format(inclusive.GetValueOrDefault(method))}[/]",
-                $"[grey]{Counts.Compact(val.Count)}×[/]",
+                $"[bold #AFFF00]{ByteSize.Format(val.Bytes)}[/]",
+                $"[#F2F2F2]{ByteSize.Format(inclusive.GetValueOrDefault(method))}[/]",
+                $"[#808791]{Counts.Compact(val.Count)}×[/]",
                 Markup.Escape(method));
         }
 
@@ -171,15 +171,15 @@ public sealed class AllocationsReplCommand : IReplCommand
         if (root.AllocBytes == 0)
         {
             console.MarkupLineInterpolated(
-                $"[yellow]No allocations flow through[/] {method}[yellow].[/] [grey]Check the name with[/] allocations hot[grey].[/]");
+                $"[#FFAF00]No allocations flow through[/] {method}[#FFAF00].[/] [#808791]Check the name with[/] allocations hot[#808791].[/]");
             return;
         }
 
         long total = root.AllocBytes;
         var tree = new Tree(
-            $"[bold]{Markup.Escape(method)}[/] [grey]— callers ·[/] [bold green]{ByteSize.Format(total)}[/] [grey]allocated through it[/]")
+            $"[#00D7FF]{Markup.Escape(method)}[/] [#808791]— callers ·[/] [bold #AFFF00]{ByteSize.Format(total)}[/] [#808791]allocated through it[/]")
         {
-            Style = new Style(foreground: Color.Grey),
+            Style = new Style(foreground: Theme.MutedColor),
         };
         AddChildren(tree, root, total, 0.01);
         console.Write(tree);
@@ -195,8 +195,8 @@ public sealed class AllocationsReplCommand : IReplCommand
             double pct = 100.0 * child.AllocBytes / total;
             double survPct = child.AllocBytes == 0 ? 0 : 100.0 * child.SurvivedBytes / child.AllocBytes;
             TreeNode tn = parent.AddNode(
-                $"[bold green]{ByteSize.Format(child.AllocBytes)}[/] [grey]{Counts.Percent(pct)} · {Counts.Compact(child.AllocCount)}×[/]  " +
-                $"{Markup.Escape(child.Frame)} [grey]· {Counts.Percent(survPct, 0)} surv[/]");
+                $"[#00D7FF]{Markup.Escape(ShortMethod(child.Frame))}[/]  [bold #AFFF00]{ByteSize.Format(child.AllocBytes)}[/] " +
+                $"[#808791]· {Counts.Percent(pct)} · {Counts.Compact(child.AllocCount)}× · {Counts.Percent(survPct, 0)} surv[/]");
             AddChildren(tn, child, total, minFraction);
         }
 
@@ -204,7 +204,44 @@ public sealed class AllocationsReplCommand : IReplCommand
         if (hiddenCount > 0)
         {
             long hiddenBytes = kids.Skip(shown.Count).Sum(c => c.AllocBytes);
-            parent.AddNode($"[grey]… {hiddenCount} smaller ({ByteSize.Format(hiddenBytes)})[/]");
+            parent.AddNode($"[#808791]… {hiddenCount} smaller ({ByteSize.Format(hiddenBytes)})[/]");
+        }
+    }
+
+    private static string ShortMethod(string method)
+    {
+        int methodDot = PreviousDot(method, method.Length);
+        if (methodDot < 0)
+        {
+            return method;
+        }
+
+        int typeDot = PreviousDot(method, methodDot);
+        if (typeDot == methodDot - 1)
+        {
+            typeDot = PreviousDot(method, typeDot);
+        }
+        return typeDot < 0 ? method : method[(typeDot + 1)..];
+
+        static int PreviousDot(string value, int before)
+        {
+            int genericDepth = 0;
+            for (int i = before - 1; i >= 0; i--)
+            {
+                if (value[i] == '>')
+                {
+                    genericDepth++;
+                }
+                else if (value[i] == '<')
+                {
+                    genericDepth--;
+                }
+                else if (value[i] == '.' && genericDepth == 0)
+                {
+                    return i;
+                }
+            }
+            return -1;
         }
     }
 

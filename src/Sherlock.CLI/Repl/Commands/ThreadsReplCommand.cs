@@ -20,7 +20,7 @@ public sealed class ThreadsReplCommand : IReplCommand
         {
             if (!int.TryParse(args[0], out int id))
             {
-                context.Console.MarkupLineInterpolated($"[red]error:[/] '{args[0]}' is not a managed thread id.");
+                Output.Error(context.Console, $"'{args[0]}' is not a managed thread id.");
                 return;
             }
 
@@ -28,7 +28,7 @@ public sealed class ThreadsReplCommand : IReplCommand
 
             if (thread is null)
             {
-                context.Console.MarkupLineInterpolated($"[yellow]No managed thread with id {id}.[/]");
+                context.Console.MarkupLineInterpolated($"[#FFAF00]No managed thread with id {id}.[/]");
                 return;
             }
 
@@ -54,7 +54,7 @@ public sealed class ThreadsReplCommand : IReplCommand
         }
 
         context.Console.Write(table);
-        context.Console.MarkupLine($"[grey]{threads.Count} managed threads. Use[/] threads <id> [grey]for a stack.[/]");
+        context.Console.MarkupLine($"[#808791]{threads.Count} managed threads. Use[/] threads <id> [#808791]for a stack.[/]");
     }
 
     private static string Flags(ThreadInfo thread)
@@ -62,17 +62,17 @@ public sealed class ThreadsReplCommand : IReplCommand
         var flags = new List<string>();
         if (thread.IsFinalizer)
         {
-            flags.Add("[aqua]finalizer[/]");
+            flags.Add("[#00D7FF]finalizer[/]");
         }
 
         if (thread.IsGcThread)
         {
-            flags.Add("[aqua]gc[/]");
+            flags.Add("[#00D7FF]gc[/]");
         }
 
         if (!thread.IsAlive)
         {
-            flags.Add("[grey]dead[/]");
+            flags.Add("[#808791]dead[/]");
         }
 
         return flags.Count == 0 ? "-" : string.Join(" ", flags);
@@ -83,13 +83,13 @@ public sealed class ThreadsReplCommand : IReplCommand
         console.MarkupLineInterpolated($"[bold]Thread {thread.ManagedThreadId}[/] (OS 0x{thread.OsThreadId:x})");
         if (thread.StackTrace.Count == 0)
         {
-            console.MarkupLine("[grey]  <no managed frames>[/]");
+            console.MarkupLine("[#808791]  <no managed frames>[/]");
             return;
         }
 
         foreach (StackFrameInfo frame in thread.StackTrace)
         {
-            console.MarkupLineInterpolated($"  [grey]{frame.InstructionPointer:x12}[/]  {frame.Description}");
+            console.MarkupLineInterpolated($"  [#808791]{frame.InstructionPointer:x12}[/]  {frame.Description}");
         }
     }
 }

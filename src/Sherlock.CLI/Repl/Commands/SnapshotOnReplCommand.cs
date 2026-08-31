@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Sherlock.CLI.Rendering;
 using Sherlock.Core.Collection;
 using Spectre.Console;
 
@@ -26,7 +27,7 @@ public sealed class SnapshotOnReplCommand : IReplCommand
     {
         if (args.Length == 0)
         {
-            context.Console.MarkupLineInterpolated($"[yellow]usage:[/] {Usage}");
+            Output.Error(context.Console, $"Usage: [bold]{Usage}[/]");
             return;
         }
 
@@ -37,9 +38,7 @@ public sealed class SnapshotOnReplCommand : IReplCommand
             .LastOrDefault(t => !t.HasExited && t.Features.Contains("snapshot-triggers"));
         if (target is null)
         {
-            context.Console.MarkupLine(
-                "[yellow]No live target with trigger support.[/] Start one with " +
-                "[bold]run --correlate -- <app>[/] (or [bold]--profile[/]/[bold]--snapshot-on[/]).");
+            Output.Warning(context.Console, $"No live target with trigger support. Start one with [bold]run --correlate -- <app>[/].");
             return;
         }
 
@@ -49,12 +48,11 @@ public sealed class SnapshotOnReplCommand : IReplCommand
 
         if (ok)
         {
-            context.Console.MarkupLineInterpolated(
-                $"[green]armed[/] snapshot-on [bold]{spec}[/] [grey]on[/] {target.Name} [grey](pid {target.Pid}). A snapshot lands when it fires.[/]");
+            Output.Success(context.Console, $"Armed [bold]{spec}[/] on [#00D7FF]{target.Name}[/] · pid {target.Pid}");
         }
         else
         {
-            context.Console.MarkupLineInterpolated($"[red]could not arm:[/] {detail}");
+            Output.Error(context.Console, $"Could not arm trigger: {detail}");
         }
     }
 }

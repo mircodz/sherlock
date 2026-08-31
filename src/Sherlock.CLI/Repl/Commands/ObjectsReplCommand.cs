@@ -27,7 +27,7 @@ public sealed class ObjectsReplCommand : IReplCommand
 
         if (listing.TotalMatched == 0)
         {
-            context.Console.MarkupLineInterpolated($"[yellow]No instances matched[/] '{filter}'.");
+            context.Console.MarkupLineInterpolated($"[#FFAF00]No instances matched[/] '{filter}'.");
             return;
         }
 
@@ -40,16 +40,16 @@ public sealed class ObjectsReplCommand : IReplCommand
         foreach (ObjectInstance instance in listing.Instances)
         {
             table.AddRow(
-                $"[grey]0x{instance.Address:x}[/]",
-                $"[bold green]{ByteSize.Format((long)instance.Size)}[/]",
-                $"[aqua]{Markup.Escape(TypeNames.Short(instance.TypeName))}[/]",
-                instance.Preview is null ? "" : $"[gold1]{Markup.Escape(instance.Preview)}[/]");
+                $"[#FFD75F]0x{instance.Address:x}[/]",
+                $"[bold #F2F2F2]{ByteSize.Format((long)instance.Size)}[/]",
+                $"[#00D7FF]{Markup.Escape(TypeNames.Short(instance.TypeName))}[/]",
+                instance.Preview is null ? "" : $"[#F2F2F2]{Markup.Escape(instance.Preview)}[/]");
         }
 
         context.Console.Write(table);
         context.Console.MarkupLine(
             $"Showing top [bold]{listing.Instances.Count}[/] of [bold]{Counts.Format(listing.TotalMatched)}[/] matches, " +
-            $"[bold green]{ByteSize.Format((long)listing.TotalMatchedSize)}[/] total. " +
-            $"[grey]Copy an address into[/] gcroot <address>.");
+            $"[bold #F2F2F2]{ByteSize.Format((long)listing.TotalMatchedSize)}[/] total. " +
+            $"[#808791]Copy an address into[/] gcroot <address>.");
     }
 }

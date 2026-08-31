@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
+using Sherlock.CLI.Rendering;
 using Sherlock.Core.Store;
 using Spectre.Console;
 
@@ -29,7 +30,7 @@ public sealed class WaitTriggerReplCommand : IReplCommand
         bool anyLive = context.Workspace.Targets.Any(target => !target.HasExited);
         if (!anyLive)
         {
-            context.Console.MarkupLine("[yellow]No live target to wait on.[/]");
+            Output.Warning(context.Console, $"No live target to wait on.");
             return;
         }
 
@@ -46,20 +47,18 @@ public sealed class WaitTriggerReplCommand : IReplCommand
                         if (capture.Entry is { } entry)
                         {
                             string contents = entry.HasAllocations ? "heap + allocations" : "heap only";
-                            context.Console.MarkupLineInterpolated(
-                                $"[green]●[/] [bold]{capture.Probe}[/] [green]fired — snapshot[/] [bold]{entry.Id}[/] [grey]captured ({contents}).[/]");
+                            Output.Success(context.Console, $"[bold]{capture.Probe}[/] fired · snapshot [bold]{entry.Id}[/] [#808791]({contents})[/]");
                         }
                         else
                         {
-                            context.Console.MarkupLineInterpolated(
-                                $"[red]●[/] [bold]{capture.Probe}[/] [red]fired but capture failed:[/] {capture.Error}");
+                            Output.Error(context.Console, $"[bold]{capture.Probe}[/] fired but capture failed: {capture.Error}");
                         }
                     }
                     return;
                 }
                 Thread.Sleep(150);
             }
-            context.Console.MarkupLine("[yellow]timed out[/] [grey]waiting for a trigger.[/]");
+            Output.Warning(context.Console, $"Timed out waiting for a trigger.");
         });
     }
 }

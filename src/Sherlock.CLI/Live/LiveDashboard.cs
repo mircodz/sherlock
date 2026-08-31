@@ -32,6 +32,7 @@ public static class LiveDashboard
 
     public static void Run(Workspace workspace, RunTarget target, IReadOnlyList<string> command, CancellationToken cancellation)
     {
+        Sherlock.CLI.Rendering.Theme.ApplyCellar();
         var poll = TimeSpan.FromMilliseconds(200); // control-channel request timeout
         var busy = 0; // 1 while a capture is in flight; pause heap polls so we don't contend on the channel
 

@@ -26,7 +26,7 @@ public sealed class EventLeaksReplCommand : IReplCommand
         if (leaks.Count == 0)
         {
             context.Console.MarkupLineInterpolated(
-                $"[green]No suspicious event subscriptions[/] [grey](no delegate has ≥ {min} subscribers).[/]");
+                $"[#AFFF00]No suspicious event subscriptions[/] [#808791](no delegate has ≥ {min} subscribers).[/]");
             return;
         }
 
@@ -41,14 +41,14 @@ public sealed class EventLeaksReplCommand : IReplCommand
             string subscribers = string.Join(", ",
                 leak.Targets.Take(3).Select(t => $"{Markup.Escape(TypeNames.Short(t.TypeName))} ×{t.Count}"));
             table.AddRow(
-                $"[grey]0x{leak.DelegateAddress:x}[/]",
+                $"[#FFD75F]0x{leak.DelegateAddress:x}[/]",
                 $"[bold]{Counts.Compact(leak.SubscriberCount)}[/]",
-                $"[aqua]{Markup.Escape(TypeNames.Short(leak.DelegateType))}[/]",
+                $"[#00D7FF]{Markup.Escape(TypeNames.Short(leak.DelegateType))}[/]",
                 subscribers);
         }
 
         context.Console.Write(table);
         context.Console.MarkupLine(
-            "[grey]Each subscriber is pinned until it unsubscribes (-=).[/] gcroot <address> [grey]to find the publisher that owns the event.[/]");
+            "[#808791]Each subscriber is pinned until it unsubscribes (-=).[/] gcroot <address> [#808791]to find the publisher that owns the event.[/]");
     }
 }

@@ -30,8 +30,8 @@ public sealed class DumpHeapReplCommand : IReplCommand
         if (stats.Count == 0)
         {
             context.Console.MarkupLine(filter is null
-                ? "[yellow]No objects found on the heap.[/]"
-                : $"[yellow]No types matched[/] '{Markup.Escape(filter)}'.");
+                ? "[#FFAF00]No objects found on the heap.[/]"
+                : $"[#FFAF00]No types matched[/] '{Markup.Escape(filter)}'.");
             return;
         }
 
@@ -52,9 +52,9 @@ public sealed class DumpHeapReplCommand : IReplCommand
         foreach (HeapTypeStat stat in stats.Take(DefaultLimit))
         {
             table.AddRow(
-                $"[aqua]{Markup.Escape(TypeNames.Short(stat.TypeName))}[/]",
+                $"[#00D7FF]{Markup.Escape(TypeNames.Short(stat.TypeName))}[/]",
                 Counts.Format(stat.Count),
-                $"[bold green]{ByteSize.Format((long)stat.TotalSize)}[/]",
+                $"[bold #AFFF00]{ByteSize.Format((long)stat.TotalSize)}[/]",
                 ByteSize.Format((long)stat.AverageSize));
         }
 
@@ -62,10 +62,10 @@ public sealed class DumpHeapReplCommand : IReplCommand
 
         if (stats.Count > DefaultLimit)
         {
-            context.Console.MarkupLine($"[grey]… {Counts.Format(stats.Count - DefaultLimit)} more types not shown. Filter with[/] dumpheap <type>.");
+            context.Console.MarkupLine($"[#808791]… {Counts.Format(stats.Count - DefaultLimit)} more types not shown. Filter with[/] dumpheap <type>.");
         }
 
         context.Console.MarkupLine(
-            $"[bold]{Counts.Format(stats.Count)}[/] types, [bold]{Counts.Format(totalCount)}[/] objects, [bold green]{ByteSize.Format((long)totalSize)}[/] total.");
+            $"[bold]{Counts.Format(stats.Count)}[/] types, [bold]{Counts.Format(totalCount)}[/] objects, [bold #AFFF00]{ByteSize.Format((long)totalSize)}[/] total.");
     }
 }

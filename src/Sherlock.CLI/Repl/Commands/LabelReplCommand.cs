@@ -1,3 +1,4 @@
+using Sherlock.CLI.Rendering;
 using Sherlock.Core.Store;
 using Spectre.Console;
 
@@ -19,17 +20,17 @@ public sealed class LabelReplCommand : IReplCommand
 
         if (updated is null)
         {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] no snapshot '{args[0]}'.");
+            Output.Error(context.Console, $"No snapshot '{args[0]}'.");
             return;
         }
 
         if (label is null)
         {
-            context.Console.MarkupLineInterpolated($"[grey]cleared label on[/] {updated.Id}");
+            Output.Success(context.Console, $"Cleared label on [bold]{updated.Id}[/]");
         }
         else
         {
-            context.Console.MarkupLineInterpolated($"[green]labeled[/] {updated.Id} [grey]→[/] {label}");
+            Output.Success(context.Console, $"Labeled [bold]{updated.Id}[/] · {label}");
         }
     }
 }

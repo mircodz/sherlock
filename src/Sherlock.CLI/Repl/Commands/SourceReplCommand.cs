@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.IO;
+using Sherlock.CLI.Rendering;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -20,7 +21,7 @@ public sealed class SourceReplCommand : IReplCommand
         string path = args[0];
         if (!File.Exists(path))
         {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] script not found: {path}");
+            Output.Error(context.Console, $"Script not found: {path}");
             return;
         }
 
@@ -32,7 +33,7 @@ public sealed class SourceReplCommand : IReplCommand
                 continue;
             }
 
-            context.Console.MarkupLineInterpolated($"[grey]source>[/] {line}");
+            context.Console.MarkupLineInterpolated($"[#808791]source>[/] {line}");
             if (!context.RunLine(line))
             {
                 return; // `exit` in the script stops execution

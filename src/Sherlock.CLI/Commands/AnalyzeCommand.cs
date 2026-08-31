@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using Sherlock.CLI.Rendering;
 using Sherlock.CLI.Repl;
 using Sherlock.Core;
 using Spectre.Console;
@@ -49,12 +50,12 @@ public sealed class AnalyzeCommand : Command<AnalyzeCommand.Settings>
             }
             catch (FileNotFoundException ex)
             {
-                console.MarkupLineInterpolated($"[red]error:[/] dump file not found: {ex.FileName}");
+                Output.Error(console, $"Dump file not found: {ex.FileName}");
                 return 1;
             }
             catch (DumpAnalysisException ex)
             {
-                console.MarkupLineInterpolated($"[red]error:[/] {ex.Message}");
+                Output.Error(console, $"{ex.Message}");
                 return 1;
             }
         }
@@ -69,7 +70,7 @@ public sealed class AnalyzeCommand : Command<AnalyzeCommand.Settings>
         {
             if (!File.Exists(settings.Script))
             {
-                console.MarkupLineInterpolated($"[red]error:[/] script not found: {settings.Script}");
+                Output.Error(console, $"Script not found: {settings.Script}");
                 return 1;
             }
             repl.RunBatch(workspace, File.ReadLines(settings.Script).Where(IsCommandLine));

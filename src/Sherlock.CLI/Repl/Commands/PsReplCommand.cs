@@ -22,17 +22,17 @@ public sealed class PsReplCommand : IReplCommand
 
         if (rows.Count == 0)
         {
-            context.Console.MarkupLine("[grey]No live targets. Launch one with[/] run <path>[grey].[/]");
+            context.Console.MarkupLine("[#808791]No live targets. Launch one with[/] run <path>[#808791].[/]");
             return;
         }
 
         foreach (RunProcess process in rows)
         {
             string role = process.IsRoot ? "[bold]root [/]" : "child";
-            string net = process.IsDotnet ? "[green].NET   [/]" : "[grey]native[/]";
-            context.Console.MarkupLine($"  [grey]{process.Pid,7}[/]  {role}  {net}  {Markup.Escape(process.Name)}");
+            string net = process.IsDotnet ? "[#00D7FF].NET   [/]" : "[#808791]native[/]";
+            context.Console.MarkupLine($"  [#808791]{process.Pid,7}[/]  {role}  {net}  {Markup.Escape(process.Name)}");
         }
 
-        context.Console.MarkupLine("[grey]snapshot <pid> to dump one into the library[/]");
+        context.Console.MarkupLine("[#808791]snapshot <pid> to dump one into the library[/]");
     }
 }

@@ -43,7 +43,7 @@ public sealed class ExportReplCommand : IReplCommand
 
         DominatorTree tree = context.Console.Status().Start("Building dominator tree…", _ => context.Snapshot.Dominators);
         Write(context, file, DominatorDot.Write(tree.BuildGraph(count)));
-        context.Console.MarkupLineInterpolated($"[grey]render with[/] dot -Tsvg {Markup.Escape(file)} -o out.svg[grey].[/]");
+        context.Console.MarkupLineInterpolated($"[#808791]render with[/] dot -Tsvg {Markup.Escape(file)} -o out.svg[#808791].[/]");
     }
 
     private static void ExportAllocations(ReplContext context, string[] args)
@@ -58,13 +58,13 @@ public sealed class ExportReplCommand : IReplCommand
         if (file.EndsWith(".dot", StringComparison.OrdinalIgnoreCase))
         {
             Write(context, file, AllocationDot.Write(profile));
-            context.Console.MarkupLineInterpolated($"[grey]render with[/] dot -Tsvg {Markup.Escape(file)} -o out.svg[grey].[/]");
+            context.Console.MarkupLineInterpolated($"[#808791]render with[/] dot -Tsvg {Markup.Escape(file)} -o out.svg[#808791].[/]");
         }
         else
         {
             Write(context, file, FoldedStacks.Write(profile, survived));
             context.Console.MarkupLineInterpolated(
-                $"[grey]open at[/] https://speedscope.app[grey], or[/] flamegraph.pl {Markup.Escape(file)} > out.svg[grey].[/]");
+                $"[#808791]open at[/] https://speedscope.app[#808791], or[/] flamegraph.pl {Markup.Escape(file)} > out.svg[#808791].[/]");
         }
     }
 
@@ -79,6 +79,6 @@ public sealed class ExportReplCommand : IReplCommand
     {
         File.WriteAllText(file, content);
         long size = new FileInfo(file).Length;
-        context.Console.MarkupLineInterpolated($"[green]✓[/] wrote [aqua]{Markup.Escape(file)}[/] [grey]({ByteSize.Format(size)})[/]");
+        context.Console.MarkupLineInterpolated($"[#AFFF00]✓[/] wrote [#00D7FF]{Markup.Escape(file)}[/] [#808791]({ByteSize.Format(size)})[/]");
     }
 }

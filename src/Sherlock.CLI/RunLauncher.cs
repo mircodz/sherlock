@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using Sherlock.CLI.Rendering;
 using Sherlock.Core.Collection;
 using Sherlock.Core.Store;
 using Spectre.Console;
@@ -32,12 +33,12 @@ public static class RunLauncher
                 case "--profiler-log" when i + 1 < args.Count:
                     if (!Enum.TryParse(args[++i], true, out logLevel) || !Enum.IsDefined(logLevel))
                     {
-                        console.MarkupLine("[red]error:[/] profiler log level must be trace, info, warning, error, or off.");
+                        Output.Error(console, $"Profiler log level must be trace, info, warning, error, or off.");
                         return null;
                     }
                     break;
                 case "--profiler-log":
-                    console.MarkupLine("[red]error:[/] --profiler-log requires a level.");
+                    Output.Error(console, $"[bold]--profiler-log[/] requires a level.");
                     return null;
                 case "--": break;
                 default: command.Add(arg); break;
@@ -46,7 +47,7 @@ public static class RunLauncher
 
         if (command.Count == 0)
         {
-            console.MarkupLineInterpolated($"[red]error:[/] usage: {Usage}");
+            Output.Error(console, $"Usage: [bold]{Usage}[/]");
             return null;
         }
         return new RunOptions { Command = command, Profile = profile, Correlate = correlate, CollectChildren = children, SnapshotOn = snapshotOn, ProfilerLogLevel = logLevel };
@@ -63,7 +64,7 @@ public static class RunLauncher
             process.Exec = options.Command[0];
             workspace.Store.Persist(session);
             workspace.AddTarget(target, session);
-            console.MarkupLineInterpolated($"[green]launched[/] {Path.GetFileName(options.Command[0])} [grey](pid {target.Pid}) → session[/] [bold]{session.Id}[/][grey].[/]");
+            Output.Success(console, $"Launched [#00D7FF]{Path.GetFileName(options.Command[0])}[/] · pid {target.Pid} · workspace [bold]{session.Id}[/]");
             return (target, session);
         }
         catch (Exception ex)
@@ -71,7 +72,7 @@ public static class RunLauncher
             target?.Kill();
             target?.Dispose();
             workspace.Store.Remove(session.Id);
-            console.MarkupLineInterpolated($"[red]error:[/] {ex.Message}");
+            Output.Error(console, $"{ex.Message}");
             return null;
         }
     }

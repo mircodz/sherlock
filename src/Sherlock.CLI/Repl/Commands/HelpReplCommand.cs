@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Sherlock.CLI.Rendering;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -41,7 +42,7 @@ public sealed class HelpReplCommand : IReplCommand
 
         foreach (IGrouping<string, IReplCommand> group in groups)
         {
-            context.Console.Write(new Rule($"[bold]{group.Key}[/]") { Justification = Justify.Left, Style = new Style(Color.Grey) });
+            context.Console.Write(new Rule($"[bold]{group.Key}[/]") { Justification = Justify.Left, Style = new Style(Theme.SectionColor) });
 
             var table = new Table().Border(TableBorder.None).HideHeaders();
             table.AddColumn("cmd");
@@ -69,7 +70,7 @@ public sealed class HelpReplCommand : IReplCommand
 
         if (command is null)
         {
-            console.MarkupLineInterpolated($"[yellow]No such command:[/] {name}");
+            console.MarkupLineInterpolated($"[#FFAF00]No such command:[/] {name}");
             return;
         }
 

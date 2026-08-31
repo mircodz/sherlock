@@ -1,6 +1,8 @@
 using System;
 using System.IO;
 using System.Text;
+using Sherlock.CLI.Rendering;
+using Spectre.Console;
 
 namespace Sherlock.CLI.Repl;
 
@@ -14,7 +16,7 @@ public static class LineEditor
 
     /// <param name="prompt">Plain-text prompt (no markup; its width drives cursor math).</param>
     /// <returns>The entered line, or null at end-of-input.</returns>
-    public static string? ReadLine(string prompt, ReplHistory history)
+    public static string? ReadLine(string prompt, ReplHistory history, IAnsiConsole console)
     {
         if (Console.IsInputRedirected)
         {
@@ -24,7 +26,7 @@ public static class LineEditor
 
         try
         {
-            return ReadLineRaw(prompt, history);
+            return ReadLineRaw(prompt, history, console);
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException)
         {
@@ -34,7 +36,7 @@ public static class LineEditor
         }
     }
 
-    private static string? ReadLineRaw(string prompt, ReplHistory history)
+    private static string? ReadLineRaw(string prompt, ReplHistory history, IAnsiConsole console)
     {
         var buffer = new StringBuilder();
         int pos = 0;
@@ -58,10 +60,10 @@ public static class LineEditor
             historyIndex = next;
             string text = historyIndex == history.Entries.Count ? stash : history.Entries[historyIndex];
             pos = Replace(buffer, text);
-            Render(prompt, buffer, pos);
+            Render(console, prompt, buffer, pos);
         }
 
-        Render(prompt, buffer, pos);
+        Render(console, prompt, buffer, pos);
 
         while (true)
         {
@@ -75,36 +77,36 @@ public static class LineEditor
             {
                 switch (key.Key)
                 {
-                    case ConsoleKey.A: pos = 0; Render(prompt, buffer, pos); continue;
-                    case ConsoleKey.E: pos = buffer.Length; Render(prompt, buffer, pos); continue;
-                    case ConsoleKey.B: if (pos > 0) { pos--; Render(prompt, buffer, pos); } continue;
-                    case ConsoleKey.F: if (pos < buffer.Length) { pos++; Render(prompt, buffer, pos); } continue;
+                    case ConsoleKey.A: pos = 0; Render(console, prompt, buffer, pos); continue;
+                    case ConsoleKey.E: pos = buffer.Length; Render(console, prompt, buffer, pos); continue;
+                    case ConsoleKey.B: if (pos > 0) { pos--; Render(console, prompt, buffer, pos); } continue;
+                    case ConsoleKey.F: if (pos < buffer.Length) { pos++; Render(console, prompt, buffer, pos); } continue;
                     case ConsoleKey.P: MoveHistory(-1); continue;
                     case ConsoleKey.N: MoveHistory(+1); continue;
 
                     case ConsoleKey.K: // kill to end of line
-                        if (pos < buffer.Length) { buffer.Remove(pos, buffer.Length - pos); Render(prompt, buffer, pos); }
+                        if (pos < buffer.Length) { buffer.Remove(pos, buffer.Length - pos); Render(console, prompt, buffer, pos); }
                         continue;
 
                     case ConsoleKey.U: // kill to start of line
-                        if (pos > 0) { buffer.Remove(0, pos); pos = 0; Render(prompt, buffer, pos); }
+                        if (pos > 0) { buffer.Remove(0, pos); pos = 0; Render(console, prompt, buffer, pos); }
                         continue;
 
                     case ConsoleKey.W: // kill previous word
                         {
                             int start = PrevWord(buffer, pos);
-                            if (start < pos) { buffer.Remove(start, pos - start); pos = start; Render(prompt, buffer, pos); }
+                            if (start < pos) { buffer.Remove(start, pos - start); pos = start; Render(console, prompt, buffer, pos); }
                             continue;
                         }
 
                     case ConsoleKey.L: // clear screen, keep the line
                         Console.Write($"{Esc}[2J{Esc}[H");
-                        Render(prompt, buffer, pos);
+                        Render(console, prompt, buffer, pos);
                         continue;
 
                     case ConsoleKey.D: // EOF on empty line, else delete-forward
                         if (buffer.Length == 0) { Console.WriteLine(); return null; }
-                        if (pos < buffer.Length) { buffer.Remove(pos, 1); Render(prompt, buffer, pos); }
+                        if (pos < buffer.Length) { buffer.Remove(pos, 1); Render(console, prompt, buffer, pos); }
                         continue;
 
                     case ConsoleKey.C:
@@ -112,14 +114,14 @@ public static class LineEditor
                         return string.Empty; // abandon the current line, keep the session
 
                     case ConsoleKey.H: // Ctrl+H == backspace on many terminals
-                        if (pos > 0) { buffer.Remove(pos - 1, 1); pos--; Render(prompt, buffer, pos); }
+                        if (pos > 0) { buffer.Remove(pos - 1, 1); pos--; Render(console, prompt, buffer, pos); }
                         continue;
                 }
             }
 
             // Alt+B / Alt+F: move by word.
-            if (alt && key.Key == ConsoleKey.B) { pos = PrevWord(buffer, pos); Render(prompt, buffer, pos); continue; }
-            if (alt && key.Key == ConsoleKey.F) { pos = NextWord(buffer, pos); Render(prompt, buffer, pos); continue; }
+            if (alt && key.Key == ConsoleKey.B) { pos = PrevWord(buffer, pos); Render(console, prompt, buffer, pos); continue; }
+            if (alt && key.Key == ConsoleKey.F) { pos = NextWord(buffer, pos); Render(console, prompt, buffer, pos); continue; }
 
             switch (key.Key)
             {
@@ -132,7 +134,7 @@ public static class LineEditor
                     {
                         buffer.Remove(pos - 1, 1);
                         pos--;
-                        Render(prompt, buffer, pos);
+                        Render(console, prompt, buffer, pos);
                     }
                     break;
 
@@ -140,24 +142,24 @@ public static class LineEditor
                     if (pos < buffer.Length)
                     {
                         buffer.Remove(pos, 1);
-                        Render(prompt, buffer, pos);
+                        Render(console, prompt, buffer, pos);
                     }
                     break;
 
                 case ConsoleKey.LeftArrow:
-                    if (pos > 0) { pos--; Render(prompt, buffer, pos); }
+                    if (pos > 0) { pos--; Render(console, prompt, buffer, pos); }
                     break;
 
                 case ConsoleKey.RightArrow:
-                    if (pos < buffer.Length) { pos++; Render(prompt, buffer, pos); }
+                    if (pos < buffer.Length) { pos++; Render(console, prompt, buffer, pos); }
                     break;
 
                 case ConsoleKey.Home:
-                    pos = 0; Render(prompt, buffer, pos);
+                    pos = 0; Render(console, prompt, buffer, pos);
                     break;
 
                 case ConsoleKey.End:
-                    pos = buffer.Length; Render(prompt, buffer, pos);
+                    pos = buffer.Length; Render(console, prompt, buffer, pos);
                     break;
 
                 case ConsoleKey.UpArrow:
@@ -173,7 +175,7 @@ public static class LineEditor
                     {
                         buffer.Insert(pos, key.KeyChar);
                         pos++;
-                        Render(prompt, buffer, pos);
+                        Render(console, prompt, buffer, pos);
                     }
                     break;
             }
@@ -206,10 +208,10 @@ public static class LineEditor
     }
 
     /// <summary>Repaints the current line and positions the cursor (ANSI).</summary>
-    private static void Render(string prompt, StringBuilder buffer, int pos)
+    private static void Render(IAnsiConsole console, string prompt, StringBuilder buffer, int pos)
     {
         Console.Write($"{Esc}[2K\r");
-        Console.Write(prompt);
+        console.Markup($"[{Theme.Focus}]{Markup.Escape(prompt)}[/]");
         Console.Write(buffer.ToString());
 
         Console.Write("\r");

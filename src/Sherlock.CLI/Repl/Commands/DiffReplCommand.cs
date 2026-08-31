@@ -28,7 +28,7 @@ public sealed class DiffReplCommand : IReplCommand
         SnapshotEntry targetSnap = context.ResolveSnapshot(args[1]);
         if (baseSnap.Path == targetSnap.Path)
         {
-            context.Console.MarkupLine("[yellow]Base and target are the same snapshot.[/]");
+            context.Console.MarkupLine("[#FFAF00]Base and target are the same snapshot.[/]");
             return;
         }
 
@@ -57,7 +57,7 @@ public sealed class DiffReplCommand : IReplCommand
 
         if (rows.Count == 0)
         {
-            context.Console.MarkupLineInterpolated($"[green]No differences[/] between {baseSnap.Id} and {targetSnap.Id}.");
+            context.Console.MarkupLineInterpolated($"[#AFFF00]No differences[/] between {baseSnap.Id} and {targetSnap.Id}.");
             return;
         }
 
@@ -65,7 +65,7 @@ public sealed class DiffReplCommand : IReplCommand
             rows.Where(r => r.DBytes > 0).OrderByDescending(r => r.DBytes).ToList();
 
         context.Console.MarkupLineInterpolated(
-            $"[grey]diff[/] [bold]{baseSnap.Id}[/] [grey]→[/] [bold]{targetSnap.Id}[/]  [grey](growth = leak candidates)[/]");
+            $"[#808791]diff[/] [bold]{baseSnap.Id}[/] [#808791]→[/] [bold]{targetSnap.Id}[/]  [#808791](growth = leak candidates)[/]");
 
         var table = Theme.Table(expand: true);
         table.AddColumn(new TableColumn("[bold]Δ bytes[/]").RightAligned());
@@ -75,9 +75,9 @@ public sealed class DiffReplCommand : IReplCommand
         foreach ((string type, long dCount, long dBytes, bool isNew) in grew.Take(limit))
         {
             table.AddRow(
-                $"[red]+{ByteSize.Format(dBytes)}[/]",
+                $"[#AFFF00]+{ByteSize.Format(dBytes)}[/]",
                 $"+{Counts.Format(dCount)}",
-                $"[aqua]{Markup.Escape(TypeNames.Short(type))}[/]{(isNew ? " [yellow](new)[/]" : "")}");
+                $"[#00D7FF]{Markup.Escape(TypeNames.Short(type))}[/]{(isNew ? " [#AFFF00](new)[/]" : "")}");
         }
 
         context.Console.Write(table);
@@ -86,7 +86,7 @@ public sealed class DiffReplCommand : IReplCommand
         long grewBytes = grew.Sum(r => r.DBytes);
         int shrank = rows.Count(r => r.DBytes < 0);
         context.Console.MarkupLineInterpolated(
-            $"[grey]{grew.Count} types grew ([/][red]+{ByteSize.Format(grewBytes)}[/][grey]), {shrank} shrank. Net {(netBytes >= 0 ? "+" : "-")}[/][bold]{ByteSize.Format(Math.Abs(netBytes))}[/][grey].[/]");
+            $"[#808791]{grew.Count} types grew ([/][#AFFF00]+{ByteSize.Format(grewBytes)}[/][#808791]), {shrank} shrank. Net {(netBytes >= 0 ? "+" : "-")}[/][bold]{ByteSize.Format(Math.Abs(netBytes))}[/][#808791].[/]");
     }
 
     private static Dictionary<string, HeapTypeStat> Index(IReadOnlyList<HeapTypeStat> stats) =>

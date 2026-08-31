@@ -1,3 +1,4 @@
+using Sherlock.CLI.Rendering;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -23,10 +24,10 @@ public sealed class RmReplCommand : IReplCommand
 
         if (!context.Workspace.Store.Remove(id))
         {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] no snapshot or session '{id}'.");
+            Output.Error(context.Console, $"No snapshot or workspace '{id}'.");
             return;
         }
 
-        context.Console.MarkupLineInterpolated($"[grey]removed[/] {id}");
+        Output.Success(context.Console, $"Removed [bold]{id}[/]");
     }
 }

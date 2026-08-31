@@ -1,4 +1,5 @@
 using System.IO;
+using Sherlock.CLI.Rendering;
 using Sherlock.Core.Store;
 using Spectre.Console;
 
@@ -18,7 +19,7 @@ public sealed class ImportReplCommand : IReplCommand
         string path = args[0];
         if (!File.Exists(path))
         {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] file not found: {path}");
+            Output.Error(context.Console, $"File not found: {path}");
             return;
         }
 
@@ -31,6 +32,6 @@ public sealed class ImportReplCommand : IReplCommand
             label: label);
 
         context.Workspace.Load(session, entry);
-        context.Console.MarkupLineInterpolated($"[green]imported & loaded[/] {entry.Id} [grey]({Path.GetFileName(entry.Path)})[/]");
+        Output.Success(context.Console, $"Imported and loaded [bold]{entry.Id}[/] [#808791]({Path.GetFileName(entry.Path)})[/]");
     }
 }

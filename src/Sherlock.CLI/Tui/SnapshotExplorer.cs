@@ -35,6 +35,7 @@ public static class SnapshotExplorer
 {
     public static async Task<int> Run()
     {
+        Sherlock.CLI.Rendering.Theme.ApplyCellar();
         var store = SnapshotStore.Default();
 
         var entries = store.Sessions
@@ -52,11 +53,7 @@ public static class SnapshotExplorer
         var nav = new Navigator { BackKey = Key.Backspace };
         Snapshot? current = null;
 
-        Color[] palette =
-        [
-            Color.Hex("#6a9fb5"), Color.Hex("#90a959"), Color.Hex("#f4bf75"),
-            Color.Hex("#aa759f"), Color.Hex("#d28445"), Color.Hex("#75b5aa"),
-        ];
+        Color[] palette = Sherlock.CLI.Rendering.Theme.ChartColors();
 
         // The one router: a link payload (or an Enter on a row) says where to go; we nest a focused page.
         void Follow(Snapshot snap, object payload)
@@ -268,7 +265,7 @@ public static class SnapshotExplorer
             tree.Columns.Add(new TreeColumn<DominatorNode>("%", 6, n =>
             {
                 double p = 100.0 * (long)n.Value.RetainedSize / total;
-                Color c = p >= 50 ? Theme.Current.Error : p >= 10 ? Theme.Current.Warning : Theme.Current.Muted;
+                Color c = p >= 10 ? Theme.Current.Success : Theme.Current.Muted;
                 return new StyledText(p.ToString("0.0", CultureInfo.InvariantCulture), new Style(c, Color.Default));
             }));
             tree.Columns.Add(new TreeColumn<DominatorNode>("Own", 10, n => new StyledText(ByteFormat.Human((long)n.Value.OwnSize), Theme.Current.MutedStyle)));
@@ -379,14 +376,14 @@ public static class SnapshotExplorer
                 ShowGuides = true,
                 Striped = true,
             };
-            tree.Columns.Add(new TreeColumn<AllocationTreeNode>("Allocated", 11, n => new StyledText(ByteFormat.Human(n.Value.AllocBytes), new Style(Theme.Current.Warning, Color.Default))));
+            tree.Columns.Add(new TreeColumn<AllocationTreeNode>("Allocated", 11, n => new StyledText(ByteFormat.Human(n.Value.AllocBytes), new Style(Theme.Current.Success, Color.Default))));
             tree.Columns.Add(new TreeColumn<AllocationTreeNode>("%", 6, n =>
             {
                 double p = 100.0 * n.Value.AllocBytes / denom;
-                Color c = p >= 50 ? Theme.Current.Error : p >= 10 ? Theme.Current.Warning : Theme.Current.Muted;
+                Color c = p >= 10 ? Theme.Current.Success : Theme.Current.Muted;
                 return new StyledText(p.ToString("0.0", CultureInfo.InvariantCulture), new Style(c, Color.Default));
             }));
-            tree.Columns.Add(new TreeColumn<AllocationTreeNode>("Survived", 11, n => new StyledText(ByteFormat.Human(n.Value.SurvivedBytes), new Style(Theme.Current.Success, Color.Default))));
+            tree.Columns.Add(new TreeColumn<AllocationTreeNode>("Survived", 11, n => new StyledText(ByteFormat.Human(n.Value.SurvivedBytes), new Style(Theme.Current.Foreground, Color.Default))));
             tree.Columns.Add(new TreeColumn<AllocationTreeNode>("Count", 10, n => new StyledText(n.Value.AllocCount.ToString("N0", CultureInfo.InvariantCulture), Theme.Current.MutedStyle)));
 
             foreach (AllocationTreeNode node in roots)
@@ -414,7 +411,7 @@ public static class SnapshotExplorer
                 {
                     long bytes = (long)sel.Weight;
                     st = st.Append("      ").Append(sel.Label).Fg(Theme.Current.Foreground)
-                        .Append($"   {ByteFormat.Human(bytes)}").Fg(Theme.Current.Warning)
+                        .Append($"   {ByteFormat.Human(bytes)}").Fg(Theme.Current.Success)
                         .Append($"   {100.0 * bytes / Math.Max(1, total):0.0}% of total").Fg(Theme.Current.Muted);
                     if (sel.Value.AllocCount > 0)
                     {
@@ -553,8 +550,8 @@ public static class SnapshotExplorer
             long count = through.Sites.Sum(s => s.AllocCount);
             int types = through.ByType().Count;
             StyledText summary = StyledText.Of(Short(method)).Bold().Fg(Theme.Current.Accent)
-                .Append($"   {ByteFormat.Human(inclusive)} allocated").Fg(Theme.Current.Warning)
-                .Append($"   {ByteFormat.Human(survived)} survived").Fg(Theme.Current.Success)
+                .Append($"   {ByteFormat.Human(inclusive)} allocated").Fg(Theme.Current.Success)
+                .Append($"   {ByteFormat.Human(survived)} survived").Fg(Theme.Current.Foreground)
                 .Append($"   {count:N0} objects").Fg(Theme.Current.Muted)
                 .Append($"   ·   {through.Sites.Count:N0} call paths").Fg(Theme.Current.Muted);
             if (through.HasTypes)

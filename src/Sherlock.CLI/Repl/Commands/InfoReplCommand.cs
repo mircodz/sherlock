@@ -17,17 +17,17 @@ public sealed class InfoReplCommand : IReplCommand
         DumpInfo info = context.Snapshot.Info;
 
         var grid = new Grid().AddColumn().AddColumn();
-        grid.AddRow("[grey]Dump[/]", Markup.Escape(Path.GetFileName(info.DumpPath)));
-        grid.AddRow("[grey]File size[/]", $"[bold green]{ByteSize.Format(info.FileSizeBytes)}[/]");
-        grid.AddRow("[grey]Runtime[/]", Markup.Escape($"{info.ClrFlavor} {info.ClrVersion}"));
-        grid.AddRow("[grey]Architecture[/]", Markup.Escape(info.Architecture));
-        grid.AddRow("[grey]Platform[/]", Markup.Escape(info.Platform));
-        grid.AddRow("[grey]Process id[/]", info.ProcessId?.ToString() ?? "[grey50]n/a[/]");
-        grid.AddRow("[grey]GC mode[/]", info.ServerGc ? "Server" : "Workstation");
-        grid.AddRow("[grey]Heaps[/]", info.HeapCount.ToString());
-        grid.AddRow("[grey]Managed heap[/]", $"[bold green]{ByteSize.Format((long)info.TotalHeapBytes)}[/]");
-        grid.AddRow("[grey]Threads[/]", info.ThreadCount.ToString());
-        grid.AddRow("[grey]Modules[/]", info.ModuleCount.ToString());
+        grid.AddRow("[#808791]Dump[/]", Markup.Escape(Path.GetFileName(info.DumpPath)));
+        grid.AddRow("[#808791]File size[/]", $"[bold #F2F2F2]{ByteSize.Format(info.FileSizeBytes)}[/]");
+        grid.AddRow("[#808791]Runtime[/]", Markup.Escape($"{info.ClrFlavor} {info.ClrVersion}"));
+        grid.AddRow("[#808791]Architecture[/]", Markup.Escape(info.Architecture));
+        grid.AddRow("[#808791]Platform[/]", Markup.Escape(info.Platform));
+        grid.AddRow("[#808791]Process id[/]", info.ProcessId?.ToString() ?? "[#808791]n/a[/]");
+        grid.AddRow("[#808791]GC mode[/]", info.ServerGc ? "Server" : "Workstation");
+        grid.AddRow("[#808791]Heaps[/]", info.HeapCount.ToString());
+        grid.AddRow("[#808791]Managed heap[/]", $"[bold #F2F2F2]{ByteSize.Format((long)info.TotalHeapBytes)}[/]");
+        grid.AddRow("[#808791]Threads[/]", info.ThreadCount.ToString());
+        grid.AddRow("[#808791]Modules[/]", info.ModuleCount.ToString());
 
         context.Console.MarkupLine("[bold]dump info[/]");
         context.Console.Write(grid);

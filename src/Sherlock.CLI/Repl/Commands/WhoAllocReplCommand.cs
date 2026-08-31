@@ -21,7 +21,7 @@ public sealed class WhoAllocReplCommand : IReplCommand
         if (!context.Snapshot.HasCorrelation)
         {
             context.Console.MarkupLine(
-                "[yellow]This snapshot has no allocation provenance.[/] Capture one with " +
+                "[#FFAF00]This snapshot has no allocation provenance.[/] Capture one with " +
                 "[bold]run --correlate -- <app>[/] then [bold]snapshot[/].");
             return;
         }
@@ -29,26 +29,26 @@ public sealed class WhoAllocReplCommand : IReplCommand
         // Heap type + size, if the address resolves to a live object.
         ClrObject obj = context.Snapshot.Runtime.Heap.GetObject(address);
         string typeLine = obj.Type is { } t
-            ? $"[bold]{Markup.Escape(t.Name ?? "<unknown>")}[/] [grey]({ByteSize.Format((long)obj.Size)})[/]"
-            : "[grey]<not a live object in this dump>[/]";
-        context.Console.MarkupLine($"[grey]0x{address:x}[/]  {typeLine}");
+            ? $"[bold]{Markup.Escape(t.Name ?? "<unknown>")}[/] [#808791]({ByteSize.Format((long)obj.Size)})[/]"
+            : "[#808791]<not a live object in this dump>[/]";
+        context.Console.MarkupLine($"[#FFD75F]0x{address:x}[/]  {typeLine}");
 
         string? folded = context.Snapshot.WhoAllocated(address);
         if (folded is null)
         {
             context.Console.MarkupLine(
-                "[yellow]No allocation record.[/] [grey]Untracked — allocated before profiling started, " +
+                "[#FFAF00]No allocation record.[/] [#808791]Untracked — allocated before profiling started, " +
                 "sampled out, or freed & the slot reused since capture.[/]");
             return;
         }
 
         // Folded stack is root->leaf; show backtrace-style, allocation site first.
         string[] frames = folded.Split(';');
-        context.Console.MarkupLine("[grey]allocated at:[/]");
+        context.Console.MarkupLine("[#808791]allocated at:[/]");
         for (int i = 0; i < frames.Length; i++)
         {
             string frame = frames[frames.Length - 1 - i]; // leaf->root
-            context.Console.MarkupLineInterpolated($"  [aqua]#{i}[/] {frame}");
+            context.Console.MarkupLineInterpolated($"  [#00D7FF]#{i}[/] {frame}");
         }
     }
 }

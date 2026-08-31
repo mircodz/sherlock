@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using Sherlock.CLI.Rendering;
 using Sherlock.Core.Collection;
 using Spectre.Console;
 
@@ -20,7 +21,7 @@ public sealed class LogsReplCommand : IReplCommand
         IReadOnlyList<RunTarget> targets = context.Workspace.Targets;
         if (targets.Count == 0)
         {
-            context.Console.MarkupLine("[grey]No run targets. Launch one with[/] run <path>[grey].[/]");
+            context.Console.MarkupLine("[#808791]No run targets. Launch one with[/] run <path>[#808791].[/]");
             return;
         }
 
@@ -48,18 +49,18 @@ public sealed class LogsReplCommand : IReplCommand
 
         if (target is null)
         {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] no run target with pid {pid}.");
+            Output.Error(context.Console, $"No run target with pid {pid}.");
             return;
         }
 
         IReadOnlyList<string> lines = target.ReadLog(tail);
         if (lines.Count == 0)
         {
-            context.Console.MarkupLine("[grey]<no output captured yet>[/]");
+            context.Console.MarkupLine("[#808791]<no output captured yet>[/]");
             return;
         }
 
-        context.Console.MarkupLineInterpolated($"[grey]── {target.Name} (pid {target.Pid}), last {lines.Count} lines ──[/]");
+        context.Console.MarkupLineInterpolated($"[#808791]── {target.Name} (pid {target.Pid}), last {lines.Count} lines ──[/]");
         foreach (string line in lines)
         {
             context.Console.WriteLine(line);

@@ -21,7 +21,7 @@ public sealed class KillReplCommand : IReplCommand
         IReadOnlyList<RunTarget> targets = context.Workspace.Targets;
         if (targets.Count == 0)
         {
-            context.Console.MarkupLine("[grey]No run targets.[/]");
+            Output.Info(context.Console, $"No run targets.");
             return;
         }
 
@@ -33,13 +33,13 @@ public sealed class KillReplCommand : IReplCommand
         {
             if (!int.TryParse(pidArg, out int pid))
             {
-                context.Console.MarkupLineInterpolated($"[red]error:[/] '{pidArg}' is not a pid.");
+                Output.Error(context.Console, $"'{pidArg}' is not a pid.");
                 return;
             }
             target = targets.FirstOrDefault(t => t.Pid == pid);
             if (target is null)
             {
-                context.Console.MarkupLineInterpolated($"[red]error:[/] no run target with pid {pid}.");
+                Output.Error(context.Console, $"No run target with pid {pid}.");
                 return;
             }
         }
@@ -57,16 +57,15 @@ public sealed class KillReplCommand : IReplCommand
                     $"Snapshotting pid {target.Pid} before kill…",
                     _ => context.Workspace.Capture(target.Pid, load: false).Entry);
                 string contents = entry.HasAllocations ? "heap + allocations" : "heap only";
-                context.Console.MarkupLineInterpolated(
-                    $"[green]saved[/] [bold]{entry.Id}[/] [grey]({contents}, {ByteSize.Format(entry.TotalSizeBytes)}) — load {entry.Id} to analyze[/]");
+                Output.Success(context.Console, $"Saved [bold]{entry.Id}[/] [#808791]({contents} · {ByteSize.Format(entry.TotalSizeBytes)})[/]");
             }
             catch (DumpAnalysisException ex)
             {
-                context.Console.MarkupLineInterpolated($"[yellow]could not snapshot ({ex.Message}); killing anyway[/]");
+                Output.Warning(context.Console, $"Could not snapshot: {ex.Message}. Killing anyway.");
             }
         }
 
         target.Kill();
-        context.Console.MarkupLineInterpolated($"[grey]killed[/] {target.Name} [grey](pid {target.Pid})[/]");
+        Output.Success(context.Console, $"Killed [#00D7FF]{target.Name}[/] · pid {target.Pid}");
     }
 }

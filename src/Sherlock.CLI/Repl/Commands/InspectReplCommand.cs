@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Sherlock.CLI.Rendering;
 using Sherlock.Core.Diagnostics;
 using Spectre.Console;
 
@@ -19,7 +20,7 @@ public sealed class InspectReplCommand : IReplCommand
 
         if (findings.Count == 0)
         {
-            context.Console.MarkupLine("[green]Clean bill of health.[/] [grey]No obvious issues by the current heuristics.[/]");
+            context.Console.MarkupLine("[#AFFF00]Clean bill of health.[/] [#808791]No obvious issues by the current heuristics.[/]");
             return;
         }
 
@@ -27,16 +28,16 @@ public sealed class InspectReplCommand : IReplCommand
         {
             string colour = finding.Severity switch
             {
-                FindingSeverity.High => "red",
-                FindingSeverity.Warning => "yellow",
-                _ => "aqua",
+                FindingSeverity.High => Theme.Error,
+                FindingSeverity.Warning => Theme.Attention,
+                _ => Theme.Identity,
             };
 
             context.Console.MarkupLineInterpolated($"[{colour}]●[/] {finding.Title}");
-            context.Console.MarkupLineInterpolated($"  [grey]{finding.Detail}[/]");
+            context.Console.MarkupLineInterpolated($"  [#808791]{finding.Detail}[/]");
             if (finding.NextCommand is { } next)
             {
-                context.Console.MarkupLineInterpolated($"  [grey]→[/] [bold]{next}[/]");
+                context.Console.MarkupLineInterpolated($"  [#808791]→[/] [bold]{next}[/]");
             }
         }
     }

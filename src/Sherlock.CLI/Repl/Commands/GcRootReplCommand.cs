@@ -16,27 +16,27 @@ public sealed class GcRootReplCommand : IReplCommand
     {
         ulong address = Args.Address(args, 0, Usage);
 
-        context.Console.MarkupLineInterpolated($"[grey]Searching for roots of[/] 0x{address:x12}[grey]…[/]");
+        context.Console.MarkupLineInterpolated($"[#808791]Searching for roots of[/] [#FFD75F]0x{address:x12}[/][#808791]…[/]");
 
         IReadOnlyList<GcRootPath> paths = context.Console.Status()
             .Start("Tracing the heap graph…", _ => context.Snapshot.Roots(address));
 
         if (paths.Count == 0)
         {
-            context.Console.MarkupLine("[yellow]No root found.[/] The object may be unrooted (eligible for collection) or the address may be invalid.");
+            context.Console.MarkupLine("[#FFAF00]No root found.[/] The object may be unrooted (eligible for collection) or the address may be invalid.");
             return;
         }
 
-        context.Console.MarkupLineInterpolated($"[grey]{Counts.Format(paths.Count)} root{(paths.Count == 1 ? "" : "s")} found[/]");
+        context.Console.MarkupLineInterpolated($"[#808791]{Counts.Format(paths.Count)} root{(paths.Count == 1 ? "" : "s")} found[/]");
         foreach (GcRootPath path in paths)
         {
-            string flags = path.Root.IsPinned ? " [yellow]pinned[/]" : "";
-            context.Console.MarkupLineInterpolated($"[bold]{path.Root.Kind}[/] [grey]at[/] 0x{path.Root.Address:x12}{flags}");
+            string flags = path.Root.IsPinned ? " [#FFAF00]pinned[/]" : "";
+            context.Console.MarkupLineInterpolated($"[bold]{path.Root.Kind}[/] [#808791]at[/] [#FFD75F]0x{path.Root.Address:x12}[/]{flags}");
             for (int i = 0; i < path.Path.Count; i++)
             {
                 GcRootNode node = path.Path[i];
                 string indent = new string(' ', i * 2);
-                context.Console.MarkupLineInterpolated($"{indent}[grey]->[/] 0x{node.Address:x12} [aqua]{TypeNames.Short(node.TypeName)}[/]");
+                context.Console.MarkupLineInterpolated($"{indent}[#808791]->[/] [#FFD75F]0x{node.Address:x12}[/] [#00D7FF]{TypeNames.Short(node.TypeName)}[/]");
             }
         }
     }

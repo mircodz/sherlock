@@ -26,7 +26,7 @@ public sealed class HistoryReplCommand(ReplHistory history) : IReplCommand
         int start = Math.Max(0, entries.Count - count);
         for (int i = start; i < entries.Count; i++)
         {
-            context.Console.MarkupLineInterpolated($"  [grey]{i + 1,4}[/]  {entries[i]}");
+            context.Console.MarkupLineInterpolated($"  [#808791]{i + 1,4}[/]  {entries[i]}");
         }
     }
 }

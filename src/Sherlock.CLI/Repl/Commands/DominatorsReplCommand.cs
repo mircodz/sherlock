@@ -37,16 +37,16 @@ public sealed class DominatorsReplCommand : IReplCommand
         {
             double pct = total == 0 ? 0 : 100.0 * node.RetainedSize / total;
             table.AddRow(
-                $"[grey]0x{node.Address:x}[/]",
-                $"[bold green]{ByteSize.Format((long)node.RetainedSize)}[/]",
+                $"[#FFD75F]0x{node.Address:x}[/]",
+                $"[bold #AFFF00]{ByteSize.Format((long)node.RetainedSize)}[/]",
                 Counts.Percent(pct),
                 ByteSize.Format((long)node.OwnSize),
-                $"[aqua]{Markup.Escape(TypeNames.Short(node.TypeName))}[/]");
+                $"[#00D7FF]{Markup.Escape(TypeNames.Short(node.TypeName))}[/]");
         }
 
         context.Console.Write(table);
         context.Console.MarkupLine(
-            $"[grey]{Counts.Format(tree.ObjectCount)} reachable objects,[/] [bold green]{ByteSize.Format((long)total)}[/] [grey]retained from roots. " +
+            $"[#808791]{Counts.Format(tree.ObjectCount)} reachable objects,[/] [bold #AFFF00]{ByteSize.Format((long)total)}[/] [#808791]retained from roots. " +
             $"Drill in with[/] retained <address>.");
     }
 }

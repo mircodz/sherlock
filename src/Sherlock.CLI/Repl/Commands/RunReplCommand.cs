@@ -1,3 +1,4 @@
+using Sherlock.CLI.Rendering;
 using Sherlock.Core.Collection;
 using Sherlock.Core.Store;
 using Spectre.Console;
@@ -28,21 +29,19 @@ public sealed class RunReplCommand : IReplCommand
         Session session = launched.Session;
         if (options.SnapshotOn is not null)
         {
-            context.Console.MarkupLineInterpolated(
-                $"[grey]snapshot-on[/] {options.SnapshotOn}[grey] armed — a heap snapshot is captured into[/] [bold]{session.Id}[/][grey] when it fires.[/]");
+            Output.Info(context.Console, $"Snapshot trigger [bold]{options.SnapshotOn}[/] armed for [bold]{session.Id}[/].");
         }
         else if (options.Correlate)
         {
-            context.Console.MarkupLine(
-                "[grey]correlation tracking on;[/] snapshot [grey]it, then[/] whoalloc <address> [grey]to see where an object was allocated.[/]");
+            Output.Info(context.Console, $"Correlation enabled · use [bold]snapshot[/], then [bold]whoalloc <address>[/].");
         }
         else if (options.Profile)
         {
-            context.Console.MarkupLineInterpolated($"[grey]allocation profiler attached; profile + log under[/] {session.Dir}[grey].[/]");
+            Output.Info(context.Console, $"Allocation profiler attached · artifacts in {session.Dir}.");
         }
         else
         {
-            context.Console.MarkupLine("[grey]Use[/] ps[grey],[/] logs[grey],[/] snapshot[grey].[/]");
+            Output.Info(context.Console, $"Use [bold]ps[/], [bold]logs[/], or [bold]snapshot[/].");
         }
     }
 }

@@ -23,7 +23,7 @@ public sealed class SleepReplCommand : IReplCommand
             throw new DumpAnalysisException($"'{args[0]}' is not a valid duration in seconds.");
         }
 
-        context.Console.MarkupLineInterpolated($"[grey]sleeping {seconds:0.##}s…[/]");
+        context.Console.MarkupLineInterpolated($"[#808791]sleeping {seconds:0.##}s…[/]");
         Thread.Sleep((int)(seconds * 1000));
     }
 }

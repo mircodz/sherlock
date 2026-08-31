@@ -45,14 +45,14 @@ public sealed class SnapshotReplCommand : IReplCommand
             {
                 if (live.Count == 0)
                 {
-                    context.Console.MarkupLine("[red]error:[/] no live .NET target. Launch one with [bold]run[/], or give a pid.");
+                    Output.Error(context.Console, $"No live .NET target. Launch one with [bold]run[/], or provide a pid.");
                 }
                 else
                 {
-                    context.Console.MarkupLine("[yellow]Multiple live .NET processes[/] — pick one with [bold]snapshot <pid>[/]:");
+                    Output.Warning(context.Console, $"Multiple live .NET processes; use [bold]snapshot <pid>[/]:");
                     foreach (RunProcess p in live)
                     {
-                        context.Console.MarkupLineInterpolated($"  {p.Pid}  {(p.IsRoot ? "root" : "child")}  {p.Name}");
+                        context.Console.MarkupLineInterpolated($"    [#FFD75F]{p.Pid}[/]  [#00D7FF]{p.Name}[/]  [#808791]{(p.IsRoot ? "root" : "child")}[/]");
                     }
                 }
                 return;
@@ -84,7 +84,7 @@ public sealed class SnapshotReplCommand : IReplCommand
                 string error = matches.Count == 0
                     ? $"no .NET process matches '{args[i + 1]}'."
                     : $"'{args[i + 1]}' is ambiguous ({matches.Count} matches); use --pid.";
-                console.MarkupLineInterpolated($"[red]error:[/] {error}");
+                Output.Error(console, $"{error}");
                 return false;
             }
             if (!args[i].StartsWith('-') && int.TryParse(args[i], out pid))
@@ -93,7 +93,7 @@ public sealed class SnapshotReplCommand : IReplCommand
             }
         }
 
-        console.MarkupLine("[red]error:[/] specify a pid, [bold]--pid N[/], or [bold]--name X[/].");
+        Output.Error(console, $"Specify a pid, [bold]--pid N[/], or [bold]--name X[/].");
         return false;
     }
 
@@ -106,7 +106,7 @@ public sealed class SnapshotReplCommand : IReplCommand
         }
         catch (DumpAnalysisException ex)
         {
-            context.Console.MarkupLineInterpolated($"[red]error:[/] {ex.Message}");
+            Output.Error(context.Console, $"{ex.Message}");
             return;
         }
 
@@ -116,19 +116,18 @@ public sealed class SnapshotReplCommand : IReplCommand
         string sizes = result.Entry.HasAllocations
             ? $"{ByteSize.Format(result.Entry.SizeBytes)} heap + {ByteSize.Format(result.Entry.ProvenanceSizeBytes)} allocations"
             : ByteSize.Format(result.Entry.SizeBytes);
-        context.Console.MarkupLineInterpolated(
-            $"[green]saved & loaded[/] [bold]{result.Entry.Id}[/] [grey]({contents}, {sizes})[/]");
+        Output.Success(context.Console, $"Saved and loaded [bold]{result.Entry.Id}[/] [#808791]({contents} · {sizes})[/]");
 
         switch (result.Provenance)
         {
             case ProvenanceState.Drifted:
-                context.Console.MarkupLine("[yellow]⚠ a GC ran during capture[/] [grey]— allocation totals are available, but per-object provenance was disabled.[/]");
+                Output.Warning(context.Console, $"A GC ran during capture; allocation totals remain available, but object correlation was disabled.");
                 break;
             case ProvenanceState.Exact:
-                context.Console.MarkupLine("[grey]Allocation provenance captured (exact); use[/] whoalloc <address> [grey]to see where an object was allocated.[/]");
+                Output.Info(context.Console, $"Allocation correlation is exact · use [bold]whoalloc <address>[/].");
                 break;
             case ProvenanceState.Unverified:
-                context.Console.MarkupLine("[yellow]⚠ correlation could not be verified[/] [grey]— allocation totals are available, but per-object provenance was disabled.[/]");
+                Output.Warning(context.Console, $"Correlation could not be verified; allocation totals remain available, but object correlation was disabled.");
                 break;
         }
     }
