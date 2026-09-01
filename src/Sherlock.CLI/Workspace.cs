@@ -85,23 +85,47 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
         List<TriggeredCaptureResult>? captured = null;
         foreach (RunTarget target in _targets)
         {
-            IReadOnlyList<(int Pid, string Name)> signals = target.PollTriggers();
+            IReadOnlyList<RunTrigger> signals = target.PollTriggers();
             if (signals.Count == 0 || FindSession(target) is null)
             {
                 continue;
             }
 
-            foreach ((int firingPid, string probe) in signals)
+            foreach (RunTrigger signal in signals)
             {
+                SnapshotEntry? entry = null;
+                string? error = null;
                 try
                 {
-                    SnapshotEntry entry = Capture(firingPid, load: false, reason: probe).Entry;
-                    (captured ??= []).Add(new TriggeredCaptureResult(probe, entry, null));
+                    entry = Capture(signal.Pid, load: false, reason: signal.Name).Entry;
                 }
                 catch (Exception ex)
                 {
-                    (captured ??= []).Add(new TriggeredCaptureResult(probe, null, ex.Message));
+                    error = ex.Message;
                 }
+                finally
+                {
+                    if (signal.ExitToken is { } token)
+                    {
+                        try
+                        {
+                            (bool released, string detail) =
+                                target.ReleaseExitCapture(signal.Pid, token, TimeSpan.FromSeconds(5));
+                            if (!released)
+                            {
+                                string releaseError = $"Could not release the exit probe: {detail}.";
+                                error = error is null ? releaseError : $"{error} {releaseError}";
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            string releaseError = $"Could not release the exit probe: {ex.Message}";
+                            error = error is null ? releaseError : $"{error} {releaseError}";
+                        }
+                    }
+                }
+                (captured ??= []).Add(
+                    new TriggeredCaptureResult(signal.Name, entry, error));
             }
         }
 
@@ -140,7 +164,7 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
             RunTarget? target = _targets.FirstOrDefault(t => !t.HasExited && Owns(t, pid));
             bool profiled = target?.AllocationPath is not null;
             bool correlationRequested = target is { HasCorrelation: true };
-            bool coherentCapture = correlationRequested && target!.Options.ExperimentalGcBarrier;
+            bool coherentCapture = correlationRequested && target!.Options.UseGcBarrier;
 
             string? provenance = null;
             string? dumpPath = null;

@@ -23,9 +23,11 @@ internal sealed class ProfilerControl : IDisposable
     internal const string BeginCoherentCapture = "begin-coherent-capture";
     internal const string CompleteCoherentCapture = "complete-coherent-capture";
     internal const string AbortCoherentCapture = "abort-coherent-capture";
+    internal const string ReleaseExitCapture = "release-exit-capture";
     internal const string SnapshotTrigger = "snapshot-trigger";
     internal const string CoherentCaptureReady = "coherent-capture-ready";
     internal const string CoherentCaptureFailed = "coherent-capture-failed";
+    internal const string ExitCaptureReady = "exit-capture-ready";
 
     private readonly Socket _listener;
     private readonly string _path;

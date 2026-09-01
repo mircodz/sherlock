@@ -18,6 +18,7 @@ class Logger;
 enum class ProbePhase : std::uint8_t {
     Enter = 1,
     Exit = 2,
+    Return = 4,
 };
 
 enum class ProbeEvents : std::uint8_t {
@@ -25,6 +26,7 @@ enum class ProbeEvents : std::uint8_t {
     Enter = 1,
     Exit = 2,
     EnterAndExit = 3,
+    Return = 4,
 };
 
 constexpr bool includes(ProbeEvents events, ProbePhase phase) {
@@ -40,6 +42,7 @@ struct ProbePlan {
     explicit operator bool() const { return cookie != 0 && events != ProbeEvents::None; }
     bool onEnter() const { return includes(events, ProbePhase::Enter); }
     bool onExit() const { return includes(events, ProbePhase::Exit); }
+    bool onReturn() const { return includes(events, ProbePhase::Return); }
 };
 
 /// Thread-safe registry for resolved method probes. Map lookup happens only while rewriting IL;
@@ -102,6 +105,7 @@ private:
 
 extern "C" void Sherlock_ProbeEnter(std::intptr_t cookie);
 extern "C" void Sherlock_ProbeExit(std::intptr_t cookie);
+extern "C" void Sherlock_ProbeReturn(std::intptr_t cookie);
 
 /// Resolves method "breakpoints" and requests targeted ReJIT.
 ///
@@ -120,6 +124,11 @@ public:
     /// resolve against already-loaded modules, ReJITting matches now. Returns true if a
     /// method was armed (false = no match in a loaded module - e.g. not loaded yet).
     bool armLive(const std::string& spec, ProbeEvents events = ProbeEvents::Enter);
+    ProbePlan registerMethod(
+        ModuleID moduleId,
+        mdMethodDef token,
+        std::string display,
+        ProbeEvents events);
 
     void setHitCallback(ProbeRegistry::HitCallback callback) {
         registry_.setHitCallback(std::move(callback));

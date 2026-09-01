@@ -35,6 +35,7 @@ inline constexpr std::string_view kHeapSize = "heap-size";
 inline constexpr std::string_view kBeginCoherentCapture = "begin-coherent-capture";
 inline constexpr std::string_view kCompleteCoherentCapture = "complete-coherent-capture";
 inline constexpr std::string_view kAbortCoherentCapture = "abort-coherent-capture";
+inline constexpr std::string_view kReleaseExitCapture = "release-exit-capture";
 } // namespace commands
 
 /// Event names pushed in an EVENT frame. Mirrored on the C# side in ControlEvents.
@@ -43,6 +44,7 @@ inline constexpr std::string_view kSnapshotTrigger = "snapshot-trigger";
 
 inline constexpr std::string_view kCoherentCaptureReady = "coherent-capture-ready";
 inline constexpr std::string_view kCoherentCaptureFailed = "coherent-capture-failed";
+inline constexpr std::string_view kExitCaptureReady = "exit-capture-ready";
 } // namespace events
 
 /// Prepends the 4-byte little-endian length to a payload.
@@ -210,6 +212,62 @@ private:
 
     // Avoid a mutex on every GC when the experiment is unused.
     std::atomic<bool> active_{false};
+};
+
+/// Holds a normal entry-point return until the supervisor finishes capturing.
+class ExitCaptureLatch {
+public:
+    enum class WaitResult { Released, TimedOut };
+
+    [[nodiscard]] bool begin(std::string token) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (active_) {
+            return false;
+        }
+        token_ = std::move(token);
+        released_ = false;
+        active_ = true;
+        return true;
+    }
+
+    [[nodiscard]] WaitResult wait(std::chrono::milliseconds timeout) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        const bool released = cv_.wait_for(lock, timeout, [this] { return released_; });
+        token_.clear();
+        released_ = false;
+        active_ = false;
+        return released ? WaitResult::Released : WaitResult::TimedOut;
+    }
+
+    [[nodiscard]] bool release(const std::string& token) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!active_ || released_ || token_ != token) {
+            return false;
+        }
+        released_ = true;
+        cv_.notify_all();
+        return true;
+    }
+
+    void forceRelease() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (active_) {
+            released_ = true;
+            cv_.notify_all();
+        }
+    }
+
+    [[nodiscard]] bool active() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return active_;
+    }
+
+private:
+    mutable std::mutex mutex_;
+    std::condition_variable cv_;
+    std::string token_;
+    bool active_ = false;
+    bool released_ = false;
 };
 
 } // namespace Sherlock::control

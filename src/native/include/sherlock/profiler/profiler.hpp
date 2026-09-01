@@ -12,6 +12,7 @@
 #include "sherlock/control/channel.hpp"
 #include "sherlock/control/protocol.hpp"
 #include "sherlock/profiler/aggregator.hpp"
+#include "sherlock/profiler/entrypoint.hpp"
 #include "sherlock/profiler/probe.hpp"
 #include "sherlock/profiler/shadowstack.hpp"
 #include "sherlock/profiler/triggers.hpp"
@@ -164,6 +165,14 @@ private:
     // for an unknown kind or (live call) an unresolved method. `live` = from the REPL.
     bool armTrigger(const std::string& spec, bool live);
     void fireTrigger(const std::string& display) noexcept; // emit a snapshot-trigger event to sl
+
+    bool snapshotOnExit_ = false;
+    std::atomic<bool> exitEntryPointArmed_{false};
+    std::atomic<bool> exitCaptureFired_{false};
+    std::atomic<std::uint64_t> exitCaptureSequence_{1};
+    control::ExitCaptureLatch exitCapture_;
+    bool armExitEntryPoint(ModuleID moduleId);
+    void handleEntryPointReturn() noexcept;
 
     // ForceGC needs its own thread so the control reader remains free to release the GC callback.
     // Shutdown stops that reader before touching the thread.

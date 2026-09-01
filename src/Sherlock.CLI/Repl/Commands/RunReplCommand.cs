@@ -20,6 +20,13 @@ public sealed class RunReplCommand : IReplCommand
         {
             return;
         }
+        if (options.SnapshotOnExit)
+        {
+            Output.Error(
+                context.Console,
+                $"[bold]--snapshot-on exit[/] is available only with the top-level [bold]sl run[/] command.");
+            return;
+        }
 
         if (RunLauncher.Launch(context.Workspace, context.Console, options) is not { } launched)
         {

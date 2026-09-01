@@ -16,6 +16,8 @@ add_executable(SherlockTests
     coherent_capture.cpp
     container.cpp
     control_channel.cpp
+    entrypoint.cpp
+    exit_capture.cpp
     intervals.cpp
     probes.cpp
     profile.cpp
@@ -23,6 +25,7 @@ add_executable(SherlockTests
     ${CMAKE_SOURCE_DIR}/src/common/logger.cpp
     ${CMAKE_SOURCE_DIR}/src/control/channel.cpp
     ${CMAKE_SOURCE_DIR}/src/profiler/aggregator.cpp
+    ${CMAKE_SOURCE_DIR}/src/profiler/entrypoint.cpp
     ${CMAKE_SOURCE_DIR}/src/profiler/probe.cpp)
 target_link_libraries(SherlockTests PRIVATE GTest::gtest GTest::gtest_main)
 if(WIN32)

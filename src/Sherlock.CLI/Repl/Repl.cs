@@ -134,6 +134,10 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
             {
                 string contents = entry.HasAllocations ? "heap + allocations" : "heap only";
                 Output.Success(console, $"[bold]{capture.Probe}[/] fired · snapshot [bold]{entry.Id}[/] [#808791]({contents})[/]");
+                if (capture.Error is not null)
+                {
+                    Output.Warning(console, $"{capture.Error}");
+                }
             }
             else
             {

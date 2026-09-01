@@ -77,6 +77,7 @@ set(SOURCES
     src/common/logger.cpp
     src/profiler/profiler.cpp
     src/profiler/aggregator.cpp
+    src/profiler/entrypoint.cpp
     src/profiler/shadowstack.cpp
     src/profiler/il_writer.cpp
     src/profiler/probe.cpp

@@ -16,6 +16,7 @@ public sealed record RunProcess(int Pid, string Name, bool IsRoot, bool IsDotnet
 
 public sealed record HeapStats(long Total, long Gen0, long Gen1, long Gen2, long Loh, long Poh);
 public sealed record CoherentCaptureResult(string DumpPath, string ProvenancePath, long GcCount);
+public sealed record RunTrigger(int Pid, string Name, string? ExitToken = null);
 
 public enum ProfilerLogLevel
 {
@@ -38,6 +39,12 @@ public sealed record RunOptions
     public string? ProfilerPath { get; init; }
     public ProfilerLogLevel ProfilerLogLevel { get; init; } = ProfilerLogLevel.Warning;
     public bool NeedsProfiler => Profile || Correlate || CollectChildren || ExperimentalGcBarrier || SnapshotOn is not null || ProfilerPath is not null;
+    public bool SnapshotOnExit =>
+        SnapshotOn?.Split(
+            [';', ','],
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Any(value => value.Equals("exit", StringComparison.OrdinalIgnoreCase)) == true;
+    public bool UseGcBarrier => Correlate && (ExperimentalGcBarrier || SnapshotOnExit);
 }
 
 /// <summary>A launched process tree and its profiler connection.</summary>
@@ -56,7 +63,7 @@ public sealed partial class RunTarget : IDisposable
 
     private ProfilerControl? _control;
 
-    private readonly ConcurrentQueue<(int Pid, string Name)> _triggerHits = new();
+    private readonly ConcurrentQueue<RunTrigger> _triggerHits = new();
     private sealed record CoherentCaptureWaiter(
         int Pid,
         TaskCompletionSource<(long Gc, string? Error)> Signal);
@@ -100,6 +107,10 @@ public sealed partial class RunTarget : IDisposable
 
     private StreamWriter? _log;
     private readonly Lock _logLock = new();
+    private readonly TaskCompletionSource<bool> _stdoutDrained =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<bool> _stderrDrained =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private RunTarget() { }
 
@@ -181,9 +192,20 @@ public sealed partial class RunTarget : IDisposable
     private void StartLog()
     {
         LogPath = _captureDir is not null ? Path.Combine(_captureDir, "run.log") : Path.Combine(Path.GetTempPath(), $"sherlock-run-{_root!.Id}.log");
-        _log = new StreamWriter(LogPath, append: false) { AutoFlush = true };
-        _root!.OutputDataReceived += (_, e) => WriteLog(e.Data);
-        _root.ErrorDataReceived += (_, e) => WriteLog(e.Data);
+        lock (_logLock)
+        {
+            _log = new StreamWriter(LogPath, append: false) { AutoFlush = true };
+        }
+        _root!.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data is null) _stdoutDrained.TrySetResult(true);
+            else WriteLog(e.Data);
+        };
+        _root.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data is null) _stderrDrained.TrySetResult(true);
+            else WriteLog(e.Data);
+        };
         _root.BeginOutputReadLine();
         _root.BeginErrorReadLine();
     }
@@ -212,7 +234,11 @@ public sealed partial class RunTarget : IDisposable
         {
             if (fields.Length >= 3 && fields[1] == ProfilerControl.SnapshotTrigger)
             {
-                _triggerHits.Enqueue((pid, fields[2]));
+                _triggerHits.Enqueue(new RunTrigger(pid, fields[2]));
+            }
+            else if (fields.Length >= 3 && fields[1] == ProfilerControl.ExitCaptureReady)
+            {
+                _triggerHits.Enqueue(new RunTrigger(pid, "exit", fields[2]));
             }
             else if (fields.Length >= 4 && fields[1] == ProfilerControl.CoherentCaptureReady &&
                      _coherentCaptures.TryGetValue(fields[2], out CoherentCaptureWaiter? ready) &&
@@ -262,14 +288,32 @@ public sealed partial class RunTarget : IDisposable
             return [];
         }
 
-        try
+        lock (_logLock)
         {
-            string[] lines = File.ReadAllLines(LogPath);
-            return tail >= lines.Length ? lines : lines[^tail..];
-        }
-        catch
-        {
-            return [];
+            try
+            {
+                _log?.Flush();
+                using var stream = new FileStream(
+                    LogPath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite);
+                using var reader = new StreamReader(stream);
+                var lines = new List<string>();
+                while (reader.ReadLine() is { } line)
+                {
+                    lines.Add(line);
+                }
+                return tail >= lines.Count ? lines : lines[^tail..];
+            }
+            catch (IOException)
+            {
+                return [];
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return [];
+            }
         }
     }
 
@@ -331,19 +375,18 @@ public sealed partial class RunTarget : IDisposable
         throw new DumpAnalysisException("The profiler control socket path exceeds the platform limit.");
     }
 
-    public IReadOnlyList<(int Pid, string Name)> PollTriggers()
+    public IReadOnlyList<RunTrigger> PollTriggers()
     {
         if (_root is null)
         {
             return [];
         }
-
-        List<(int, string)>? hits = null;
-        while (_triggerHits.TryDequeue(out (int Pid, string Name) hit))
+        List<RunTrigger>? hits = null;
+        while (_triggerHits.TryDequeue(out RunTrigger? hit))
         {
             (hits ??= []).Add(hit);
         }
-        return (IReadOnlyList<(int, string)>?)hits ?? [];
+        return (IReadOnlyList<RunTrigger>?)hits ?? [];
     }
 
     /// <summary>Forces a GC and captures cumulative allocations plus live-object correlation.</summary>
@@ -505,6 +548,20 @@ public sealed partial class RunTarget : IDisposable
         }
     }
 
+    public (bool Ok, string Detail) ReleaseExitCapture(
+        int pid,
+        string token,
+        TimeSpan timeout)
+    {
+        if (_control is null || !_control.IsConnected(pid))
+        {
+            return (false, "profiler control channel disconnected");
+        }
+        (bool ok, string[] fields) =
+            Request(pid, ProfilerControl.ReleaseExitCapture, timeout, token);
+        return (ok, fields.FirstOrDefault() ?? (ok ? "released" : "release failed"));
+    }
+
     /// <summary>Returns the live process tree, root first.</summary>
     public IReadOnlyList<RunProcess> Processes()
     {
@@ -560,6 +617,8 @@ public sealed partial class RunTarget : IDisposable
     public async Task<int> WaitForExitAsync(CancellationToken cancellationToken = default)
     {
         await _root!.WaitForExitAsync(cancellationToken);
+        await Task.WhenAll(_stdoutDrained.Task, _stderrDrained.Task)
+            .WaitAsync(cancellationToken);
         return _root.ExitCode;
     }
 

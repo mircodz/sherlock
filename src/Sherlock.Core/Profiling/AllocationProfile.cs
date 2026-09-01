@@ -40,8 +40,7 @@ public sealed record AllocationProfile(IReadOnlyList<AllocationSite> Sites)
     public IReadOnlyList<AllocationTypeStat> ByType() =>
         Sites.Where(s => s.TypeName is not null)
             .GroupBy(s => s.TypeName!)
-            .Select(g => new AllocationTypeStat(
-                g.Key, g.Sum(s => s.AllocBytes), g.Sum(s => s.AllocCount), g.Sum(s => s.SurvivedBytes), g.Count()))
+            .Select(g => new AllocationTypeStat(g.Key, g.Sum(s => s.AllocBytes), g.Sum(s => s.AllocCount), g.Sum(s => s.SurvivedBytes), g.Count()))
             .OrderByDescending(t => t.AllocBytes)
             .ToList();
 
@@ -69,11 +68,11 @@ public static class AllocationProfileReader
     public static AllocationProfile From(ProvenanceReader reader)
     {
         bool hasType = reader.AllocationsVersion >= 2; // v1 slabs have no per-record type
-        Column<AllocationRecord> allocs = reader.Allocations;
-        var sites = new List<AllocationSite>(checked((int)allocs.Length));
-        for (long i = 0; i < allocs.Length; i++)
+        Column<AllocationRecord> allocations = reader.Allocations;
+        var sites = new List<AllocationSite>(checked((int)allocations.Length));
+        for (long i = 0; i < allocations.Length; i++)
         {
-            AllocationRecord rec = allocs[i];
+            AllocationRecord rec = allocations[i];
             string[] frames = reader.Stacks.FrameNames(rec.StackId); // root -> leaf
             string? typeName = hasType ? reader.Stacks.Frame(rec.TypeId) : null;
             sites.Add(new AllocationSite(

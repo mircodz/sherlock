@@ -69,6 +69,21 @@ TEST(ProbeRegistry, CanComposeEnterAndExitWithoutChangingTheCookie) {
     EXPECT_EQ(hits, (std::vector<ProbePhase>{ProbePhase::Enter, ProbePhase::Exit}));
 }
 
+TEST(ProbeRegistry, ReturnDoesNotFireForExceptionalExit) {
+    ProbeRegistry registry;
+    std::vector<ProbePhase> hits;
+    registry.setHitCallback([&](const std::string&, ProbePhase phase) {
+        hits.push_back(phase);
+    });
+    ProbePlan plan =
+        registry.registerMethod(kModule, kMethod, "App.Main", ProbeEvents::Return).plan;
+
+    ProbeRegistry::dispatch(plan.cookie, ProbePhase::Exit);
+    ProbeRegistry::dispatch(plan.cookie, ProbePhase::Return);
+
+    EXPECT_EQ(hits, (std::vector<ProbePhase>{ProbePhase::Return}));
+}
+
 TEST(ProbeRegistry, ConcurrentCallsFireAOneShotHookOnce) {
     ProbeRegistry registry;
     std::atomic<int> hits{0};

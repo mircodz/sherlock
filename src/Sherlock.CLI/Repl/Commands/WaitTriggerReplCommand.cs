@@ -48,6 +48,10 @@ public sealed class WaitTriggerReplCommand : IReplCommand
                         {
                             string contents = entry.HasAllocations ? "heap + allocations" : "heap only";
                             Output.Success(context.Console, $"[bold]{capture.Probe}[/] fired · snapshot [bold]{entry.Id}[/] [#808791]({contents})[/]");
+                            if (capture.Error is not null)
+                            {
+                                Output.Warning(context.Console, $"{capture.Error}");
+                            }
                         }
                         else
                         {

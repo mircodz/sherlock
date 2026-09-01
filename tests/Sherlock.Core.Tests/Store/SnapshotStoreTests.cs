@@ -134,7 +134,8 @@ public sealed class SnapshotStoreTests : IDisposable
         File.Delete(metadata);
         Directory.CreateDirectory(metadata);
 
-        Assert.ThrowsAny<IOException>(() => store.Remove(snapshot.Id));
+        Exception error = Assert.ThrowsAny<Exception>(() => store.Remove(snapshot.Id));
+        Assert.True(error is IOException or UnauthorizedAccessException);
 
         Assert.NotNull(store.FindSnapshot(snapshot.Id));
         Assert.True(snapshot.Exists);

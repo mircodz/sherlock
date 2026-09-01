@@ -46,7 +46,7 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         public bool Live { get; init; }
 
         [CommandOption("--snapshot-on <EVENT>")]
-        [Description("Capture a snapshot when an event fires, e.g. throw:My.Namespace.Exception.")]
+        [Description("Capture on exit or another event, e.g. throw:My.Namespace.Exception.")]
         public string? SnapshotOn { get; init; }
 
         [CommandOption("--profiler-log <LEVEL>")]
@@ -82,6 +82,11 @@ public sealed class RunCommand : Command<RunCommand.Settings>
 
         var options = new RunOptions { Command = command, Profile = settings.Profile, Correlate = settings.Correlate, CollectChildren = settings.Children, ExperimentalGcBarrier = settings.ExperimentalGcBarrier, SnapshotOn = settings.SnapshotOn, ProfilerLogLevel = settings.ProfilerLogLevel };
 
+        if (settings.Live && options.SnapshotOnExit)
+        {
+            Output.Error(console, $"[bold]--snapshot-on exit[/] cannot be combined with [bold]--live[/].");
+            return 1;
+        }
         if (settings.Live && !options.NeedsProfiler)
         {
             Output.Warning(console, $"[bold]--live[/] needs the profiler; add [bold]--profile[/] or [bold]--correlate[/].");
@@ -186,6 +191,10 @@ public sealed class RunCommand : Command<RunCommand.Settings>
             {
                 string contents = entry.HasAllocations ? "heap + allocations" : "heap only";
                 Output.Success(console, $"[bold]{capture.Probe}[/] fired · snapshot [bold]{entry.Id}[/] [#808791]({contents})[/]");
+                if (capture.Error is not null)
+                {
+                    Output.Warning(console, $"{capture.Error}");
+                }
             }
             else
             {

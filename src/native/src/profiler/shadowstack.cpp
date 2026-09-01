@@ -402,6 +402,11 @@ bool ShadowStackInstrumenter::buildIL(FunctionID functionId, ModuleID moduleId,
 
     // ---- END sequence ----
     il::ILStream endStream;
+    if (probe.onReturn()) {
+        emitProbeCall(
+            endStream, probe.cookie,
+            reinterpret_cast<std::uintptr_t>(&Sherlock_ProbeReturn), sigs.probe);
+    }
     if (nonVoid) endStream.ldloc(retLocalIndex);
     endStream.bytes().push_back(0x2A); // ret
     const std::vector<BYTE>& endSeq = endStream.bytes();

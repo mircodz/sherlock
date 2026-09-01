@@ -72,7 +72,10 @@ public:
 
     void stop();
 
-    [[nodiscard]] bool connected() const { return fd_.load(std::memory_order_acquire) != kInvalidSocket; }
+    [[nodiscard]] bool connected() const {
+        return running_.load(std::memory_order_acquire) &&
+               fd_.load(std::memory_order_acquire) != kInvalidSocket;
+    }
 
 private:
     void serve();

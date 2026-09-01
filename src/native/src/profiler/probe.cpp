@@ -31,6 +31,10 @@ extern "C" void Sherlock_ProbeExit(std::intptr_t cookie) {
     ProbeRegistry::dispatch(static_cast<std::uintptr_t>(cookie), ProbePhase::Exit);
 }
 
+extern "C" void Sherlock_ProbeReturn(std::intptr_t cookie) {
+    ProbeRegistry::dispatch(static_cast<std::uintptr_t>(cookie), ProbePhase::Return);
+}
+
 std::size_t ProbeRegistry::MethodKeyHash::operator()(const MethodKey& key) const noexcept {
     const std::size_t module = std::hash<std::uintptr_t>{}(static_cast<std::uintptr_t>(key.module));
     const std::size_t token = std::hash<std::uint32_t>{}(static_cast<std::uint32_t>(key.token));
@@ -205,6 +209,15 @@ bool ProbeManager::armLive(const std::string& spec, ProbeEvents events) {
         armed += resolveInModule(module, true);
     }
     return armed > 0;
+}
+
+ProbePlan ProbeManager::registerMethod(
+    ModuleID moduleId,
+    mdMethodDef token,
+    std::string display,
+    ProbeEvents events) {
+    return registry_.registerMethod(
+        moduleId, token, std::move(display), events).plan;
 }
 
 std::size_t ProbeManager::resolveInModule(ModuleID moduleId, bool requestRejit) {

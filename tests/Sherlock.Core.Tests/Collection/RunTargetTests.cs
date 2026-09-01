@@ -38,6 +38,21 @@ public sealed class RunTargetTests : IDisposable
     }
 
     [Fact]
+    public void ExitSnapshotUsesTheGcBarrierWhenCorrelated()
+    {
+        var options = new RunOptions
+        {
+            Command = ["dotnet", "app.dll"],
+            Correlate = true,
+            SnapshotOn = "throw:Marker; exit",
+        };
+
+        Assert.True(options.SnapshotOnExit);
+        Assert.True(options.UseGcBarrier);
+        Assert.False((options with { SnapshotOn = "throw:Marker" }).SnapshotOnExit);
+    }
+
+    [Fact]
     public async Task ProcessesIncludesAChildProcess()
     {
         string[] command = OperatingSystem.IsWindows()

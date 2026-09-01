@@ -4,10 +4,12 @@
 #include "sherlock/profiler/shadowstack.hpp"
 
 #include <chrono>
+#include <cctype>
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
+#include <filesystem>
 #include <format>
 #include <span>
 #include <string>
@@ -26,6 +28,7 @@ namespace {
 
 // Cap stack depth so pathological recursion can't blow up the hot path or the aggregation key.
 constexpr std::size_t kMaxFrames = 64;
+constexpr std::chrono::seconds kExitCaptureTimeout{90};
 
 // Insert the current pid before the extension (allocations.tsv -> allocations.<pid>.tsv), so every
 // profiled process (including children that inherit the env) writes a distinct file.
@@ -52,6 +55,42 @@ std::string withCaptureId(const std::string& path, std::uint64_t id) {
         return path + suffix;
     }
     return path.substr(0, dot) + suffix + path.substr(dot);
+}
+
+std::optional<std::filesystem::path> modulePath(
+    ICorProfilerInfo10* info,
+    ModuleID moduleId) {
+    LPCBYTE base = nullptr;
+    ULONG length = 0;
+    AssemblyID assembly = 0;
+    DWORD flags = 0;
+    if (FAILED(info->GetModuleInfo2(
+            moduleId, &base, 0, &length, nullptr, &assembly, &flags)) ||
+        length == 0 || (flags & COR_PRF_MODULE_DISK) == 0) {
+        return std::nullopt;
+    }
+
+    std::vector<WCHAR> name(length);
+    if (FAILED(info->GetModuleInfo2(
+            moduleId, &base, static_cast<ULONG>(name.size()), &length,
+            name.data(), &assembly, &flags)) ||
+        name.empty() || name[0] == 0) {
+        return std::nullopt;
+    }
+    return std::filesystem::path(std::basic_string<WCHAR>(name.data()));
+}
+
+bool equalsIgnoreCase(std::string_view left, std::string_view right) {
+    if (left.size() != right.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        if (std::tolower(static_cast<unsigned char>(left[i])) !=
+            std::tolower(static_cast<unsigned char>(right[i]))) {
+            return false;
+        }
+    }
+    return true;
 }
 
 // Bytes allocated on this thread since the last sample was taken.
@@ -158,7 +197,11 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
                 start = (end == std::string::npos) ? spec.size() + 1 : end + 1;
                 while (!one.empty() && (one.front() == ' ' || one.front() == '\t')) one.erase(one.begin());
                 while (!one.empty() && (one.back() == ' ' || one.back() == '\t')) one.pop_back();
-                if (!one.empty()) armTrigger(one, false);
+                if (equalsIgnoreCase(one, "exit")) {
+                    snapshotOnExit_ = true;
+                } else if (!one.empty()) {
+                    armTrigger(one, false);
+                }
             }
             logger->trace("snapshot-on: {}", triggerEnv);
         }
@@ -176,6 +219,7 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
             if (correlate) features.push_back("correlate");
             if (correlate) features.push_back("coherent-capture");
             if (triggersEnabled) features.push_back("snapshot-triggers");
+            if (snapshotOnExit_) features.push_back("exit-capture");
             control->start("0.1", features,
                            [this](std::string_view cmd, std::span<const std::string_view> args) {
                                try {
@@ -190,11 +234,14 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
                            },
                            [this] {
                                coherentCapture_.forceRelease();
+                               exitCapture_.forceRelease();
                            });
-            // `call:` currently arms entry only. The embedded probe also supports exit events so
-            // a later span capture can use the same composed rewrite.
             if (probes) {
                 probes->setHitCallback([this](const std::string& name, ProbePhase phase) {
+                    if (phase == ProbePhase::Return && snapshotOnExit_) {
+                        handleEntryPointReturn();
+                        return;
+                    }
                     fireTrigger((phase == ProbePhase::Enter ? "call:" : "call-exit:") + name);
                 });
             }
@@ -368,6 +415,14 @@ control::Reply Profiler::handleControl(std::string_view cmd, std::span<const std
         }
         return control::Reply::success(path + "\t" + std::to_string(gcCountAtReady));
     }
+    if (cmd == control::commands::kReleaseExitCapture) {
+        if (args.empty() || args[0].empty()) {
+            return control::Reply::error("release-exit-capture needs a <token>");
+        }
+        return exitCapture_.release(std::string(args[0]))
+            ? control::Reply::success("released")
+            : control::Reply::error("no exit capture is waiting for this token");
+    }
     return control::Reply::error("unknown command");
 }
 
@@ -405,6 +460,78 @@ void Profiler::fireTrigger(const std::string& display) noexcept {
         logger->error("could not send snapshot trigger: {}", ex.what());
     } catch (...) {
         logger->error("could not send snapshot trigger");
+    }
+}
+
+bool Profiler::armExitEntryPoint(ModuleID moduleId) {
+    if (!snapshotOnExit_ || exitEntryPointArmed_.load(std::memory_order_acquire) || !probes) {
+        return false;
+    }
+    std::optional<std::filesystem::path> path = modulePath(corProfilerInfo, moduleId);
+    if (!path) {
+        return false;
+    }
+    std::optional<std::uint32_t> token = entrypoint::fromFile(*path);
+    if (!token) {
+        return false;
+    }
+
+    IMetaDataImport* metadata = nullptr;
+    if (FAILED(corProfilerInfo->GetModuleMetaData(
+            moduleId, ofRead, IID_IMetaDataImport,
+            reinterpret_cast<IUnknown**>(&metadata))) ||
+        metadata == nullptr) {
+        return false;
+    }
+    const bool valid = SUCCEEDED(metadata->GetMethodProps(
+        static_cast<mdMethodDef>(*token), nullptr, nullptr, 0, nullptr,
+        nullptr, nullptr, nullptr, nullptr, nullptr));
+    metadata->Release();
+    if (!valid) {
+        return false;
+    }
+
+    bool expected = false;
+    if (!exitEntryPointArmed_.compare_exchange_strong(
+            expected, true, std::memory_order_acq_rel)) {
+        return false;
+    }
+    try {
+        probes->registerMethod(
+            moduleId, static_cast<mdMethodDef>(*token), "entrypoint", ProbeEvents::Return);
+    } catch (...) {
+        exitEntryPointArmed_.store(false, std::memory_order_release);
+        throw;
+    }
+    logger->trace("snapshot-on exit armed for entry-point token 0x{:08x}", *token);
+    return true;
+}
+
+void Profiler::handleEntryPointReturn() noexcept {
+    exitCaptureFired_.store(true, std::memory_order_release);
+    const std::string token =
+        std::to_string(exitCaptureSequence_.fetch_add(1, std::memory_order_relaxed));
+    if (!exitCapture_.begin(token)) {
+        return;
+    }
+
+    bool sent = false;
+    try {
+        sent = control && control->connected() && control->sendEvent({
+            std::string(control::events::kExitCaptureReady), token});
+    } catch (const std::exception& ex) {
+        logger->error("snapshot-on exit: could not send ready event: {}", ex.what());
+    } catch (...) {
+        logger->error("snapshot-on exit: could not send ready event");
+    }
+    if (!sent) {
+        logger->error("snapshot-on exit: supervisor unavailable; allowing Main to return");
+        exitCapture_.forceRelease();
+    }
+
+    if (exitCapture_.wait(kExitCaptureTimeout) ==
+        control::ExitCaptureLatch::WaitResult::TimedOut) {
+        logger->error("snapshot-on exit: timed out after 90s; allowing Main to return");
     }
 }
 
@@ -488,6 +615,7 @@ HRESULT STDMETHODCALLTYPE Profiler::Shutdown() {
     // racing this. Wake a barrier that's Arming or Parked (bounded by its own 60s hard timeout if
     // it's genuinely stuck) and join, before the aggregator it may still be reading gets torn down.
     coherentCapture_.forceRelease();
+    exitCapture_.forceRelease();
     if (coherentForceGcThread_.joinable()) {
         coherentForceGcThread_.join();
     }
@@ -504,6 +632,11 @@ HRESULT STDMETHODCALLTYPE Profiler::Shutdown() {
         if (!aggregator->dump(outputPath)) {
             logger->error("could not write final allocation profile");
         }
+    }
+    if (snapshotOnExit_ && !exitEntryPointArmed_.load(std::memory_order_acquire)) {
+        logger->warn("snapshot-on exit: no managed entry point was found");
+    } else if (snapshotOnExit_ && !exitCaptureFired_.load(std::memory_order_acquire)) {
+        logger->warn("snapshot-on exit: no normal entry-point return was observed");
     }
     return S_OK;
 }
@@ -578,6 +711,9 @@ HRESULT STDMETHODCALLTYPE Profiler::ModuleLoadFinished(ModuleID moduleId, HRESUL
         return S_OK;
     }
     try {
+        if (snapshotOnExit_) {
+            (void)armExitEntryPoint(moduleId);
+        }
         // Resolve probes first. The global shadow-stack ReJIT that follows then sees and
         // composes those plans without issuing a duplicate startup ReJIT request.
         if (probes) {
