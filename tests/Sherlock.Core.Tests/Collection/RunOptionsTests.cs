@@ -57,4 +57,32 @@ public sealed class RunOptionsTests
         Assert.False(options.ExperimentalGcBarrier);
         Assert.Equal(new[] { "app", "", "--profile", "--" }, options.Command);
     }
+
+    [Fact]
+    public void ProcessIncludesEnableProfilingWithoutChangingCorrelation()
+    {
+        var options = new RunOptions { Command = ["dotnet", "test"], IncludeProcesses = ["Sherlock.*.dll", "Worker?.exe"] };
+
+        options.Validate();
+
+        Assert.True(options.HasProcessFilter);
+        Assert.True(options.NeedsProfiler);
+        Assert.False(options.Correlate);
+        Assert.False(options.UseGcBarrier);
+        Assert.False(new RunOptions { Command = ["dotnet", "test"] }.NeedsProfiler);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("path/Sherlock.*.dll")]
+    [InlineData("path\\Sherlock.*.dll")]
+    [InlineData("Sherlock.*.dll\nOther.dll")]
+    [InlineData("Sherlock.\t.dll")]
+    [InlineData(null)]
+    public void RejectsInvalidProcessFilenameGlobs(string? pattern)
+    {
+        var options = new RunOptions { Command = ["app"], IncludeProcesses = [pattern!] };
+        Assert.Throws<ArgumentException>(() => options.Validate());
+    }
 }

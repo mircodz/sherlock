@@ -26,8 +26,8 @@ public struct StackRecord
 public sealed class StackTable
 {
     private readonly ReadOnlyMemory<byte> _strings;
-    private readonly ReadOnlyMemory<byte> _frames;      // FrameRecord[]
-    private readonly ReadOnlyMemory<byte> _stacks;      // StackRecord[]
+    private readonly ReadOnlyMemory<byte> _frames; // FrameRecord[]
+    private readonly ReadOnlyMemory<byte> _stacks; // StackRecord[]
     private readonly ReadOnlyMemory<byte> _stackFrames; // uint[]
     private readonly string?[] _frameCache;
 
@@ -62,6 +62,7 @@ public sealed class StackTable
         {
             throw new InvalidDataException("provenance container is missing its stack table");
         }
+
         foreach (SectionType section in new[]
                  {
                      SectionType.Strings,
@@ -129,6 +130,7 @@ public sealed class StackTable
         {
             return cached;
         }
+
         FrameRecord r = MemoryMarshal.Cast<byte, FrameRecord>(_frames.Span)[(int)frameId];
         string name = Encoding.UTF8.GetString(_strings.Span.Slice((int)r.StrOffset, (int)r.StrLen));
         _frameCache[frameId] = name;
@@ -151,6 +153,7 @@ public sealed class StackTable
         {
             names[i] = Frame(ids[i]);
         }
+
         return names;
     }
 
@@ -165,8 +168,10 @@ public sealed class StackTable
             {
                 sb.Append(separator);
             }
+
             sb.Append(Frame(ids[i]));
         }
+
         return sb.ToString();
     }
 }

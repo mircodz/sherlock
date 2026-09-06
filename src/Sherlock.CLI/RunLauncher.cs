@@ -11,7 +11,7 @@ namespace Sherlock.CLI;
 /// <summary>Parses and starts runs for both the CLI and REPL.</summary>
 public static class RunLauncher
 {
-    public const string Usage = "run [--profile] [--correlate] [--children] [--experimental-gc-barrier] [--snapshot-on <event>] [--profiler-log <level>] [--] <path> [args...]";
+    public const string Usage = "run [--profile] [--correlate] [--children] [--include-process <glob>] [--experimental-gc-barrier] [--snapshot-on <event>] [--profiler-log <level>] [--] <path> [args...]";
 
     public static RunOptions? Parse(IReadOnlyList<string> args, IAnsiConsole console)
     {
@@ -19,6 +19,7 @@ public static class RunLauncher
         string? snapshotOn = null;
         ProfilerLogLevel logLevel = ProfilerLogLevel.Warning;
         var command = new List<string>();
+        var includeProcesses = new List<string>();
         bool forwarding = false;
 
         for (int i = 0; i < args.Count; i++)
@@ -30,6 +31,12 @@ public static class RunLauncher
                 case "--profile": profile = true; break;
                 case "--correlate": correlate = true; break;
                 case "--children": children = true; break;
+                case "--include-process" when i + 1 < args.Count && !args[i + 1].StartsWith("--", StringComparison.Ordinal):
+                    includeProcesses.Add(args[++i]);
+                    break;
+                case "--include-process":
+                    Output.Error(console, $"[bold]--include-process[/] requires a filename glob.");
+                    return null;
                 case "--experimental-gc-barrier": experimentalGcBarrier = true; break;
                 case "--snapshot-on" when i + 1 < args.Count && !args[i + 1].StartsWith("--", StringComparison.Ordinal):
                     snapshotOn = args[++i];
@@ -62,7 +69,7 @@ public static class RunLauncher
             }
         }
 
-        var options = new RunOptions { Command = command, Profile = profile, Correlate = correlate, CollectChildren = children, ExperimentalGcBarrier = experimentalGcBarrier, SnapshotOn = snapshotOn, ProfilerLogLevel = logLevel };
+        var options = new RunOptions { Command = command, Profile = profile, Correlate = correlate, CollectChildren = children, IncludeProcesses = includeProcesses, ExperimentalGcBarrier = experimentalGcBarrier, SnapshotOn = snapshotOn, ProfilerLogLevel = logLevel };
         try
         {
             options.Validate();

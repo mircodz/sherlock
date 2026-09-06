@@ -78,6 +78,7 @@ set(SOURCES
     src/profiler/profiler.cpp
     src/profiler/aggregator.cpp
     src/profiler/method_registry.cpp
+    src/profiler/process_filter.cpp
     src/profiler/entrypoint.cpp
     src/profiler/shadowstack.cpp
     src/profiler/il_writer.cpp
@@ -93,7 +94,7 @@ endif(WIN32)
 add_library(SherlockProfiler SHARED ${SOURCES})
 
 if(WIN32)
-    target_link_libraries(SherlockProfiler PRIVATE ws2_32)
+    target_link_libraries(SherlockProfiler PRIVATE ws2_32 shell32)
 endif()
 
 if(SHERLOCK_BUILD_TESTS)

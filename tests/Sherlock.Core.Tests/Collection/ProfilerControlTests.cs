@@ -12,6 +12,34 @@ namespace Sherlock.Core.Tests.Collection;
 
 public sealed class ProfilerControlTests
 {
+    [Theory]
+    [InlineData("")]
+    [InlineData("\tSherlock.Core.Tests.dll")]
+    public async Task HelloPublishesOptionalProcessIdentity(string suffix)
+    {
+        string directory = !OperatingSystem.IsWindows() && Directory.Exists("/tmp") ? "/tmp" : Path.GetTempPath();
+        string path = Path.Combine(directory, $"sl-{Guid.NewGuid():N}.sock");
+        using var control = new ProfilerControl(path);
+        using var client = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        var connected = new TaskCompletionSource<(int Pid, string? Name)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        control.ClientConnected += (pid, name) => connected.TrySetResult((pid, name));
+        CancellationToken cancellation = TestContext.Current.CancellationToken;
+        await client.ConnectAsync(new UnixDomainSocketEndPoint(path), cancellation);
+
+        await SendAsync(client, $"HELLO\t0.1\tallocations,process-filtered\t4242{suffix}", cancellation);
+        (int pid, string? name) = await connected.Task.WaitAsync(TimeSpan.FromSeconds(2), cancellation);
+
+        Assert.Equal(4242, pid);
+        Assert.Equal(suffix.Length == 0 ? null : "Sherlock.Core.Tests.dll", name);
+        Assert.True(control.Supports(pid, "process-filtered"));
+        Assert.False(control.Supports(pid, "correlate"));
+        Assert.False(control.Supports(9999, "process-filtered"));
+        var disconnected = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        control.ClientDisconnected += process => disconnected.TrySetResult(process);
+        control.Disconnect(pid);
+        Assert.Equal(pid, await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(2), cancellation));
+    }
+
     [Fact]
     public async Task RoundTripsRequestsAndEvents()
     {

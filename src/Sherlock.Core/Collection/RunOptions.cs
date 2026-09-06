@@ -19,12 +19,14 @@ public sealed record RunOptions
     public bool Profile { get; init; }
     public bool Correlate { get; init; }
     public bool CollectChildren { get; init; }
+    public IReadOnlyList<string> IncludeProcesses { get; init; } = [];
     public bool ExperimentalGcBarrier { get; init; }
     public string? SnapshotOn { get; init; }
     public string? OutputDirectory { get; init; }
     public string? ProfilerPath { get; init; }
     public ProfilerLogLevel ProfilerLogLevel { get; init; } = ProfilerLogLevel.Warning;
-    public bool NeedsProfiler => Profile || Correlate || CollectChildren || ExperimentalGcBarrier || SnapshotOn is not null || ProfilerPath is not null;
+    public bool HasProcessFilter => IncludeProcesses.Count > 0;
+    public bool NeedsProfiler => Profile || Correlate || CollectChildren || HasProcessFilter || ExperimentalGcBarrier || SnapshotOn is not null || ProfilerPath is not null;
     public bool SnapshotOnExit =>
         SnapshotOn?.Split(
             [';', ','],
@@ -45,6 +47,15 @@ public sealed record RunOptions
         if (ExperimentalGcBarrier && !Correlate)
         {
             throw new ArgumentException("--experimental-gc-barrier requires --correlate.", nameof(ExperimentalGcBarrier));
+        }
+        ArgumentNullException.ThrowIfNull(IncludeProcesses);
+        foreach (string pattern in IncludeProcesses)
+        {
+            if (string.IsNullOrWhiteSpace(pattern) ||
+                pattern.Any(c => c < ' ' || c == '\x7f' || c is '/' or '\\'))
+            {
+                throw new ArgumentException("--include-process requires a nonempty filename glob without paths or control characters.", nameof(IncludeProcesses));
+            }
         }
     }
 }

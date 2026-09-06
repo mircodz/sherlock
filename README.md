@@ -9,7 +9,8 @@ managed dumps, finds retained memory, traces GC roots, and can correlate live ob
 stacks that allocated them.
 
 ```text
-sl run --correlate -- dotnet run --project MyApp
+sl
+sl> run --correlate -- dotnet run --project MyApp
 sl> snapshot
 sl[s1]> dominators
 sl[s1]> gcroot 0x137e15ac0

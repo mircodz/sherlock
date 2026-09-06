@@ -56,7 +56,8 @@ public:
         std::string_view version,
         const std::vector<std::string>& features,
         Handler handler,
-        DisconnectHandler disconnected = {});
+        DisconnectHandler disconnected = {},
+        std::string_view processName = {});
 
     // Thread-safe; fields follow the EVENT verb.
     [[nodiscard]] bool sendEvent(const std::vector<std::string>& fields);

@@ -49,8 +49,19 @@ internal sealed class ProfilerControl : IDisposable
         _clients.Values.SelectMany(c => c.Features).Distinct().ToArray();
 
     public bool IsConnected(int pid) => _clients.ContainsKey(pid);
+    public bool Supports(int pid, string feature) =>
+        _clients.TryGetValue(pid, out Client? client) && client.Features.Contains(feature);
+
+    public void Disconnect(int pid)
+    {
+        if (_clients.TryGetValue(pid, out Client? client))
+        {
+            client.Socket.Dispose();
+        }
+    }
 
     public event Action<int, string[]>? EventReceived;
+    public event Action<int, string?>? ClientConnected;
     public event Action<int>? ClientDisconnected;
 
     public ProfilerControl(string path)
@@ -219,6 +230,7 @@ internal sealed class ProfilerControl : IDisposable
                 if (pid > 0)
                 {
                     _clients[pid] = client;
+                    ClientConnected?.Invoke(pid, fields.Length > 4 ? fields[4] : null);
                 }
                 break;
 

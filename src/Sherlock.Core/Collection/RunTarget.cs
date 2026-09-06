@@ -39,8 +39,35 @@ public sealed class RunTarget : IDisposable
     private static readonly TimeSpan CoherentReadyTimeout = TimeSpan.FromSeconds(60);
 
     private readonly ConcurrentDictionary<int, string> _names = new();
+    private readonly ConcurrentDictionary<int, byte> _includedPids = new();
+    private string? _processSelectionError;
 
     public string? NameFor(int pid) => _names.TryGetValue(pid, out string? n) ? n : null;
+    public int IncludedProcessCount => _includedPids.Count;
+    public string? ProcessSelectionError => Volatile.Read(ref _processSelectionError);
+
+    public bool IncludesProcess(int pid) =>
+        !Options.HasProcessFilter ||
+        (_includedPids.ContainsKey(pid) && _control?.Supports(pid, "process-filtered") == true);
+
+    public void EnsureProcessIncluded(int pid)
+    {
+        if (!Options.HasProcessFilter)
+        {
+            return;
+        }
+        if (ProcessSelectionError is { } error)
+        {
+            throw new DumpAnalysisException(error);
+        }
+        if (!IncludesProcess(pid))
+        {
+            throw new DumpAnalysisException($"Process {pid} is excluded by --include-process or has not connected to the profiler yet.");
+        }
+    }
+
+    public IReadOnlyList<RunProcess> CaptureProcesses() =>
+        Processes().Where(process => process.IsDotnet && IncludesProcess(process.Pid)).ToList();
 
     public bool HasCorrelation => _correlate;
 
@@ -61,13 +88,21 @@ public sealed class RunTarget : IDisposable
     {
         get
         {
-            List<RunProcess> dotnet = Processes().Where(p => p.IsDotnet).ToList();
+            IReadOnlyList<RunProcess> dotnet = CaptureProcesses();
             List<RunProcess> children = dotnet.Where(p => !p.IsRoot).ToList();
             if (children.Count == 1)
             {
                 return children[0].Pid;
             }
-            return dotnet.Count > 0 ? dotnet[0].Pid : Pid;
+            if (dotnet.Count > 0)
+            {
+                return dotnet[0].Pid;
+            }
+            if (Options.HasProcessFilter)
+            {
+                throw new DumpAnalysisException(ProcessSelectionError ?? "No matching profiled process is connected. Wait for a matching child to start.");
+            }
+            return Pid;
         }
     }
 
@@ -86,7 +121,7 @@ public sealed class RunTarget : IDisposable
     {
         ArgumentNullException.ThrowIfNull(options);
         options.Validate();
-        options = options with { Command = options.Command.ToArray() };
+        options = options with { Command = options.Command.ToArray(), IncludeProcesses = options.IncludeProcesses.ToArray() };
 
         var target = new RunTarget();
         try
@@ -124,7 +159,7 @@ public sealed class RunTarget : IDisposable
             }
         }
 
-        _collectChildren = options.CollectChildren;
+        _collectChildren = options.CollectChildren || options.HasProcessFilter;
         _correlate = options.Correlate;
         Options = options with { OutputDirectory = _captureDir, ProfilerPath = profilerPath };
         var psi = StartInfo(options.Command);
@@ -140,7 +175,7 @@ public sealed class RunTarget : IDisposable
             AllocationPath = InsertPid(_allocationTemplate, _root.Id);
         }
         Name = Path.GetFileName(options.Command[0]);
-        _names[_root.Id] = Name;
+        _names.TryAdd(_root.Id, Name);
         StartLog();
     }
 
@@ -183,6 +218,14 @@ public sealed class RunTarget : IDisposable
         _allocationTemplate = Path.Combine(_captureDir!, "allocations.slab");
         psi.Environment["SHERLOCK_PROFILE_OUT"] = _allocationTemplate;
         psi.Environment["SHERLOCK_LOG_LEVEL"] = options.ProfilerLogLevel.ToString().ToLowerInvariant();
+        if (options.HasProcessFilter)
+        {
+            psi.Environment["SHERLOCK_INCLUDE_PROCESSES"] = string.Join('\n', options.IncludeProcesses);
+        }
+        else
+        {
+            psi.Environment.Remove("SHERLOCK_INCLUDE_PROCESSES");
+        }
 
         if (!string.IsNullOrWhiteSpace(options.SnapshotOn))
         {
@@ -195,8 +238,34 @@ public sealed class RunTarget : IDisposable
         }
 
         _control = new ProfilerControl(ControlSocketPath(_captureDir));
+        _control.ClientConnected += (pid, name) =>
+        {
+            if (!options.HasProcessFilter)
+            {
+                return;
+            }
+            if (!_control.Supports(pid, "process-filtered"))
+            {
+                Volatile.Write(ref _processSelectionError,
+                    $"The profiler in process {pid} did not apply --include-process. Rebuild or update the native profiler.");
+                _control.Disconnect(pid);
+                return;
+            }
+            _includedPids.TryAdd(pid, 0);
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                string file = Path.GetFileName(name);
+                _names[pid] = file.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+                    ? file[..^4]
+                    : file;
+            }
+        };
         _control.EventReceived += (pid, fields) =>
         {
+            if (options.HasProcessFilter && !IncludesProcess(pid))
+            {
+                return;
+            }
             if (fields.Length >= 3 && fields[1] == ProfilerControl.SnapshotTrigger)
             {
                 _triggerHits.Enqueue(new RunTrigger(pid, fields[2]));
@@ -297,7 +366,8 @@ public sealed class RunTarget : IDisposable
         {
             string inner = Path.GetFileNameWithoutExtension(file); // "allocations.<pid>"
             int dot = inner.LastIndexOf('.');
-            if (dot >= 0 && int.TryParse(inner[(dot + 1)..], out int pid) && _seenAllocations.Add(file))
+            if (dot >= 0 && int.TryParse(inner[(dot + 1)..], out int pid) &&
+                (!Options.HasProcessFilter || _includedPids.ContainsKey(pid)) && _seenAllocations.Add(file))
             {
                 found.Add((pid, file));
             }
@@ -352,6 +422,7 @@ public sealed class RunTarget : IDisposable
     /// <summary>Forces a GC and captures cumulative allocations plus live-object correlation.</summary>
     public (string Path, long GcAtEmit) CaptureCorrelation(int pid, TimeSpan timeout)
     {
+        EnsureProcessIncluded(pid);
         if (_control is null || !ProcessLocator.IsAlive(pid))
         {
             throw new DumpAnalysisException($"Process {pid} has no live profiler control channel.");
@@ -375,6 +446,10 @@ public sealed class RunTarget : IDisposable
 
     public long GcCount(int pid, TimeSpan timeout)
     {
+        if (!IncludesProcess(pid))
+        {
+            return -1;
+        }
         if (_control is null || !ProcessLocator.IsAlive(pid))
         {
             return -1;
@@ -386,6 +461,10 @@ public sealed class RunTarget : IDisposable
 
     public HeapStats? HeapSize(int pid, TimeSpan timeout)
     {
+        if (!IncludesProcess(pid))
+        {
+            return null;
+        }
         if (_control is null || !ProcessLocator.IsAlive(pid))
         {
             return null;
@@ -411,6 +490,10 @@ public sealed class RunTarget : IDisposable
 
     public (bool Ok, string Detail) ArmTrigger(int pid, string spec, TimeSpan timeout)
     {
+        if (!IncludesProcess(pid))
+        {
+            return (false, ProcessSelectionError ?? $"Process {pid} is excluded by --include-process or has not connected yet.");
+        }
         if (_control is null || !ProcessLocator.IsAlive(pid))
         {
             return (false, "no live profiler");
@@ -422,6 +505,7 @@ public sealed class RunTarget : IDisposable
     /// <summary>Captures the current cumulative allocation profile.</summary>
     public string CaptureAllocations(int pid, TimeSpan timeout)
     {
+        EnsureProcessIncluded(pid);
         if (_control is null || !ProcessLocator.IsAlive(pid))
         {
             throw new DumpAnalysisException($"Process {pid} has no live profiler control channel.");
@@ -438,6 +522,7 @@ public sealed class RunTarget : IDisposable
 
     public CoherentCaptureResult CaptureCoherentSnapshot(int pid, TimeSpan timeout)
     {
+        EnsureProcessIncluded(pid);
         if (!_correlate || _control is null || !ProcessLocator.IsAlive(pid))
         {
             throw new DumpAnalysisException($"Process {pid} has no live correlation control channel.");
@@ -533,9 +618,20 @@ public sealed class RunTarget : IDisposable
         IReadOnlyList<RunProcess> result = ProcessLocator.Tree(_root.Id);
         foreach (RunProcess process in result)
         {
-            _names[process.Pid] = process.Name;
+            if (Options.HasProcessFilter)
+            {
+                _names.TryAdd(process.Pid, process.Name);
+            }
+            else
+            {
+                _names[process.Pid] = process.Name;
+            }
         }
-        return result;
+        return Options.HasProcessFilter
+            ? result.Select(process => _includedPids.ContainsKey(process.Pid)
+                ? process with { Name = NameFor(process.Pid) ?? process.Name, IsDotnet = true }
+                : process).ToArray()
+            : result;
     }
 
     public void Kill()

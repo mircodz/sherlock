@@ -225,7 +225,8 @@ void ControlChannel::start(
     std::string_view version,
     const std::vector<std::string>& features,
     Handler handler,
-    DisconnectHandler disconnected) {
+    DisconnectHandler disconnected,
+    std::string_view processName) {
     if (fd_.load(std::memory_order_acquire) == kInvalidSocket) {
         return;
     }
@@ -244,6 +245,9 @@ void ControlChannel::start(
     const int pid = ::getpid();
 #endif
     std::vector<std::string> hello = {"HELLO", std::string(version), featureList, std::to_string(pid)};
+    if (!processName.empty() && processName.find_first_of("\t\r\n") == std::string_view::npos) {
+        hello.emplace_back(processName);
+    }
     std::string framed = frame(joinFields(hello));
     if (!sendAll(framed)) {
         if (logger_) logger_->warn("control channel: HELLO send failed; not serving");

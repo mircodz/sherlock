@@ -30,8 +30,7 @@ public sealed class SnapshotReplCommand : IReplCommand
         {
             // Prefer a sole child app over its launcher, then a sole live process.
             List<RunProcess> live = context.Workspace.Targets
-                .SelectMany(t => t.Processes())
-                .Where(p => p.IsDotnet)
+                .SelectMany(t => t.CaptureProcesses())
                 .ToList();
             List<RunProcess> children = live.Where(p => !p.IsRoot).ToList();
 

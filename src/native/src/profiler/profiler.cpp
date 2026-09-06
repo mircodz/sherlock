@@ -2,6 +2,7 @@
 
 #include "sherlock/control/protocol.hpp"
 #include "sherlock/profiler/shadowstack.hpp"
+#include "sherlock/profiler/process_filter.hpp"
 
 #include <chrono>
 #include <cctype>
@@ -135,6 +136,30 @@ ULONG STDMETHODCALLTYPE Profiler::Release() {
 }
 
 HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
+    std::string selectedName;
+    const char* includes = std::getenv("SHERLOCK_INCLUDE_PROCESSES");
+    const bool filtered = includes != nullptr && includes[0] != '\0';
+    if (filtered) {
+        try {
+            const process_filter::Selection selection = process_filter::current(includes);
+            if (!selection.error.empty()) {
+                logger->error("process filter: {}", selection.error);
+                return CORPROF_E_PROFILER_CANCEL_ACTIVATION;
+            }
+            if (!selection.included) {
+                logger->trace("process filter excluded {}", selection.name);
+                return CORPROF_E_PROFILER_CANCEL_ACTIVATION;
+            }
+            selectedName = selection.name;
+        } catch (const std::exception& ex) {
+            logger->error("process filter failed: {}", ex.what());
+            return CORPROF_E_PROFILER_CANCEL_ACTIVATION;
+        } catch (...) {
+            logger->error("process filter failed");
+            return CORPROF_E_PROFILER_CANCEL_ACTIVATION;
+        }
+    }
+
     HRESULT hr = pICorProfilerInfoUnk->QueryInterface(IID_ICorProfilerInfo10, (void**)&corProfilerInfo);
     if (FAILED(hr)) {
         logger->error("QueryInterface for ICorProfilerInfo10 failed");
@@ -211,6 +236,7 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
             control.reset();
         } else {
             std::vector<std::string> features = {"allocations"};
+            if (filtered) features.push_back("process-filtered");
             if (correlate) {
                 features.push_back("correlate");
                 features.push_back("coherent-capture");
@@ -232,7 +258,7 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
                            [this] {
                                coherentCapture_.forceRelease();
                                exitCapture_.forceRelease();
-                           });
+                           }, selectedName);
             if (probes) {
                 probes->setHitCallback([this](const std::string& name, ProbePhase phase) {
                     if (phase == ProbePhase::Return && snapshotOnExit_) {

@@ -139,7 +139,7 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
             : Store.BeginSession(SessionKind.Collect, ProcessLocator.NameOf(pid));
 
         SnapshotEntry entry = Store.AddSnapshot(session, dumpPath, moveIntoStore: true,
-            sourcePid: pid, sourceName: ProcessLocator.NameOf(pid) ?? target?.Name,
+            sourcePid: pid, sourceName: (target is { Options.HasProcessFilter: true } ? target.NameFor(pid) : null) ?? ProcessLocator.NameOf(pid) ?? target?.Name,
             provenanceSource: provenance, correlated: correlated, reason: reason);
         if (load)
         {
@@ -155,6 +155,7 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
         lock (_captureGate)
         {
             RunTarget? target = _targets.FirstOrDefault(t => !t.HasExited && Owns(t, pid));
+            target?.EnsureProcessIncluded(pid);
             SnapshotCaptureResult capture = SnapshotCapture.Collect(pid, target);
             try
             {

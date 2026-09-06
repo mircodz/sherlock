@@ -21,6 +21,7 @@ public sealed class RunLauncherTests
     [Theory]
     [InlineData("--snapshot-on")]
     [InlineData("--profiler-log")]
+    [InlineData("--include-process")]
     public void MissingOptionValuesAreRejected(string option)
     {
         Assert.Null(Parse(option));
@@ -86,5 +87,35 @@ public sealed class RunLauncherTests
         Assert.Null(Parse("--live", "app"));
         Assert.Null(Parse("--unknown", "app"));
         Assert.Equal(new[] { "--live" }, Assert.IsType<RunOptions>(Parse("--", "--live")).Command);
+    }
+
+    [Fact]
+    public void ProcessIncludesAreRepeatableAndEnableProfiling()
+    {
+        RunOptions options = Assert.IsType<RunOptions>(Parse(
+            "--include-process", "Sherlock.*.dll", "--include-process", "Worker?.exe", "--", "dotnet", "test"));
+
+        Assert.Equal(new[] { "Sherlock.*.dll", "Worker?.exe" }, options.IncludeProcesses);
+        Assert.Equal(new[] { "dotnet", "test" }, options.Command);
+        Assert.True(options.NeedsProfiler);
+    }
+
+    [Fact]
+    public void ProcessIncludesAfterDoubleDashBelongToTheTarget()
+    {
+        RunOptions options = Assert.IsType<RunOptions>(Parse("--", "app", "--include-process", "Sherlock.*.dll"));
+
+        Assert.Empty(options.IncludeProcesses);
+        Assert.Equal(new[] { "app", "--include-process", "Sherlock.*.dll" }, options.Command);
+        Assert.False(options.NeedsProfiler);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("path/Worker.dll")]
+    [InlineData("*.dll\n*.exe")]
+    public void InvalidProcessIncludesAreRejected(string pattern)
+    {
+        Assert.Null(Parse("--include-process", pattern, "app"));
     }
 }

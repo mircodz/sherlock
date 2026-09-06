@@ -351,7 +351,11 @@ public sealed class SnapshotStore
 
     private int NextSnapshotIdOnDisk()
     {
-        var ids = _sessions.SelectMany(session => session.Snapshots).Select(snapshot => snapshot.Id).ToList();
+        var ids = _sessions
+            .SelectMany(session => session.Snapshots)
+            .Select(snapshot => snapshot.Id)
+            .ToList();
+
         foreach (string workspace in Directory.EnumerateDirectories(Root, "w*"))
         {
             string snapshots = Path.Combine(workspace, "snapshots");
@@ -360,6 +364,7 @@ public sealed class SnapshotStore
                 ids.AddRange(Directory.EnumerateDirectories(snapshots).Select(Path.GetFileName)!);
             }
         }
+
         return NextId(ids, 's');
     }
 
@@ -383,6 +388,7 @@ public sealed class SnapshotStore
             {
                 continue;
             }
+
             try
             {
                 Session session = JsonSerializer.Deserialize<Session>(File.ReadAllText(path), JsonOptions) ?? throw new InvalidDataException($"Workspace metadata is empty: {path}");

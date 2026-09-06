@@ -12,10 +12,11 @@
 
 // A message is a 4-byte little-endian length followed by a UTF-8 payload. The payload
 // is tab-separated fields; the first field is the verb:
-//   HELLO \t <version> \t <comma,separated,features> \t <pid>   profiler -> sl on connect
+//   HELLO \t <version> \t <comma,separated,features> \t <pid> [\t entry-name]
 //   REQ   \t <id> \t <command> [\t args...]                     sl -> profiler
 //   RES   \t <id> \t ok|err    [\t detail]                      profiler -> sl
 //   EVENT \t <name> [\t args...]                                profiler -> sl (unsolicited)
+// Filtered clients advertise process-filtered; entry-name is an optional filename.
 namespace Sherlock::control {
 
 // Keep REQ verbs in sync with C# ControlCommands.

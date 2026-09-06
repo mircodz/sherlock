@@ -37,6 +37,10 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         [Description("Also capture allocation profiles for child processes, not just the root.")]
         public bool Children { get; init; }
 
+        [CommandOption("--include-process <GLOB>")]
+        [Description("Profile only matching executable/entry-DLL filenames. Repeatable; enables profiling of matching children.")]
+        public string[] IncludeProcesses { get; init; } = [];
+
         [CommandOption("--experimental-gc-barrier")]
         [Description("Experimental: hold the capture GC while taking a correlated dump.")]
         public bool ExperimentalGcBarrier { get; init; }
@@ -67,7 +71,7 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         command.AddRange(settings.Args);
         command.AddRange(context.Remaining.Raw);
 
-        var options = new RunOptions { Command = command, Profile = settings.Profile, Correlate = settings.Correlate, CollectChildren = settings.Children, ExperimentalGcBarrier = settings.ExperimentalGcBarrier, SnapshotOn = settings.SnapshotOn, ProfilerLogLevel = settings.ProfilerLogLevel };
+        var options = new RunOptions { Command = command, Profile = settings.Profile, Correlate = settings.Correlate, CollectChildren = settings.Children, IncludeProcesses = settings.IncludeProcesses, ExperimentalGcBarrier = settings.ExperimentalGcBarrier, SnapshotOn = settings.SnapshotOn, ProfilerLogLevel = settings.ProfilerLogLevel };
         try
         {
             options.Validate();
@@ -112,6 +116,19 @@ public sealed class RunCommand : Command<RunCommand.Settings>
             capturesSucceeded = Drain(workspace, console, target, cancellation, waitForArtifacts: options.NeedsProfiler);
         }
 
+        if (options.HasProcessFilter)
+        {
+            if (target.ProcessSelectionError is { } error)
+            {
+                Output.Error(console, $"{error}");
+                capturesSucceeded = false;
+            }
+            else if (target.IncludedProcessCount == 0)
+            {
+                Output.Warning(console, $"No profiled process matched [bold]{string.Join(", ", options.IncludeProcesses)}[/].");
+                capturesSucceeded = false;
+            }
+        }
         Summarize(console, workspace, session, target);
         return cancellation.IsCancellationRequested || !capturesSucceeded ? 1 : 0;
     }
