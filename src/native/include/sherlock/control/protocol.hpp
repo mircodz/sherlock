@@ -10,19 +10,15 @@
 #include <string_view>
 #include <vector>
 
-// Wire framing + message helpers for the sl <-> profiler control channel.
-//
 // A message is a 4-byte little-endian length followed by a UTF-8 payload. The payload
 // is tab-separated fields; the first field is the verb:
 //   HELLO \t <version> \t <comma,separated,features> \t <pid>   profiler -> sl on connect
 //   REQ   \t <id> \t <command> [\t args...]                     sl -> profiler
 //   RES   \t <id> \t ok|err    [\t detail]                      profiler -> sl
 //   EVENT \t <name> [\t args...]                                profiler -> sl (unsolicited)
-//
 namespace Sherlock::control {
 
-/// Control command verbs (payload of a REQ frame). Mirrored on the C# side in
-/// ControlCommands so both ends agree; keep the two in sync.
+// Keep REQ verbs in sync with C# ControlCommands.
 namespace commands {
 inline constexpr std::string_view kPing = "ping";
 inline constexpr std::string_view kEmitCorrelation = "emit-correlation";
@@ -31,14 +27,14 @@ inline constexpr std::string_view kArmTrigger = "arm-trigger";
 inline constexpr std::string_view kGcCount = "gc-count";
 inline constexpr std::string_view kHeapSize = "heap-size";
 
-// EXPERIMENTAL: snapshot correlation while GarbageCollectionFinished keeps the heap still.
+// Snapshot correlation while GarbageCollectionFinished keeps the heap still.
 inline constexpr std::string_view kBeginCoherentCapture = "begin-coherent-capture";
 inline constexpr std::string_view kCompleteCoherentCapture = "complete-coherent-capture";
 inline constexpr std::string_view kAbortCoherentCapture = "abort-coherent-capture";
 inline constexpr std::string_view kReleaseExitCapture = "release-exit-capture";
 } // namespace commands
 
-/// Event names pushed in an EVENT frame. Mirrored on the C# side in ControlEvents.
+// Keep EVENT names in sync with C# ControlEvents.
 namespace events {
 inline constexpr std::string_view kSnapshotTrigger = "snapshot-trigger";
 
@@ -47,7 +43,6 @@ inline constexpr std::string_view kCoherentCaptureFailed = "coherent-capture-fai
 inline constexpr std::string_view kExitCaptureReady = "exit-capture-ready";
 } // namespace events
 
-/// Prepends the 4-byte little-endian length to a payload.
 [[nodiscard]] inline std::string frame(std::string_view payload) {
     const auto len = static_cast<std::uint32_t>(payload.size());
     std::string out;
@@ -60,8 +55,7 @@ inline constexpr std::string_view kExitCaptureReady = "exit-capture-ready";
     return out;
 }
 
-/// Returns the payload of the next complete frame, consuming it from `buffer`. Returns
-/// nullopt (leaving `buffer` intact) when it doesn't yet hold a full frame.
+// Consume one complete frame; incomplete input returns nullopt without changing buffer.
 [[nodiscard]] inline std::optional<std::string> tryReadFrame(std::string& buffer) {
     if (buffer.size() < 4) {
         return std::nullopt;
@@ -78,7 +72,7 @@ inline constexpr std::string_view kExitCaptureReady = "exit-capture-ready";
     return payload;
 }
 
-/// Splits a payload into tab-separated fields (views into `payload`, which must outlive  them). Always returns at least one field.
+// Views borrow payload. Always returns at least one field, including empty fields.
 [[nodiscard]] inline std::vector<std::string_view> splitFields(std::string_view payload) {
     std::vector<std::string_view> fields;
     std::size_t start = 0;
@@ -94,7 +88,6 @@ inline constexpr std::string_view kExitCaptureReady = "exit-capture-ready";
     return fields;
 }
 
-/// Joins fields with tabs.
 template <typename Range>
 [[nodiscard]] inline std::string joinFields(const Range& fields) {
     std::string out;
@@ -109,7 +102,7 @@ template <typename Range>
     return out;
 }
 
-/// Single-flight rendezvous between a GC callback and the control thread.
+// Single-flight rendezvous between a GC callback and the control thread.
 class CoherentCaptureBarrier {
 public:
     enum class State { Idle, Arming, Parked };
@@ -210,11 +203,11 @@ private:
     std::uint64_t gcCountAtReady_ = 0;
     bool released_ = false;
 
-    // Avoid a mutex on every GC when the experiment is unused.
+    // Avoid taking the mutex on GCs with no capture in flight.
     std::atomic<bool> active_{false};
 };
 
-/// Holds a normal entry-point return until the supervisor finishes capturing.
+// Holds a normal entry-point return until the supervisor finishes capturing.
 class ExitCaptureLatch {
 public:
     enum class WaitResult { Released, TimedOut };

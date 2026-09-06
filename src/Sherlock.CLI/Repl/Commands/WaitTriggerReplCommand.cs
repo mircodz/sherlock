@@ -5,7 +5,6 @@ using System.Linq;
 using System.Threading.Tasks;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
-using Sherlock.Core.Store;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -33,8 +32,7 @@ public sealed class WaitTriggerReplCommand : IReplCommand
             }
         }
 
-        bool anyLive = context.Workspace.Targets.Any(target => !target.HasExited);
-        if (!anyLive)
+        if (!context.Workspace.Targets.Any(target => !target.HasExited))
         {
             Output.Warning(context.Console, $"No live target to wait on.");
             return ReplResult.Failure;
@@ -52,19 +50,8 @@ public sealed class WaitTriggerReplCommand : IReplCommand
                     var result = ReplResult.Success;
                     foreach (TriggeredCaptureResult capture in caught)
                     {
-                        if (capture.Entry is { } entry)
+                        if (!Output.TriggeredCapture(context.Console, capture))
                         {
-                            string contents = entry.HasAllocations ? "heap + allocations" : "heap only";
-                            Output.Success(context.Console, $"[bold]{capture.Probe}[/] fired · snapshot [bold]{entry.Id}[/] [#808791]({contents})[/]");
-                            if (capture.Error is not null)
-                            {
-                                Output.Warning(context.Console, $"{capture.Error}");
-                                result |= ReplResult.Failure;
-                            }
-                        }
-                        else
-                        {
-                            Output.Error(context.Console, $"[bold]{capture.Probe}[/] fired but capture failed: {capture.Error}");
                             result |= ReplResult.Failure;
                         }
                     }

@@ -6,16 +6,9 @@ using Xunit;
 
 namespace Sherlock.Core.Tests.HeapModel;
 
-/// <summary>
-/// Ground-truth tests for the dominator + retained-size computation, over hand-built graphs whose exact
-/// dominators and retained sizes are known by construction. This pins ABSOLUTE correctness (not just
-/// "matches ClrMD") of <see cref="DominatorAnalyzer.Compute"/>, the pure graph math behind the
-/// biggest-memory-holders analysis.
-/// </summary>
 public sealed class DominatorGroundTruthTests
 {
-    // Builds a HeapGraph from an explicit edge list. Nodes are 0..n-1 with the given sizes; `roots` are
-    // the GC roots (successors of the synthetic root node n). Successor lists are kept in input order.
+    // Nodes are 0..n-1; node n is the synthetic root. Preserve successor input order.
     private static HeapGraph Build(uint[] sizes, int[] roots, params (int From, int To)[] edges)
     {
         int n = sizes.Length;
@@ -23,7 +16,6 @@ public sealed class DominatorGroundTruthTests
         for (int i = 0; i < n; i++) succ[i] = [];
         foreach ((int from, int to) in edges) succ[from].Add(to);
 
-        // CSR: objects 0..n-1, then the synthetic root (n), then the terminator → Offsets length n+2.
         var offsets = new int[n + 2];
         var edgeList = new List<int>();
         for (int i = 0; i < n; i++)
@@ -35,27 +27,19 @@ public sealed class DominatorGroundTruthTests
         edgeList.AddRange(roots);
         offsets[n + 1] = edgeList.Count;
 
-        // Addresses must be sorted + distinct; use a fixed stride so id == index and IndexOf works.
+        // A fixed stride keeps addresses sorted and distinct.
         var addresses = new ulong[n];
         for (int i = 0; i < n; i++) addresses[i] = 0x1000 + (ulong)i * 0x100;
 
         return new HeapGraph(addresses, sizes, offsets, edgeList.ToArray());
     }
 
-    // Convenience: retained size of object id `obj` from a computed result (results are RPO-indexed).
     private static ulong RetainedOf(DominatorAnalyzer.DominatorResult r, HeapGraph g, int obj)
     {
-        ulong addr = g.Addresses.Span[obj];
-        for (int rpo = 1; rpo < r.Address.Length; rpo++)
-            if (r.Address[rpo] == addr)
-            {
-                return r.Retained[rpo];
-            }
-
-        return 0;
+        int rpo = FindRpo(r, g, obj);
+        return rpo < 0 ? 0 : r.Retained[rpo];
     }
 
-    // The RPO index of object id `obj` in a computed result (results are RPO-indexed), or -1.
     private static int FindRpo(DominatorAnalyzer.DominatorResult r, HeapGraph g, int obj)
     {
         ulong addr = g.Addresses.Span[obj];

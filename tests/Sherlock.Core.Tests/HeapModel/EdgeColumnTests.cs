@@ -4,12 +4,6 @@ using Xunit;
 
 namespace Sherlock.Core.Tests.HeapModel;
 
-/// <summary>
-/// Verifies <see cref="EdgeColumn"/> resolves global edge positions to the right chunk and returns
-/// correct spans across chunk boundaries, the primitive that lets the edge column exceed the ~2.1B
-/// single-array ceiling. Boundary math is off-by-one-prone, so these split a known sequence into
-/// several uneven chunks and assert every sub-run reads back identically to the flat array.
-/// </summary>
 public sealed class EdgeColumnTests
 {
     // 0,1,2,...,n-1 split into the given chunk sizes.
@@ -50,7 +44,6 @@ public sealed class EdgeColumnTests
         Assert.Equal(17, col.Count);
         Assert.Equal(4, col.ChunkCount);
 
-        // A run that sits fully inside every chunk, addressed by its global start.
         foreach ((int start, int len) in new[] { (0, 3), (3, 5), (8, 2), (10, 7), (4, 1), (10, 1), (16, 1) })
         {
             Assert.Equal(flat.AsSpan(start, len).ToArray(), col.Slice(start, len).ToArray());

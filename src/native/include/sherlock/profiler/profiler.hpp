@@ -6,7 +6,6 @@
 #include <string>
 #include <thread>
 
-// CLR Profiling headers - profilercommon.h handles OS detection automatically
 #include "profilercommon.h"
 #include "sherlock/common/logger.hpp"
 #include "sherlock/control/channel.hpp"
@@ -34,10 +33,9 @@ public:
     STDMETHOD(InitializeForAttach)(IUnknown* pICorProfilerInfoUnk, void* pvClientData, UINT cbClientData) override;
     STDMETHOD(Shutdown)() override;
 
-    // The one callback we care about
     STDMETHOD(ObjectAllocated)(ObjectID objectId, ClassID classId) override;
 
-    // Everything else: no-op stubs required by the interface.
+    // Remaining CLR callbacks, including required no-op implementations.
     STDMETHOD(AppDomainCreationStarted)(AppDomainID appDomainId) override;
     STDMETHOD(AppDomainCreationFinished)(AppDomainID appDomainId, HRESULT hrStatus) override;
     STDMETHOD(AppDomainShutdownStarted)(AppDomainID appDomainId) override;
@@ -144,26 +142,21 @@ private:
 
     std::unique_ptr<ProbeManager> probes;      // call: triggers via ReJIT
     std::unique_ptr<SnapshotTriggers> triggers; // alloc:/gc:/throw: triggers via callbacks
-    // Highest generation condemned by the in-flight GC. Written in GarbageCollectionStarted and read
-    // in GarbageCollectionFinished + the control thread's heap-size handler; under Server GC these run
-    // on different threads, so it must be atomic to avoid a torn/stale read.
-    std::atomic<int> maxGenCollected{0};        // set in GarbageCollectionStarted
+    // Server GC may start and finish on different threads.
+    std::atomic<int> maxGenCollected{0};
     std::atomic<std::uint64_t> gcCount{0};      // GCs seen — for snapshot drift detection
 
     bool correlate = false;           // SHERLOCK_CORRELATE: track live objects for snapshot join
     std::string correlationPath;
 
-    // Per-thread shadow stack maintained via IL instrumentation (ReJIT); read in ObjectAllocated to
-    // attribute each allocation to its call stack (O(1) per alloc). Always on — the only provenance source.
+    // ReJIT shadow stacks are the sole allocation-provenance source.
     std::unique_ptr<ShadowStackInstrumenter> shadowInstr;
 
-    // sl <-> profiler control channel (SHERLOCK_CONTROL_SOCKET). Handles on-demand
-    // requests (emit-correlation, flush-allocations, arm-trigger) and pushes events.
+    // SHERLOCK_CONTROL_SOCKET carries requests and unsolicited events.
     std::unique_ptr<control::ControlChannel> control;
     control::Reply handleControl(std::string_view cmd, std::span<const std::string_view> args);
 
-    // Parse & arm one "kind:arg" snapshot trigger (call/alloc/gc/throw). Returns false
-    // for an unknown kind or (live call) an unresolved method. `live` = from the REPL.
+    // False for unknown kinds or unresolved live call triggers.
     bool armTrigger(const std::string& spec, bool live);
     void fireTrigger(const std::string& display) noexcept; // emit a snapshot-trigger event to sl
 
@@ -180,8 +173,8 @@ private:
     control::CoherentCaptureBarrier coherentCapture_;
     std::thread coherentForceGcThread_;
     std::atomic<bool> coherentForceGcRunning_{false};
-    void runCoherentForceGc(std::string token) noexcept; // dedicated thread body: calls ForceGC
-    void handleCoherentCaptureGc() noexcept;             // called from GarbageCollectionFinished
+    void runCoherentForceGc(std::string token) noexcept;
+    void handleCoherentCaptureGc() noexcept; // GarbageCollectionFinished, after endGc()
 };
 
 } // namespace Sherlock

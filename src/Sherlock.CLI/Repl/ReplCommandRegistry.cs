@@ -30,7 +30,6 @@ public sealed class ReplCommandRegistry
     public IReplCommand? Resolve(string name) =>
         _byName.GetValueOrDefault(name);
 
-    /// <summary>The default command set Sherlock ships with.</summary>
     public static ReplCommandRegistry CreateDefault(ReplHistory history)
     {
         var commands = new List<IReplCommand>
@@ -71,7 +70,7 @@ public sealed class ReplCommandRegistry
             new SourceReplCommand(),
             new HistoryReplCommand(history),
         };
-        // `help` lists every command including itself, so hand it a live view.
+        // Include help in its own command list.
         commands.Add(new HelpReplCommand(() => commands));
         return new ReplCommandRegistry(commands);
     }

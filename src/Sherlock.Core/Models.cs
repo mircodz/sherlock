@@ -26,7 +26,6 @@ public sealed record HeapTypeStat(
     public ulong AverageSize => Count == 0 ? 0 : TotalSize / (ulong)Count;
 }
 
-/// <summary>A single managed object instance located on the heap.</summary>
 public sealed record ObjectInstance(
     ulong Address,
     string TypeName,
@@ -46,8 +45,7 @@ public sealed record FieldValue(
     string Value,
     int Offset);
 
-/// <summary>Full detail of one object. Exactly one shape is populated: a string value,
-/// an enumerable's elements, or instance fields.</summary>
+/// <summary>A bounded object preview: string contents, collection elements, or instance fields.</summary>
 public sealed record ObjectDetail(
     ulong Address,
     string TypeName,
@@ -75,26 +73,22 @@ public sealed record ThreadInfo(
     string? State,
     IReadOnlyList<StackFrameInfo> StackTrace);
 
-/// <summary>A single managed stack frame.</summary>
 public sealed record StackFrameInfo(
     ulong InstructionPointer,
     string Description);
 
-/// <summary>A loaded managed module/assembly.</summary>
 public sealed record ModuleInfo(
     string Name,
     ulong ImageBase,
     ulong Size,
     bool IsDynamic);
 
-/// <summary>A single GC heap segment.</summary>
 public sealed record SegmentInfo(
     ulong Start,
     ulong End,
     ulong Length,
     string Kind);
 
-/// <summary>A managed exception object found in the dump.</summary>
 public sealed record ExceptionInfo(
     ulong Address,
     string TypeName,
@@ -115,8 +109,7 @@ public sealed record FinalizableTypeStat(
     long Count,
     ulong TotalBytes);
 
-/// <summary>Objects still registered for finalization: a finalizer that was never suppressed,
-/// usually a missing <c>Dispose()</c> (which would call GC.SuppressFinalize).</summary>
+/// <summary>Totals for objects still registered for finalization.</summary>
 public sealed record FinalizerReport(
     long TotalObjects,
     ulong TotalBytes,
@@ -127,8 +120,7 @@ public sealed record HandlerTarget(
     string TypeName,
     int Count);
 
-/// <summary>A delegate with an invocation list large enough to suspect an event-handler leak:
-/// a long-lived event pinning subscribers that never unsubscribed (<c>-=</c>).</summary>
+/// <summary>A large delegate invocation list and the subscriber types it retains.</summary>
 public sealed record EventSubscription(
     ulong DelegateAddress,
     string DelegateType,

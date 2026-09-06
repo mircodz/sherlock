@@ -6,11 +6,7 @@ using Sherlock.Core.Profiling;
 
 namespace Sherlock.CLI.Export;
 
-/// <summary>
-/// The allocation profile as a pprof-style call graph: methods are boxes shaded by the bytes flowing
-/// through them (cum, including callees) and sized by the bytes allocated directly there (flat);
-/// edges are caller->callee, weighted by the bytes on that path. Same model as <c>go tool pprof -web</c>.
-/// </summary>
+/// <summary>Call graph with inclusive-byte colors, self-byte sizes, and weighted caller-to-callee edges.</summary>
 public static class AllocationDot
 {
     public static string Write(AllocationProfile profile, double nodeFraction = 0.01, int maxNodes = 60)
@@ -45,7 +41,7 @@ public static class AllocationDot
             }
         }
 
-        // Keep the heaviest methods above the cutoff; drop edges whose endpoints didn't survive.
+        // Prune nodes and their incident edges together.
         long cutoff = (long)(total * nodeFraction);
         HashSet<string> kept = cum
             .Where(kv => kv.Value >= cutoff)
@@ -75,7 +71,6 @@ public static class AllocationDot
         return dot.Render();
     }
 
-    /// <summary>pprof-style label: the method, its self (flat) bytes, and its cumulative bytes when they differ.</summary>
     private static string[] Label(string method, long flat, long cum, long total)
     {
         string name = ShortMethod(method);
@@ -90,10 +85,9 @@ public static class AllocationDot
         return [name, $"cum {ByteSize.Format(cum)} ({100.0 * cum / total:0.0}%)"];
     }
 
-    /// <summary>A stable, DOT-safe node id from a method name.</summary>
+    /// <summary>DOT-safe ID within this process.</summary>
     private static string Id(string method) => $"n{(uint)StringComparer.Ordinal.GetHashCode(method):x}";
 
-    /// <summary>The last <c>Type.Method</c> of a fully-qualified frame.</summary>
     private static string ShortMethod(string frame)
     {
         string[] parts = frame.Split('.');

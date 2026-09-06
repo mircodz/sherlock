@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Threading;
 using Cellar.Layout;
 using Cellar.Primitives;
 using Cellar.Text;

@@ -1,16 +1,5 @@
-// Coverage for the sl <-> profiler control channel (protocol.hpp framing plus the
-// ControlChannel transport in channel.cpp).
-//
-// The framing/field tests run on every platform: they exercise the exact wire format
-// (frame/tryReadFrame/splitFields/joinFields) that both HELLO/REQ/RES/EVENT messages use.
-//
-// The transport round-trip test drives a real ControlChannel against a POSIX AF_UNIX
-// listening socket standing in for sl, and only builds on Unix (`#ifndef _WIN32`) since it
-// uses raw socket()/bind()/accept() to play the server role. ControlChannel::connect/serve/
-// sendAll/stop on Windows use Winsock's AF_UNIX support (WSAStartup, afunix.h's sockaddr_un,
-// send/recv/shutdown/closesocket) instead of the POSIX calls exercised here; that path -
-// including WSAStartup/WSACleanup refcounting and Winsock error formatting - still needs a
-// manual run on a Windows runner (CI already builds+ctests this target for win-x64).
+// Framing tests run everywhere. Transport tests use a POSIX AF_UNIX server;
+// they do not exercise the Windows Winsock path.
 
 #include "sherlock/control/channel.hpp"
 
@@ -97,8 +86,7 @@ TEST(ControlProtocol, SplitFieldsAlwaysReturnsAtLeastOneField) {
 
 namespace {
 
-// A minimal blocking AF_UNIX server standing in for sl: accepts one connection and lets the
-// test read/write framed messages on it directly.
+// Blocking AF_UNIX server standing in for sl.
 class FakeServer {
 public:
     explicit FakeServer(const std::filesystem::path& path) : path_(path) {
@@ -153,7 +141,7 @@ public:
         }
     }
 
-    // Returns true once recv() observes an orderly close (ControlChannel::stop() shutting down).
+    // Wait for an orderly peer shutdown.
     bool waitForClose(std::chrono::milliseconds timeout) {
         auto deadline = std::chrono::steady_clock::now() + timeout;
         char c;
@@ -172,9 +160,7 @@ private:
     int clientFd_ = -1;
 };
 
-// sockaddr_un::sun_path is a short fixed buffer (104 bytes on macOS, 108 on Linux); a path under
-// std::filesystem::temp_directory_path() can easily overflow that in a CI sandbox with a long
-// TMPDIR, so use a dedicated short-named directory under /tmp instead.
+// Keep paths within sun_path (104 bytes on macOS, 108 on Linux), independent of TMPDIR.
 std::filesystem::path testSocketDir() {
     static std::filesystem::path dir = [] {
         char tmpl[] = "/tmp/sl-ctlXXXXXX";

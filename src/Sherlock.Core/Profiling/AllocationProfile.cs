@@ -22,9 +22,7 @@ public sealed record AllocationSite(
     public string Method => Frames.Count > 0 ? Frames[^1] : "<no managed frame>";
 }
 
-/// <summary>What one allocated type accounts for across a profile: churn (allocated), what stuck
-/// (survived), and how many distinct call sites produce it. A survivor type from one hot site is a
-/// leak's smoking gun.</summary>
+/// <summary>Allocated and first-GC-surviving bytes for a type, plus its allocation-site count.</summary>
 public sealed record AllocationTypeStat(
     string TypeName, long AllocBytes, long AllocCount, long SurvivedBytes, int SiteCount);
 
@@ -82,13 +80,11 @@ public sealed record AllocationProfile(IReadOnlyList<AllocationSite> Sites)
             .OrderByDescending(t => t.AllocBytes)
             .ToList();
 
-    /// <summary>The subset of the profile that allocated <paramref name="typeName"/>. Feed it to
-    /// <see cref="AllocationTreeNode.Build"/> for that type's allocation call tree.</summary>
+    /// <summary>Sites allocating exactly <paramref name="typeName"/>.</summary>
     public AllocationProfile OfType(string typeName) =>
         new(Sites.Where(s => s.TypeName == typeName).ToList());
 
-    /// <summary>The subset of sites whose call stack passes through <paramref name="method"/>, its
-    /// inclusive allocation. <c>.ByType()</c> on this is what a method allocates, by type.</summary>
+    /// <summary>Sites whose call stack contains <paramref name="method"/>.</summary>
     public AllocationProfile Through(string method) =>
         new(Sites.Where(s => s.Frames.Contains(method)).ToList());
 }

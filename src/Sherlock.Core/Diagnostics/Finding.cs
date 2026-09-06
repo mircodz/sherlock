@@ -9,9 +9,7 @@ public enum FindingSeverity
 }
 
 /// <summary>
-/// One issue the doctor spotted. Title and Detail are self-contained and plain (no markup) so the
-/// REPL can style them and an agent can read them. <see cref="NextCommand"/> points at how to drill
-/// in; the doctor names the next command, it doesn't run it.
+/// A diagnostic with plain-text Title and Detail. NextCommand suggests further inspection without running it.
 /// </summary>
 public sealed record Finding(
     FindingSeverity Severity,

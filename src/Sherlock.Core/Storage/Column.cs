@@ -6,10 +6,8 @@ using System.Runtime.InteropServices;
 namespace Sherlock.Core.Storage;
 
 /// <summary>
-/// A long-indexed, memory-mapped column of fixed-width <typeparamref name="T"/> records: one on-disk
-/// section or many (a large column is written as several same-typed sections). Callers index by
-/// <c>long</c> and never see mmap views, chunk boundaries, or the ~2&nbsp;GB single-section ceiling;
-/// access is zero-copy.
+/// A long-indexed column of fixed-width records across one or more mapped sections.
+/// The owning mmap must remain alive; records crossing view boundaries are copied.
 /// </summary>
 public sealed unsafe class Column<T> where T : unmanaged
 {
@@ -44,8 +42,7 @@ public sealed unsafe class Column<T> where T : unmanaged
         Length = 0;
     }
 
-    /// <summary>Builds a column from its physical sections in global order (byte offset + element count
-    /// each). Any partition works; indexing relies only on the running totals.</summary>
+    /// <summary>Builds a column from ordered sections, each described by byte offset and element count.</summary>
     public Column(ChunkedMmap mmap, ReadOnlySpan<(long byteOffset, long count)> sections)
     {
         _mmap = mmap;
@@ -59,7 +56,6 @@ public sealed unsafe class Column<T> where T : unmanaged
         Length = running;
     }
 
-    /// <summary>Random access to element <paramref name="i"/> (binary search / point lookups).</summary>
     public T this[long i]
     {
         get
@@ -165,7 +161,6 @@ public sealed unsafe class Column<T> where T : unmanaged
         return copy;
     }
 
-    // Binary search the (small) section list for the one owning global index i.
     private Seg SegmentOf(long i)
     {
         int lo = 0, hi = _segs.Length - 1;

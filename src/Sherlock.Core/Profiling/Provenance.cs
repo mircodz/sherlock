@@ -34,8 +34,7 @@ public static class ProfileFormat
 }
 
 /// <summary>
-/// Builds a provenance container: one shared interned stack table backing both the allocation
-/// profile and per-object correlation. Managed mirror of the native writer; used for tests and tooling.
+/// Builds allocation and correlation sections sharing one interned stack table, matching the native writer.
 /// </summary>
 public sealed class ProvenanceWriter
 {
@@ -81,18 +80,15 @@ public sealed class ProvenanceWriter
         }
         if (_corr.Count > 0)
         {
-            // Sort by address so the reader can binary-search. Chunked to match the native writer and
-            // stay under the reader's per-section cap: one 16-byte record per live object overflows a
-            // single section past ~134M objects.
+            // Binary search requires address order; chunking matches the native writer.
             _corr.Sort(static (a, b) => a.Address.CompareTo(b.Address));
             w.AddChunkedRecords(SectionType.Correlation, ProfileFormat.Version, CollectionsMarshal.AsSpan(_corr));
         }
     }
 }
 
-/// <summary>Read-only view over a provenance container: allocation + correlation columns, plus the
-/// stack table to resolve their ids. The correlation column may span many chunk sections and exceed
-/// 2&nbsp;GB, and is <c>long</c>-indexed, so <c>whoalloc</c> works past ~134M live objects.</summary>
+/// <summary>Allocation and long-indexed correlation columns with shared stack metadata.
+/// The supplied slab must remain open while reading its columns.</summary>
 public sealed class ProvenanceReader
 {
     private readonly Column<CorrelationRecord> _corr;

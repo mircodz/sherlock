@@ -10,25 +10,15 @@ using Microsoft.Diagnostics.Runtime;
 namespace Sherlock.Core.HeapModel;
 
 /// <summary>
-/// Builds a <see cref="HeapGraph"/> from a dump, bypassing ClrMD's per-object cost. ClrMD's DAC
-/// (mscordaccore) takes a giant lock and drives <c>EnumerateObjects</c>/<c>EnumerateReferences</c> at
-/// ~1-2M edges/s single-threaded; we use ClrMD only for the cheap O(types + segments) metadata (each
-/// type's size layout + GC descriptor, segment ranges, alloc-context gaps, roots) and do the
-/// O(objects + edges) walk ourselves over raw memory:
-/// <list type="bullet">
-/// <item>the object walk mirrors <c>ClrHeap.EnumerateObjects</c> (method-table read, size from the
-/// cached type, alignment, allocation-context skip) but reads raw bytes via <see cref="IMemoryReader"/>;</item>
-/// <item>the reference walk applies each type's cached <see cref="GCDesc"/> to the raw object bytes, in
-/// parallel across object ranges. Raw reads are not under the DAC lock (the reader reports itself
-/// thread-safe), so this scales across cores.</item>
-/// </list>
+/// Builds a graph from raw dump memory using ClrMD type layouts, GC descriptors, segments, allocation
+/// contexts and roots. The object walk preserves ClrMD sizing and alignment; reference extraction
+/// runs in parallel only when the memory reader is thread-safe.
 /// </summary>
 public sealed class HeapGraphExtractor(Snapshot snapshot)
 {
     private const int MaxWorkers = 16;
 
-    // Edges per chunk. 1<<27 ints = 512 MB, under the int.MaxValue element / ~2 GB byte cap on a single
-    // array and slab section, so a chunk always fits both.
+    // 512 MiB of int edges, within managed array and byte-span limits.
     private const long MaxEdgesPerChunk = 1L << 27;
 
     public HeapGraph Extract(CancellationToken cancellationToken = default)
@@ -40,7 +30,6 @@ public sealed class HeapGraphExtractor(Snapshot snapshot)
 
         static ulong Align(ulong size) => (size + 7) & ~7UL; // object alignment is 8 on 64-bit
 
-        // --- Metadata (ClrMD, once): allocation-context gaps, address-ordered segments, per-type layout. ---
         var allocContexts = new Dictionary<ulong, ulong>();
         foreach (MemoryRange r in heap.EnumerateAllocationContexts())
         {
@@ -54,7 +43,7 @@ public sealed class HeapGraphExtractor(Snapshot snapshot)
 
         var types = new TypeTable(heap);
 
-        // --- 1. Object walk (raw): dense ids in address order, shallow sizes, and each object's type. ---
+        // Assign dense ids in address order.
         var addressList = new List<ulong>();
         var sizeList = new List<uint>();
         var typeList = new List<int>();
@@ -97,27 +86,24 @@ public sealed class HeapGraphExtractor(Snapshot snapshot)
                     size = minObjSize;
                 }
 
-                // Reported size matches ClrMD's GetObjectSize: clamped, NOT aligned. Alignment only
-                // advances the walk to the next object, it isn't stored.
-                ulong reportedSize = size;
-
+                // Store ClrMD's clamped, unaligned size; alignment only advances the walk.
                 if (!t.IsFree)
                 {
-                    if (reportedSize > uint.MaxValue)
+                    if (size > uint.MaxValue)
                     {
                         throw new NotSupportedException($"Object 0x{obj:x} is larger than the 4 GB graph-size limit.");
                     }
-                    if (t.HasPointers && reportedSize > int.MaxValue)
+                    if (t.HasPointers && size > int.MaxValue)
                     {
                         throw new NotSupportedException($"Object 0x{obj:x} is too large for reference extraction.");
                     }
                     addressList.Add(obj);
-                    sizeList.Add((uint)reportedSize);
+                    sizeList.Add((uint)size);
                     typeList.Add(typeIndex);
                 }
                 else
                 {
-                    freeBytes += reportedSize; // free space (fragmentation), not a real object
+                    freeBytes += size;
                     freeCount++;
                 }
 
@@ -139,7 +125,7 @@ public sealed class HeapGraphExtractor(Snapshot snapshot)
         int n = addresses.Length;
         var index = new AddressIndex(addresses);
 
-        // --- 2. Reference walk (raw, parallel): apply each type's GCDesc to raw object bytes. ---
+        // Apply cached GC descriptors to raw object bytes.
         int workers = snapshot.DataTarget.DataReader.IsThreadSafe
             ? Math.Clamp(Environment.ProcessorCount, 1, MaxWorkers)
             : 1;
@@ -158,7 +144,10 @@ public sealed class HeapGraphExtractor(Snapshot snapshot)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     ref readonly TypeInfo t = ref types[typeOf[i]];
-                    if (!t.HasPointers) { degrees[i - lo] = 0; continue; }
+                    if (!t.HasPointers)
+                    {
+                        continue;
+                    }
 
                     uint size = sizes[i];
                     if (size > buffer.Length)
@@ -199,7 +188,7 @@ public sealed class HeapGraphExtractor(Snapshot snapshot)
             blockEdges[w] = edges.ToArray();
         });
 
-        // --- 3. Assemble CSR (+ the synthetic root -> GC roots). ---
+        // Preserve every root record, but deduplicate the synthetic root's successor ids.
         var roots = new List<int>();
         var rootRecords = new List<HeapRootRecord>();
         var rootSeen = new HashSet<int>();
@@ -237,8 +226,7 @@ public sealed class HeapGraphExtractor(Snapshot snapshot)
         offsets[n] = edge; // synthetic root's edges start here
         offsets[n + 1] = edge + roots.Count;
 
-        // Edge column, node-aligned into ≤~1 GB chunks so it can exceed the 2.1B single-array ceiling.
-        // Segments: per-worker edge blocks in id order, then the synthetic root's GC-root edges.
+        // Chunk at node boundaries: worker edges in id order, then synthetic-root edges.
         var edgeSegments = new List<ReadOnlyMemory<int>>(workers + 1);
         foreach (int[] e in blockEdges) edgeSegments.Add(e);
         edgeSegments.Add(roots.ToArray());
@@ -247,8 +235,7 @@ public sealed class HeapGraphExtractor(Snapshot snapshot)
         return new HeapGraph(addresses, sizes, offsets, edges, typeOf, types.Names(), freeBytes, freeCount, rootRecords.ToArray());
     }
 
-    /// <summary>Cached per-type layout keyed by method table: size-formula inputs, type name, and the
-    /// GC descriptor used to find reference fields. Resolved from ClrMD once per distinct type.</summary>
+    // Resolved from ClrMD once per method table.
     private readonly struct TypeInfo(int baseSize, int componentSize, bool isString, bool isFree, GCDesc gcDesc, bool hasPointers, string name)
     {
         public readonly int BaseSize = baseSize;
@@ -267,7 +254,6 @@ public sealed class HeapGraphExtractor(Snapshot snapshot)
 
         public ref readonly TypeInfo this[int index] => ref System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_types)[index];
 
-        /// <summary>The distinct type names, indexed the same as the per-object type ids (<see cref="IndexOf"/>).</summary>
         public string[] Names()
         {
             var names = new string[_types.Count];

@@ -61,7 +61,7 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
             return 1;
         }
 
-        string? sourceName = NameOf(pid);
+        string? sourceName = ProcessLocator.NameOf(pid);
 
         string path;
         try
@@ -75,7 +75,7 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
             return 1;
         }
 
-        // Catalog it. Own (move in) temp dumps; reference a user-chosen path.
+        // Own temporary dumps; reference user-chosen paths.
         using Workspace workspace = ReplHost.CreateWorkspace();
         (Session session, SnapshotEntry entry) = workspace.Store.RegisterStandalone(
             SessionKind.Collect,
@@ -96,12 +96,6 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
 
         console.MarkupLineInterpolated($"    [#808791]next: sl · load {entry.Id}[/]");
         return 0;
-    }
-
-    private static string? NameOf(int pid)
-    {
-        try { return System.Diagnostics.Process.GetProcessById(pid).ProcessName; }
-        catch { return null; }
     }
 
     private static int ListProcesses(IAnsiConsole console)

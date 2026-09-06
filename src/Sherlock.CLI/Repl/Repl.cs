@@ -8,21 +8,19 @@ using Spectre.Console;
 
 namespace Sherlock.CLI.Repl;
 
-/// <summary>The interactive read-eval-print loop, holding one open session and dispatching typed lines.</summary>
+/// <summary>Dispatches interactive and batched commands against a workspace.</summary>
 public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAnsiConsole console)
 {
     private static readonly string[] ExitWords = ["exit", "quit", "q"];
 
     private ReplContext? _context;
-    private Workspace? _workspace;
     private string? _lastCommand;
 
-    private string Prompt => _workspace?.CurrentName is { } name ? $"sl[{name}]> " : "sl> ";
+    private string Prompt => _context?.Workspace.CurrentName is { } name ? $"sl[{name}]> " : "sl> ";
 
-    /// <summary>Runs commands non-interactively, then returns. Used by <c>--exec</c> and scripts.</summary>
+    /// <summary>Continues after failures; quit and cancellation stop the batch.</summary>
     public ReplResult RunBatch(Workspace workspace, IEnumerable<string> lines, CancellationToken cancellation = default)
     {
-        _workspace = workspace;
         _context = new ReplContext(workspace, console, RunLine, cancellation);
         var result = ReplResult.Success;
         try
@@ -50,13 +48,11 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
         return cancellation.IsCancellationRequested ? result | ReplResult.Cancelled : result;
     }
 
-    /// <summary>Runs the interactive loop until the user exits or input ends.</summary>
     public ReplResult RunInteractive(Workspace workspace, CancellationToken cancellation = default) =>
         RunInteractive(workspace, prompt => LineEditor.ReadLine(prompt, history, console, cancellation), cancellation);
 
     internal ReplResult RunInteractive(Workspace workspace, Func<string, string?> readLine, CancellationToken cancellation = default)
     {
-        _workspace = workspace;
         _context = new ReplContext(workspace, console, RunLine, cancellation);
         PrintBanner(workspace);
         var result = ReplResult.Success;
@@ -104,7 +100,7 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
 
             line = line.Trim();
 
-            // Empty Enter repeats the previous command (gdb-style).
+            // Empty input repeats the previous command.
             if (line.Length == 0)
             {
                 if (_lastCommand is null)
@@ -130,7 +126,6 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
         }
     }
 
-    /// <summary>Dispatches one input line without losing failures or cancellation.</summary>
     private ReplResult RunLine(string line)
     {
         IReplCommand? command = null;
@@ -176,32 +171,21 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
 
     private ReplResult PollTargets()
     {
-        if (_workspace is null)
+        if (_context is null)
         {
             return ReplResult.Success;
         }
 
         var result = ReplResult.Success;
-        foreach (Core.Store.Session session in _workspace.PollExitedAllocationProfiles())
+        foreach (Core.Store.Session session in _context.Workspace.PollExitedAllocationProfiles())
         {
             Output.Success(console, $"Allocation profile captured for [bold]{session.Id}[/] [#808791]({session.Command})[/]");
         }
 
-        foreach (TriggeredCaptureResult capture in _workspace.PollTriggeredSnapshots())
+        foreach (TriggeredCaptureResult capture in _context.Workspace.PollTriggeredSnapshots())
         {
-            if (capture.Entry is { } entry)
+            if (!Output.TriggeredCapture(console, capture))
             {
-                string contents = entry.HasAllocations ? "heap + allocations" : "heap only";
-                Output.Success(console, $"[bold]{capture.Probe}[/] fired · snapshot [bold]{entry.Id}[/] [#808791]({contents})[/]");
-                if (capture.Error is not null)
-                {
-                    Output.Warning(console, $"{capture.Error}");
-                    result |= ReplResult.Failure;
-                }
-            }
-            else
-            {
-                Output.Error(console, $"[bold]{capture.Probe}[/] fired but capture failed: {capture.Error}");
                 result |= ReplResult.Failure;
             }
         }

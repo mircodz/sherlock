@@ -2,9 +2,7 @@
 
 namespace Sherlock::il {
 
-// ECMA-335 IL opcode operand lengths. Returns operand byte count for a 1-byte opcode, or -1 if the opcode
-// is unknown/unsupported (=> skip the method). Two-byte (0xFE-prefixed) opcodes are handled separately in
-// the decoder. 0x45 (switch) is variable and flagged by the caller.
+// ECMA-335 operand lengths; -1 means unsupported. The decoder handles switch separately.
 static int operandLen1(BYTE op) {
     switch (op) {
         // no operand
@@ -74,13 +72,10 @@ static int operandLen2(BYTE op2) {
     }
 }
 
-bool isRet(BYTE op) { return op == 0x2A; }
-bool isSwitch(BYTE op) { return op == 0x45; }
 // Short single-byte branches 0x2B..0x37 and leave.s 0xDE; long 0x38..0x44 and leave 0xDD.
-bool isShortBranch(BYTE op) { return (op >= 0x2B && op <= 0x37) || op == 0xDE; }
-bool isLongBranch(BYTE op) { return (op >= 0x38 && op <= 0x44) || op == 0xDD; }
-// Map a short branch opcode to its long equivalent (all branches become 4-byte, avoiding iterative
-// offset convergence).
+static bool isShortBranch(BYTE op) { return (op >= 0x2B && op <= 0x37) || op == 0xDE; }
+static bool isLongBranch(BYTE op) { return (op >= 0x38 && op <= 0x44) || op == 0xDD; }
+// Widen all branches to avoid iterative offset convergence.
 BYTE shortToLong(BYTE op) {
     if (op == 0xDE) return 0xDD;         // leave.s -> leave
     return op + 0x0D;                    // br.s(0x2B)->br(0x38), cond .s -> long
@@ -136,12 +131,10 @@ bool decodeBody(const BYTE* code, std::uint32_t codeSize, std::vector<Insn>& ins
             BYTE b2 = code[o + 1];
             int ol = operandLen2(b2);
             if (ol < 0) return false;
-            // tail. (0x14) and localloc (0x0F): a tail call must be immediately followed by ret (our
-            // ret->leave rewrite would break it); localloc requires an empty eval stack and can't live
-            // inside a try. Leave such methods un-instrumented.
+            // tail. requires an immediate ret; localloc cannot live inside a try.
             if (b2 == 0x14 || b2 == 0x0F) unsafeToWrap = true;
-            in.twoByte = true; in.op0 = 0xFE; in.op1 = b2; in.len = 2 + ol;
-        } else if (isSwitch(b)) {
+            in.op0 = 0xFE; in.len = 2 + ol;
+        } else if (b == 0x45) {
             if (o + 5 > codeSize) return false;
             std::uint32_t n = rd32(code + o + 1);
             std::uint32_t base = o + 5 + n * 4;
@@ -156,7 +149,7 @@ bool decodeBody(const BYTE* code, std::uint32_t codeSize, std::vector<Insn>& ins
             if (ol < 0) return false;
             if (b == 0x27) unsafeToWrap = true; // jmp: method-exit transfer, illegal in a try
             in.op0 = b; in.len = 1 + ol;
-            in.ret = isRet(b);
+            in.ret = b == 0x2A;
             if (isShortBranch(b)) {
                 in.shortBr = true;
                 std::int8_t rel = static_cast<std::int8_t>(code[o + 1]);

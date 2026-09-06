@@ -7,35 +7,29 @@ using Spectre.Console;
 
 namespace Sherlock.CLI.Repl;
 
-/// <summary>
-/// A minimal interactive line reader: inline editing plus Up/Down history recall.
-/// Falls back to <see cref="Console.ReadLine"/> when input is redirected or raw-mode is unavailable.
-/// </summary>
+/// <summary>Line editing and history, with a line-based fallback when raw input is unavailable.</summary>
 public static class LineEditor
 {
     private const string Esc = "";
 
-    /// <param name="prompt">Plain-text prompt (no markup; its width drives cursor math).</param>
+    /// <param name="prompt">Plain text; its length drives cursor placement.</param>
     /// <returns>The entered line, or null at end-of-input.</returns>
     public static string? ReadLine(string prompt, ReplHistory history, IAnsiConsole console, CancellationToken cancellation = default)
     {
         cancellation.ThrowIfCancellationRequested();
-        if (Console.IsInputRedirected)
+        if (!Console.IsInputRedirected)
         {
-            Console.Write(prompt);
-            return Console.In.ReadLineAsync(cancellation).AsTask().GetAwaiter().GetResult();
+            try
+            {
+                return ReadLineRaw(prompt, history, console, cancellation);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or IOException)
+            {
+                // Hosts without raw console support use line-based input below.
+            }
         }
-
-        try
-        {
-            return ReadLineRaw(prompt, history, console, cancellation);
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or IOException)
-        {
-            // No real console (e.g. some CI shells); degrade gracefully.
-            Console.Write(prompt);
-            return Console.In.ReadLineAsync(cancellation).AsTask().GetAwaiter().GetResult();
-        }
+        Console.Write(prompt);
+        return Console.In.ReadLineAsync(cancellation).AsTask().GetAwaiter().GetResult();
     }
 
     private static string? ReadLineRaw(string prompt, ReplHistory history, IAnsiConsole console, CancellationToken cancellation)
@@ -43,9 +37,9 @@ public static class LineEditor
         var buffer = new StringBuilder();
         int pos = 0;
         int historyIndex = history.Entries.Count; // one past the newest entry
-        string stash = string.Empty;              // the in-progress line while browsing history
+        string stash = string.Empty;
 
-        // History recall: move by `delta` entries, stashing the in-progress line first.
+        // Preserve the unfinished line while browsing history.
         void MoveHistory(int delta)
         {
             int next = historyIndex + delta;
@@ -56,12 +50,14 @@ public static class LineEditor
 
             if (historyIndex == history.Entries.Count)
             {
-                stash = buffer.ToString(); // remember the live line before browsing away
+                stash = buffer.ToString();
             }
 
             historyIndex = next;
             string text = historyIndex == history.Entries.Count ? stash : history.Entries[historyIndex];
-            pos = Replace(buffer, text);
+            buffer.Clear();
+            buffer.Append(text);
+            pos = buffer.Length;
             Render(console, prompt, buffer, pos);
         }
 
@@ -79,8 +75,7 @@ public static class LineEditor
             bool ctrl = key.Modifiers.HasFlag(ConsoleModifiers.Control);
             bool alt = key.Modifiers.HasFlag(ConsoleModifiers.Alt);
 
-            // Readline/emacs-style bindings (bash defaults): Ctrl+A/E, Ctrl+B/F, Ctrl+P/N,
-            // Ctrl+W/U/K kills, Ctrl+D EOF/delete, Ctrl+L clear, Alt+B/F word motion.
+            // Readline-style control keys.
             if (ctrl && !alt)
             {
                 switch (key.Key)
@@ -190,7 +185,7 @@ public static class LineEditor
         }
     }
 
-    /// <summary>Start of the word at or before <paramref name="pos"/> (skips trailing spaces, then the word).</summary>
+    /// <summary>Previous word boundary, skipping whitespace.</summary>
     private static int PrevWord(StringBuilder b, int pos)
     {
         int i = pos;
@@ -199,7 +194,7 @@ public static class LineEditor
         return i;
     }
 
-    /// <summary>End of the word at or after <paramref name="pos"/> (skips leading spaces, then the word).</summary>
+    /// <summary>Next word end, skipping leading whitespace.</summary>
     private static int NextWord(StringBuilder b, int pos)
     {
         int i = pos;
@@ -208,14 +203,6 @@ public static class LineEditor
         return i;
     }
 
-    private static int Replace(StringBuilder buffer, string text)
-    {
-        buffer.Clear();
-        buffer.Append(text);
-        return buffer.Length;
-    }
-
-    /// <summary>Repaints the current line and positions the cursor (ANSI).</summary>
     private static void Render(IAnsiConsole console, string prompt, StringBuilder buffer, int pos)
     {
         Console.Write($"{Esc}[2K\r");

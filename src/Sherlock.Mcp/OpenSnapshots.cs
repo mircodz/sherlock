@@ -6,16 +6,12 @@ using Sherlock.Core.Store;
 
 namespace Sherlock.Mcp;
 
-/// <summary>
-/// Caches open snapshots for the server's lifetime so repeated queries reuse the loaded dump.
-/// Queries are serialized: ClrMD (and the cached analyses) are not thread-safe.
-/// </summary>
+/// <summary>Owns server-lifetime snapshots; serializes queries because ClrMD and analysis caches are not thread-safe.</summary>
 public sealed class OpenSnapshots(SnapshotStore store) : IDisposable
 {
     private readonly Dictionary<string, Snapshot> _cache = [];
     private readonly Lock _gate = new();
 
-    /// <summary>Runs a query against a snapshot (opening + caching it on first use).</summary>
     public T Query<T>(string idOrLabel, Func<Snapshot, T> query)
     {
         lock (_gate)

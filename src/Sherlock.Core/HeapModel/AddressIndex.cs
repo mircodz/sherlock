@@ -2,11 +2,7 @@ using System;
 
 namespace Sherlock.Core.HeapModel;
 
-/// <summary>
-/// Resolves an object address to its dense id over a sorted address array in roughly O(1): buckets the
-/// address range, then binary-searches inside a bucket. Replaces a plain log2(N) search, which dominates
-/// when resolving tens of millions of reference targets during extraction.
-/// </summary>
+/// <summary>Resolves addresses to dense ids by bucketing a sorted address array, then binary-searching each bucket.</summary>
 public sealed class AddressIndex
 {
     private readonly ReadOnlyMemory<ulong> _addresses;

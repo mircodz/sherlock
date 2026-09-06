@@ -10,8 +10,7 @@ namespace Sherlock {
 
 namespace {
 
-// Narrow ASCII std::string -> null-terminated WCHAR buffer (metadata names are ASCII; this
-// sidesteps the L"" wchar_t-width mismatch on the PAL).
+// Widen ASCII probe specs without relying on the PAL's differing WCHAR/wchar_t widths.
 std::vector<WCHAR> widen(const std::string& s) {
     std::vector<WCHAR> w;
     w.reserve(s.size() + 1);
@@ -55,7 +54,7 @@ ProbeRegistry::Registration ProbeRegistry::registerMethod(
         if ((fired & previous) == previous) {
             state->active.store(false, std::memory_order_release);
             auto replacement =
-                std::make_unique<State>(this, module, token, std::move(display), combined);
+                std::make_unique<State>(this, std::move(display), combined);
             State* stable = replacement.get();
             states_.push_back(std::move(replacement));
             it->second = stable;
@@ -66,7 +65,7 @@ ProbeRegistry::Registration ProbeRegistry::registerMethod(
         return {{reinterpret_cast<std::uintptr_t>(state), combined}, combined != static_cast<ProbeEvents>(previous), false};
     }
 
-    auto state = std::make_unique<State>(this, module, token, std::move(display), events);
+    auto state = std::make_unique<State>(this, std::move(display), events);
     State* stable = state.get();
     states_.push_back(std::move(state));
     byMethod_.emplace(key, stable);
@@ -134,11 +133,6 @@ void ProbeRegistry::dispatch(std::uintptr_t cookie, ProbePhase phase) noexcept {
 ProbeManager::ProbeManager(ICorProfilerInfo10* info, Logger* logger)
     : info_(info), logger_(logger) {}
 
-bool ProbeManager::empty() const {
-    std::lock_guard lock(mutex_);
-    return specs_.empty();
-}
-
 void ProbeManager::configure(const std::string& spec, ProbeEvents events) {
     std::vector<Spec> parsed;
     std::size_t start = 0;
@@ -147,7 +141,6 @@ void ProbeManager::configure(const std::string& spec, ProbeEvents events) {
         std::string item = spec.substr(start, end == std::string::npos ? std::string::npos : end - start);
         start = (end == std::string::npos) ? spec.size() + 1 : end + 1;
 
-        // Trim whitespace.
         while (!item.empty() && (item.front() == ' ' || item.front() == '\t')) item.erase(item.begin());
         while (!item.empty() && (item.back() == ' ' || item.back() == '\t')) item.pop_back();
         if (item.empty())
@@ -216,8 +209,7 @@ ProbePlan ProbeManager::registerMethod(
     mdMethodDef token,
     std::string display,
     ProbeEvents events) {
-    return registry_.registerMethod(
-        moduleId, token, std::move(display), events).plan;
+    return registry_.registerMethod(moduleId, token, std::move(display), events).plan;
 }
 
 std::size_t ProbeManager::resolveInModule(ModuleID moduleId, bool requestRejit) {

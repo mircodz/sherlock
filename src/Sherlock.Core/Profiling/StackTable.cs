@@ -55,11 +55,10 @@ public sealed class StackTable
         Validate();
     }
 
-    /// <summary>Reads the stack table from a <see cref="SlabFile"/>. The four sub-sections are bounded
-    /// by call-site cardinality (tens of thousands), so they're small single-section blobs.</summary>
+    /// <summary>Reads and validates the four symbol-table sections as owned blobs.</summary>
     public static StackTable Read(SlabFile slab)
     {
-        if (!HasAllSections(slab))
+        if (!slab.Has(SectionType.Strings) || !slab.Has(SectionType.Frames) || !slab.Has(SectionType.Stacks) || !slab.Has(SectionType.StackFrames))
         {
             throw new InvalidDataException("provenance container is missing its stack table");
         }
@@ -90,12 +89,6 @@ public sealed class StackTable
 
     public int FrameCount => _frames.Length / Marshal.SizeOf<FrameRecord>();
     public int StackCount => _stacks.Length / Marshal.SizeOf<StackRecord>();
-
-    private static bool HasAllSections(SlabFile slab) =>
-        slab.Has(SectionType.Strings) &&
-        slab.Has(SectionType.Frames) &&
-        slab.Has(SectionType.Stacks) &&
-        slab.Has(SectionType.StackFrames);
 
     private void Validate()
     {

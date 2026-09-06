@@ -33,8 +33,7 @@ constexpr bool includes(ProbeEvents events, ProbePhase phase) {
     return (static_cast<std::uint8_t>(events) & static_cast<std::uint8_t>(phase)) != 0;
 }
 
-/// The immutable part of a method probe baked into rewritten IL. `cookie` points to
-/// stable process-lifetime state, so the injected hook does not search an armed-method map.
+// Baked into IL. cookie points to stable state, avoiding map lookups in injected hooks.
 struct ProbePlan {
     std::uintptr_t cookie = 0;
     ProbeEvents events = ProbeEvents::None;
@@ -45,8 +44,7 @@ struct ProbePlan {
     bool onReturn() const { return includes(events, ProbePhase::Return); }
 };
 
-/// Thread-safe registry for resolved method probes. Map lookup happens only while rewriting IL;
-/// an executing instrumented method calls dispatch() with its embedded state pointer.
+// Map lookups happen during rewriting; injected hooks dispatch through embedded state pointers.
 class ProbeRegistry {
 public:
     using HitCallback = std::function<void(const std::string&, ProbePhase)>;
@@ -81,14 +79,11 @@ private:
     };
 
     struct State {
-        State(ProbeRegistry* owner, ModuleID module, mdMethodDef token,
-              std::string display, ProbeEvents events)
-            : owner(owner), module(module), token(token), display(std::move(display)),
+        State(ProbeRegistry* owner, std::string display, ProbeEvents events)
+            : owner(owner), display(std::move(display)),
               events(static_cast<std::uint8_t>(events)) {}
 
         ProbeRegistry* owner;
-        ModuleID module;
-        mdMethodDef token;
         std::string display;
         std::atomic<std::uint8_t> events;
         std::atomic<std::uint8_t> fired{0};
@@ -97,8 +92,7 @@ private:
 
     mutable std::mutex mutex_;
     std::unordered_map<MethodKey, State*, MethodKeyHash> byMethod_;
-    // States are never moved or reclaimed while the profiler is active: their addresses are
-    // embedded in already-JITted code. Removing a probe only marks its state inactive.
+    // JITted code embeds these addresses. Removal deactivates state without reclaiming it.
     std::vector<std::unique_ptr<State>> states_;
     HitCallback onHit_;
 };
@@ -107,22 +101,15 @@ extern "C" void Sherlock_ProbeEnter(std::intptr_t cookie);
 extern "C" void Sherlock_ProbeExit(std::intptr_t cookie);
 extern "C" void Sherlock_ProbeReturn(std::intptr_t cookie);
 
-/// Resolves method "breakpoints" and requests targeted ReJIT.
-///
-/// This class does not rewrite IL. It resolves `Namespace.Type.Method` specs, registers
-/// stable probe state, and asks the runtime to ReJIT only matching methods. The shared
-/// shadow-stack instrumenter then emits the requested enter/exit hooks with its own rewrite.
+// Resolves Namespace.Type.Method specs and requests ReJIT; ShadowStackInstrumenter emits the hooks.
 class ProbeManager {
 public:
     ProbeManager(ICorProfilerInfo10* info, Logger* logger);
 
-    /// Parse "Ns.Type.Method;Ns.Other.Dispose,..." (';' or ',' separated).
+    // Specs are separated by ';' or ','.
     void configure(const std::string& spec, ProbeEvents events = ProbeEvents::Enter);
-    bool empty() const;
 
-    /// Arm a spec at runtime (from the REPL over the control channel): parse it and
-    /// resolve against already-loaded modules, ReJITting matches now. Returns true if a
-    /// method was armed (false = no match in a loaded module - e.g. not loaded yet).
+    // Resolve against loaded modules and request ReJIT. True if a method was armed.
     bool armLive(const std::string& spec, ProbeEvents events = ProbeEvents::Enter);
     ProbePlan registerMethod(
         ModuleID moduleId,
@@ -134,12 +121,11 @@ public:
         registry_.setHitCallback(std::move(callback));
     }
 
-    /// Resolve configured probes before the shadow-stack instrumenter requests ReJIT for
-    /// every method in this newly loaded module.
+    // Resolve probes before the module-wide shadow-stack ReJIT request.
     void onModuleLoaded(ModuleID moduleId);
     void onModuleUnloaded(ModuleID moduleId);
 
-    /// Called by the shared IL rewriter. The lookup happens once per ReJIT, never per call.
+    // Lookup once per ReJIT, never per managed call.
     ProbePlan planFor(ModuleID moduleId, mdMethodDef token) const {
         return registry_.planFor(moduleId, token);
     }
@@ -151,8 +137,7 @@ private:
         ProbeEvents events;
     };
 
-    // Resolve specs against one module. Newly loaded modules are already about to be
-    // globally ReJITted for the shadow stack; live arms request targeted ReJIT here.
+    // Module loads already request shadow-stack ReJIT; live arms need targeted requests.
     std::size_t resolveInModule(ModuleID moduleId, bool requestRejit);
 
     ICorProfilerInfo10* info_;

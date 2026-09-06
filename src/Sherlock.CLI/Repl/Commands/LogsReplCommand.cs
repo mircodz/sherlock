@@ -29,17 +29,18 @@ public sealed class LogsReplCommand : IReplCommand
         int tail = DefaultTail;
         foreach (string arg in args)
         {
-            if (int.TryParse(arg, out int n))
+            if (!int.TryParse(arg, out int n))
             {
-                // First number is a pid; a second is the line count.
-                if (pid is null && n > 1000)
-                {
-                    pid = n;
-                }
-                else
-                {
-                    tail = n;
-                }
+                continue;
+            }
+            // Treat the first number above 1000 as a PID.
+            if (pid is null && n > 1000)
+            {
+                pid = n;
+            }
+            else
+            {
+                tail = n;
             }
         }
 

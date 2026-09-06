@@ -1,6 +1,4 @@
-// Tests for the correctness-critical correlation math: following a live object's address
-// across a GC (compaction moves + in-place survivors). This is the part that's easy to
-// get subtly wrong and that the ABA / address-reuse hazard hinges on.
+// Verify pre-GC liveness before remapping so address reuse cannot resurrect dead objects.
 
 #include "sherlock/profiler/intervals.hpp"
 
@@ -9,8 +7,6 @@
 #include <vector>
 
 using namespace Sherlock::intervals;
-
-// --- remap: pre-GC address -> post-GC address ------------------------------------------
 
 TEST(Remap, EmptyMovesIsIdentity) {
     std::vector<MoveRange> moves;
@@ -45,8 +41,6 @@ TEST(Remap, PicksTheRightMoveAmongMany) {
     EXPECT_EQ(remap(0x2080, moves), 0x2080u);        // one past the 2nd move's end -> gap
 }
 
-// --- inSortedRanges: liveness membership (survivor spans) -------------------------------
-
 TEST(InSortedRanges, EmptyIsAlwaysFalse) {
     std::vector<AddrRange> ranges;
     EXPECT_FALSE(inSortedRanges(0x1000, ranges));
@@ -77,12 +71,8 @@ TEST(InSortedRanges, DeadSourceAddressIsNotResurrectedByReuse) {
     EXPECT_EQ(remap(0x5000, moves), 0x1000u);                     // B lands at reused slot
 }
 
-// --- ForwardCursor: the monotonic linear-scan equivalent used by the per-GC live-set update ----
-
 TEST(ForwardCursor, MatchesBinarySearchOverAscendingQueries) {
-    // A mixed GC: some survivor spans, some of them compacted (moves), some in-place. The cursor is
-    // queried in strictly ascending address order (as the sorted live set is swept), and must agree
-    // with the binary-search reference for both membership and remap at every point.
+    // Ascending queries mix moved and in-place survivors and must match binary search.
     std::vector<AddrRange> survivors = {{0x1000, 0x1100}, {0x2000, 0x2200}, {0x4000, 0x4100}};
     std::vector<MoveRange> moves = {{0x1000, 0x9000, 0x100}, {0x4000, 0x7000, 0x100}}; // 0x2000-span in place
 
@@ -97,9 +87,7 @@ TEST(ForwardCursor, MatchesBinarySearchOverAscendingQueries) {
 }
 
 TEST(ForwardCursor, RemapPreservesAscendingOrder) {
-    // The load-bearing invariant: sweeping a sorted live set and remapping each survivor yields a
-    // still-sorted run (order-preserving compaction). Even with moves that relocate blocks to very
-    // different addresses, the *relative* order of surviving addresses is preserved.
+    // Ordered move targets preserve the relative order within a remap run.
     std::vector<AddrRange> survivors = {{0x1000, 0x1100}, {0x3000, 0x3100}, {0x5000, 0x5100}};
     std::vector<MoveRange> moves = {{0x1000, 0x8000, 0x100}, {0x3000, 0x8100, 0x100}, {0x5000, 0x8200, 0x100}};
 
@@ -122,11 +110,8 @@ TEST(ForwardCursor, DeadAddressesBetweenSurvivorsAreDropped) {
     EXPECT_TRUE(cursor.survived(0x2000));   // live again, past the gap
 }
 
-// --- condemned-generation gate: the generational-eviction fix ---------------------------------
-
 TEST(ForwardCursor, EmptyCondemnedTreatsWholeHeapAsCondemned) {
-    // Backward-compat: with no condemned spans, condemned() is always true, so the caller falls back
-    // to the pure survivor test — the pre-fix behavior (correct for a full GC).
+    // Missing bounds retain the whole-heap survivor-test fallback.
     std::vector<AddrRange> survivors, condemned;
     std::vector<MoveRange> moves;
     ForwardCursor cursor(survivors, moves, condemned);
@@ -135,9 +120,7 @@ TEST(ForwardCursor, EmptyCondemnedTreatsWholeHeapAsCondemned) {
 }
 
 TEST(ForwardCursor, UncondemnedObjectIsAliveEvenWithoutSurvivorRecord) {
-    // The bug this fixes: a gen-0 GC condemns only [0x8000,0x9000). A promoted gen-2 object at 0x1000
-    // is NOT in the condemned span and is NOT reported as a survivor (the GC never looked at it). The
-    // caller keeps it precisely because condemned()==false, instead of dropping it as a false death.
+    // A gen-2 object outside the gen-0 collection has no survivor report but is still alive.
     std::vector<AddrRange> condemned = {{0x8000, 0x9000}};   // only gen-0 collected
     std::vector<AddrRange> survivors = {{0x8000, 0x8080}};   // one gen-0 survivor
     std::vector<MoveRange> moves;
@@ -165,14 +148,8 @@ TEST(ForwardCursor, CondemnedAdvancesMonotonicallyLikeSurvived) {
     }
 }
 
-// --- non-monotone remap: the Server-GC / cross-segment hazard the endGc re-sort guards -----------
-
 TEST(ForwardCursor, RemapCanReorderSurvivorsUnderInterleavedMoves) {
-    // Under Server GC (multiple heaps) or cross-segment promotion, two survivor blocks can be
-    // relocated so their post-GC order is the REVERSE of their pre-GC order. This test documents that
-    // remap is NOT unconditionally order-preserving — the reason endGc must re-sort live_ rather than
-    // assume the swept run stays sorted. Block A [0x1000,0x1100) -> 0x9000; block B [0x2000,0x2100) ->
-    // 0x8000. Pre-GC A < B; post-GC remap(A)=0x9000 > remap(B)=0x8000.
+    // Cross-heap moves can reverse block order; endGc must merge the resulting runs.
     std::vector<AddrRange> survivors = {{0x1000, 0x1100}, {0x2000, 0x2100}};
     std::vector<MoveRange> moves = {{0x1000, 0x9000, 0x100}, {0x2000, 0x8000, 0x100}};
     ForwardCursor cursor(survivors, moves);
@@ -187,8 +164,7 @@ TEST(ForwardCursor, RemapCanReorderSurvivorsUnderInterleavedMoves) {
 }
 
 TEST(ForwardCursor, LargeObjectMembershipMatchesReference) {
-    // inLargeObjectHeap uses the same inSortedRanges primitive over the LOH/POH spans; a pending large
-    // object is admitted when it's in this set but NOT condemned. Verify the membership math directly.
+    // LOH/POH admission uses this membership test plus a separate condemnation check.
     std::vector<AddrRange> loh = {{0x40000000, 0x40200000}}; // one 2 MB LOH span
     EXPECT_TRUE(inSortedRanges(0x40000000, loh));            // start inclusive
     EXPECT_TRUE(inSortedRanges(0x401fffff, loh));            // last byte

@@ -6,13 +6,9 @@ using Microsoft.Diagnostics.Runtime;
 namespace Sherlock.Core.Analysis;
 
 /// <summary>
-/// A computed dominator tree over the managed heap, with retained sizes.
-///
-/// X <i>dominates</i> Y if every path from a GC root to Y passes through X. The <i>retained size</i> of
-/// X is its own size plus everything it dominates, i.e. the memory freed if X became unreachable.
-///
-/// Everything is indexed in reverse-postorder (RPO) space, where the synthetic root (pointing at every
-/// GC root) is node 0 and a node's immediate dominator always has a smaller RPO number than the node.
+/// X dominates Y when every GC-root path to Y passes through X; its retained size includes everything
+/// it dominates. Columns use reverse-postorder (RPO): the synthetic GC root is 0, and each immediate
+/// dominator has a smaller RPO than its child.
 /// </summary>
 public sealed class DominatorTree
 {
@@ -42,7 +38,7 @@ public sealed class DominatorTree
     /// <summary>Total retained memory reachable from all GC roots.</summary>
     public ulong TotalReachableBytes => _retained.Length == 0 ? 0 : _retained[0];
 
-    /// <summary>The objects with the largest retained size, the biggest memory holders.</summary>
+    /// <summary>Objects ordered by retained size, largest first.</summary>
     public IReadOnlyList<DominatorNode> TopDominators(int count)
     {
         return Enumerable.Range(1, _address.Length - 1)
@@ -56,10 +52,7 @@ public sealed class DominatorTree
     public DominatorNode? Find(ulong address) =>
         _rpoOf.TryGetValue(address, out int rpo) ? NodeAt(rpo) : null;
 
-    /// <summary>
-    /// The objects immediately dominated by <paramref name="address"/> (its children in the dominator
-    /// tree), largest retained first, i.e. what it directly holds onto.
-    /// </summary>
+    /// <summary>Immediate dominator-tree children, largest retained size first.</summary>
     public IReadOnlyList<DominatorNode> ImmediateChildren(ulong address, int count)
     {
         if (!_rpoOf.TryGetValue(address, out int parent))
@@ -84,9 +77,8 @@ public sealed class DominatorTree
     }
 
     /// <summary>
-    /// Builds a pruned view for a pprof-style graph: the <paramref name="maxNodes"/> heaviest objects
-    /// (by retained size), each re-attached to its nearest surviving ancestor so the result stays a
-    /// single connected tree hanging off the synthetic "GC roots" node.
+    /// Keeps the heaviest objects by retained size, attaching each to its nearest included ancestor
+    /// or the synthetic GC root.
     /// </summary>
     public DominatorGraph BuildGraph(int maxNodes)
     {
@@ -105,8 +97,6 @@ public sealed class DominatorTree
         var nodes = new List<DominatorGraphNode>(top.Count);
         foreach (int rpo in top)
         {
-            // Climb the immediate-dominator chain (strictly decreasing toward the synthetic root at 0)
-            // until we hit another included node or the root.
             int parent = _idom[rpo];
             while (parent != 0 && !included.Contains(parent))
             {
@@ -124,31 +114,25 @@ public sealed class DominatorTree
         new(_address[rpo], TypeNameAt(rpo), _ownSize[rpo], _retained[rpo]);
 
     /// <summary>
-    /// The retention path for <paramref name="address"/>: the immediate-dominator chain from the object
-    /// up to (and including) the outermost object still held by a GC root, ordered <b>root-most first,
-    /// target last</b>. Every object on it must stay alive for the target to stay alive, so it answers
-    /// "why is this alive" in O(path length), a walk of the computed <c>idom</c> chain with no heap
-    /// traversal. Returns null if the object isn't reachable from any GC root (collectable).
+    /// Returns the immediate-dominator chain, root-most object first and target last, excluding the
+    /// synthetic root. Returns null when the target is unreachable from GC roots.
     /// </summary>
     /// <remarks>
-    /// This is the <i>dominator</i> path (the necessary holders), not necessarily the shortest arbitrary
-    /// reference chain a root-to-target BFS would find. It's exact for "what retains this", which the
-    /// gcroot view wants; true shortest/multi-path search needs a persisted reverse-edge column (a later tier).
+    /// This is a dominator path, not necessarily a chain of direct object references.
     /// </remarks>
     public IReadOnlyList<(ulong Address, string TypeName)>? RetentionPath(ulong address)
     {
         if (!_rpoOf.TryGetValue(address, out int rpo))
         {
-            return null; // not reachable from any root, collectable
+            return null;
         }
 
         var chain = new List<(ulong, string)>();
-        // Climb the immediate-dominator chain, strictly decreasing toward the synthetic root at 0.
         for (int cur = rpo; cur != 0; cur = _idom[cur])
         {
             chain.Add((_address[cur], TypeNameAt(cur)));
         }
-        chain.Reverse(); // root-most first, target last
+        chain.Reverse();
         return chain;
     }
 
@@ -157,9 +141,8 @@ public sealed class DominatorTree
 }
 
 /// <summary>
-/// A node in a pruned dominator graph. <see cref="Id"/> is a stable identifier (the tree's internal RPO
-/// number) usable for graph node names; <see cref="ParentId"/> is the nearest surviving ancestor, or
-/// <c>null</c> when it hangs directly off the synthetic GC-roots node.
+/// A pruned graph node identified by its RPO. <see cref="ParentId"/> is the nearest included ancestor,
+/// or null for a child of the synthetic GC root.
 /// </summary>
 public sealed record DominatorGraphNode(
     int Id,

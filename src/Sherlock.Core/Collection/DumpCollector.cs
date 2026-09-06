@@ -9,7 +9,7 @@ public enum DumpKind
 {
     /// <summary>Smallest: threads + stacks, little heap.</summary>
     Mini,
-    /// <summary>Threads plus the managed heap, the sweet spot for analysis.</summary>
+    /// <summary>Threads plus the managed heap.</summary>
     Heap,
     /// <summary>Triage dump: minimal PII, useful for sharing.</summary>
     Triage,
@@ -18,9 +18,7 @@ public enum DumpKind
 }
 
 /// <summary>
-/// Collects a memory dump from a live .NET process over the diagnostics IPC channel. The runtime
-/// writes the dump in-process (its own <c>createdump</c>), producing a minidump that
-/// <see cref="Snapshot"/> can open directly.
+/// Requests a dump over diagnostics IPC. The target runtime writes the file, which <see cref="Snapshot"/> can open.
 /// </summary>
 public static class DumpCollector
 {

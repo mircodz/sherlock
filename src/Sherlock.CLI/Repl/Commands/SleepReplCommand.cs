@@ -6,7 +6,7 @@ using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
 
-/// <summary>Pauses for N seconds. For scripts that must let a live target reach a state worth snapshotting.</summary>
+/// <summary>Delays a command script while its target keeps running.</summary>
 public sealed class SleepReplCommand : IReplCommand
 {
     public string Name => "sleep";

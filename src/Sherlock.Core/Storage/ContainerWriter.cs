@@ -8,12 +8,10 @@ using System.Runtime.InteropServices;
 
 namespace Sherlock.Core.Storage;
 
-/// <summary>Builds a storage container, byte-for-byte identical to the native writer (guarded by the golden-bytes test). Used for tests/tooling.</summary>
+/// <summary>Builds slab containers using the same layout as the native writer.</summary>
 public sealed class ContainerWriter
 {
-    // A section's payload is a list of byte-chunks written back-to-back. Most sections have exactly one
-    // chunk; a huge column (the heap-graph edges) is added as many ≤~1 GB chunks so the file, and any
-    // single section, can exceed 2 GB without ever materializing as one array.
+    // Payload chunks are written contiguously without concatenating them into one array.
     private readonly List<Sec> _sections = [];
 
     private readonly record struct Sec(SectionType Type, ushort Version, ushort RecordSize, ulong Count, IReadOnlyList<ReadOnlyMemory<byte>> Chunks, long Length);
@@ -32,11 +30,8 @@ public sealed class ContainerWriter
         _sections.Add(new Sec(type, version, (ushort)Unsafe.SizeOf<T>(), (ulong)records.Length, [bytes], bytes.Length));
     }
 
-    /// <summary>Adds a large fixed-width column as one or more same-typed sections, each at most
-    /// <paramref name="chunkBytes"/> bytes and holding a uniform element count (last is short). Mirrors
-    /// the native <c>addChunkedRecords</c> layout so <see cref="Column{T}"/> reassembles either side's
-    /// output. A single section is capped near 2&nbsp;GB by the reader, so a per-object column (one record
-    /// per live object) must be split. Any sort must already be applied; chunking is a pure partition.</summary>
+    /// <summary>Partitions records into same-typed sections, preserving order and matching native
+    /// <c>addChunkedRecords</c>. Each chunk holds at least one record; the last may be shorter.</summary>
     public void AddChunkedRecords<T>(SectionType type, ushort version, ReadOnlySpan<T> records,
                                      long chunkBytes = ContainerFormat.DefaultChunkBytes) where T : struct
     {
@@ -71,7 +66,6 @@ public sealed class ContainerWriter
         _sections.Add(new Sec(type, version, recordSize, count, chunks, length));
     }
 
-    // Computes each section's aligned byte offset in the file; returns the offsets and the total size.
     private long[] Layout(out long total)
     {
         long tableEnd = ContainerFormat.HeaderSize + (long)_sections.Count * ContainerFormat.SectionEntrySize;
@@ -83,7 +77,7 @@ public sealed class ContainerWriter
             offsets[i] = cursor;
             cursor += _sections[i].Length;
         }
-        total = _sections.Count == 0 ? tableEnd : cursor;
+        total = cursor;
         return offsets;
     }
 
@@ -112,9 +106,7 @@ public sealed class ContainerWriter
         }
     }
 
-    /// <summary>Streams the whole container to <paramref name="stream"/>: header, section table, then
-    /// each section's bytes at its aligned offset. Never holds more than one section-chunk in memory, so
-    /// it works for multi-gigabyte containers.</summary>
+    /// <summary>Writes the header, section table and aligned payloads without materializing the whole container.</summary>
     public void WriteTo(Stream stream)
     {
         long[] offsets = Layout(out _);
@@ -135,7 +127,7 @@ public sealed class ContainerWriter
         }
     }
 
-    /// <summary>Writes the container to a file, streaming (so it supports files &gt; 2&nbsp;GB).</summary>
+    /// <summary>Streams and flushes a new container before atomically replacing the destination.</summary>
     public void Save(string path)
     {
         string tmp = $"{path}.{Guid.NewGuid():N}.tmp";

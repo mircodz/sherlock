@@ -1,5 +1,4 @@
-// Tests for the interned symbol tables (Layer 2): frames dedup by name, stacks dedup by
-// frame-id sequence, and both round-trip through the container back to the same names/frames.
+// Names and frame-ID sequences retain their identities through a container round trip.
 
 #include "sherlock/storage/symbols.hpp"
 
@@ -63,7 +62,6 @@ TEST(Symbols, RoundTripsThroughContainer) {
     EXPECT_EQ(got[0], main);
     EXPECT_EQ(got[1], add);
     EXPECT_EQ(got[2], resize);
-    // Resolve the whole stack to names.
     EXPECT_EQ(t.frame(got[2]), "List.Resize");
 }
 

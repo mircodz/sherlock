@@ -1,10 +1,6 @@
 #pragma once
 
-// Shared IL-emit / IL-parse primitives used by both the trigger probe (probe.cpp) and the shadow-stack
-// instrumenter (shadowstack.cpp). Both rewrite method bodies via ReJIT; the little-endian byte plumbing,
-// the EH-clause representation, and the exception-section scanner are identical. They differ only in HOW
-// they transform the body (probe splices a prologue and shifts EH offsets by a constant; shadow wraps the
-// whole body in try/finally and remaps every offset), so that transform stays in each caller.
+// IL encoding and decoding for the shadow-stack rewriter, including probe hooks.
 
 #include <cstdint>
 #include <vector>
@@ -13,7 +9,7 @@
 
 namespace Sherlock::il {
 
-// ---- little-endian writers into a growing byte buffer ----
+// Little-endian encoding.
 inline void put16(std::vector<BYTE>& b, std::uint16_t v) {
     b.push_back(v & 0xFF);
     b.push_back((v >> 8) & 0xFF);
@@ -25,14 +21,12 @@ inline void put64(std::vector<BYTE>& b, std::uint64_t v) {
     for (int i = 0; i < 8; ++i) b.push_back((v >> (8 * i)) & 0xFF);
 }
 
-// ---- little-endian readers ----
 inline std::uint16_t rd16(const BYTE* p) { return p[0] | (p[1] << 8); }
 inline std::uint32_t rd32(const BYTE* p) {
     return p[0] | (p[1] << 8) | (p[2] << 16) | (static_cast<std::uint32_t>(p[3]) << 24);
 }
 
-// A normalized exception-handling clause. Offsets are absolute into the method's code, as read from
-// the metadata section; callers relocate them into their rewritten body.
+// EH offsets are absolute within the original IL; the rewriter relocates them.
 struct EHClause {
     std::uint32_t flags;
     std::uint32_t tryOffset;
@@ -45,24 +39,18 @@ struct EHClause {
 constexpr std::uint32_t kClauseFilter = 0x0001;  // COR_ILEXCEPTION_CLAUSE_FILTER
 constexpr std::uint32_t kClauseFinally = 0x0002; // COR_ILEXCEPTION_CLAUSE_FINALLY
 
-// A growable IL byte stream with named emitters for the opcodes the two instrumenters splice in. Keeps
-// the injected prologue/finally readable as IL (`s.ldc_i8(fn); s.calli(sig)`) and centralizes the opcode
-// constants. A thin wrapper over a byte vector; `bytes()` exposes the buffer for the parts still emitted
-// by hand (raw instruction copies, branch fixups computed against absolute offsets).
+// Named emitters for injected IL; bytes() also permits raw copies and branch fixups.
 class ILStream {
 public:
     std::vector<BYTE>& bytes() { return b_; }
-    const std::vector<BYTE>& bytes() const { return b_; }
     std::size_t size() const { return b_.size(); }
 
-    void ldc_i4(std::uint32_t v)  { b_.push_back(0x20); put32(b_, v); }
     void ldc_i8(std::uint64_t v)  { b_.push_back(0x21); put64(b_, v); }
     void conv_i()                 { b_.push_back(0xD3); }
     void calli(mdSignature sig)   { b_.push_back(0x29); put32(b_, static_cast<std::uint32_t>(sig)); }
     void endfinally()             { b_.push_back(0xDC); }
 
-    // stloc/ldloc pick the short (.s, 1-byte index) form when the local index fits in a byte, else the
-    // two-byte 0xFE-prefixed long form.
+    // Use short local indices when possible, otherwise the 0xFE-prefixed form.
     void stloc(std::uint32_t idx) {
         if (idx <= 0xFF) { b_.push_back(0x13); b_.push_back(idx & 0xFF); }
         else { b_.push_back(0xFE); b_.push_back(0x0E); put16(b_, idx & 0xFFFF); }
@@ -79,10 +67,8 @@ private:
     std::vector<BYTE> b_;
 };
 
-// Parse the method's exception-handling section(s) into `out`, one EHClause per clause with its
-// original (absolute) offsets. `header` is the method body start, `code`/`codeSize` locate the IL;
-// `moreSects` is the fat header's MoreSects flag (no sections when false). Stops at the first non-EH
-// section kind. Both fat and thin (small) clause formats are handled.
+// Read fat or small EH clauses with original IL offsets. header is the method body
+// start; moreSects is the fat-header flag. Stop at the first non-EH section.
 inline void parseEHClauses(const BYTE* header, const BYTE* code, std::uint32_t codeSize,
                            bool moreSects, std::vector<EHClause>& out) {
     if (!moreSects)
@@ -98,7 +84,7 @@ inline void parseEHClauses(const BYTE* header, const BYTE* code, std::uint32_t c
         bool fatSect = (kind & CorILMethod_Sect_FatFormat) != 0;
         more = (kind & CorILMethod_Sect_MoreSects) != 0;
         if ((kind & CorILMethod_Sect_KindMask) != CorILMethod_Sect_EHTable)
-            break; // unknown section kind, stop
+            break;
 
         std::size_t sectLen;
         if (fatSect) {
@@ -124,15 +110,10 @@ inline void parseEHClauses(const BYTE* header, const BYTE* code, std::uint32_t c
     }
 }
 
-// ---- IL body decode (shared: both instrumenters decode a method body before rewriting it) ----
-
-// A decoded body instruction.
 struct Insn {
     std::uint32_t off;      // original offset in code
     std::uint32_t len;      // total bytes (opcode + operand)
     BYTE op0;               // first opcode byte (0xFE for two-byte)
-    BYTE op1;               // second byte if two-byte, else 0
-    bool twoByte;
     bool ret;
     bool sw;                // switch
     bool shortBr;
@@ -142,7 +123,7 @@ struct Insn {
     const BYTE* raw;        // pointer to original bytes
 };
 
-// A decoded method body header: where the IL code is and the bits needed to re-emit a fat method.
+// Header fields needed to re-emit a fat method.
 struct MethodHeader {
     const BYTE* code = nullptr; // start of the IL instruction stream
     std::uint32_t codeSize = 0;
@@ -156,10 +137,6 @@ struct MethodHeader {
 void compress(std::vector<BYTE>& b, std::uint32_t v);
 bool uncompress(const BYTE*& p, const BYTE* end, std::uint32_t& out);
 
-bool isRet(BYTE op);
-bool isSwitch(BYTE op);
-bool isShortBranch(BYTE op);
-bool isLongBranch(BYTE op);
 BYTE shortToLong(BYTE op); // short branch opcode -> its long (4-byte-operand) equivalent
 
 // Parse a method body header (tiny or fat). Returns false on an unknown format we won't touch.

@@ -58,8 +58,7 @@ public sealed class RunCommand : Command<RunCommand.Settings>
     {
         IAnsiConsole console = AnsiConsole.Console;
 
-        // The target is the positional arg or, in `run [opts] -- <bin> <args>` form, the tokens
-        // after `--`. Everything after the path is the target's own args.
+        // Preserve positional and post-`--` target arguments in order.
         var command = new List<string>();
         if (!string.IsNullOrEmpty(settings.Path))
         {
@@ -192,21 +191,7 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         }
         foreach (TriggeredCaptureResult capture in workspace.PollTriggeredSnapshots())
         {
-            if (capture.Entry is { } entry)
-            {
-                string contents = entry.HasAllocations ? "heap + allocations" : "heap only";
-                Output.Success(console, $"[bold]{capture.Probe}[/] fired · snapshot [bold]{entry.Id}[/] [#808791]({contents})[/]");
-                if (capture.Error is not null)
-                {
-                    Output.Warning(console, $"{capture.Error}");
-                    succeeded = false;
-                }
-            }
-            else
-            {
-                Output.Error(console, $"[bold]{capture.Probe}[/] fired but capture failed: {capture.Error}");
-                succeeded = false;
-            }
+            succeeded &= Output.TriggeredCapture(console, capture);
         }
         return succeeded;
     }

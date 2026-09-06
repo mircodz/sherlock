@@ -68,13 +68,10 @@ public sealed class DominatorAnalyzer(Snapshot snapshot)
         int root = graph.Root;
         int nodeCount = graph.NodeCount;
 
-        // Reverse-postorder from the synthetic root (iterative DFS).
         int[] rpoNumber = BuildReversePostorder(graph, root, nodeCount, cancellationToken, out int[] nodeByRpo);
         int m = nodeByRpo.Length;
 
-        // Predecessor lists in RPO space as reverse-CSR (two flat arrays) built by counting sort: no
-        // per-node List<int> (m allocations + pointer-chasing, the first thing to OOM on a 400M-edge
-        // graph). Pass 1 counts in-degree, prefix-sum gives offsets, pass 2 scatters.
+        // Reverse-CSR in RPO space: count predecessors, prefix-sum offsets, then scatter edges.
         var predOffsets = new int[m + 1];
         long reachableEdges = 0;
         for (int node = 0; node < nodeCount; node++)
@@ -91,9 +88,7 @@ public sealed class DominatorAnalyzer(Snapshot snapshot)
                 if (vRpo >= 0) { predOffsets[vRpo + 1]++; reachableEdges++; }
             }
         }
-        // The reverse-CSR edge array is a single int[] (reachable-edge count long, indexed by int). A
-        // reachable set with >2.1B refs is far beyond any 30 GB dump; fail loudly rather than corrupt
-        // via overflow. Lifting this needs a chunked predecessor array (the next tier).
+        // Predecessors occupy one int[]; reject overflow even though graph edges are long-indexed.
         if (reachableEdges > int.MaxValue)
         {
             throw new NotSupportedException(
@@ -148,8 +143,7 @@ public sealed class DominatorAnalyzer(Snapshot snapshot)
             }
         }
 
-        // Retained sizes in RPO space: accumulate each node into its immediate dominator; descendants,
-        // at higher RPO, are already summed.
+        // Descendants have higher RPO, so reverse accumulation sums children before their dominator.
         var address = new ulong[m];
         var own = new ulong[m];
         ReadOnlySpan<ulong> gAddr = graph.Addresses.Span;

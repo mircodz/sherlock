@@ -7,10 +7,7 @@ using Sherlock.Core.Store;
 
 namespace Sherlock.Mcp;
 
-/// <summary>
-/// Sherlock's heap-analysis surface, exposed to MCP clients. Every tool takes a snapshot id/label
-/// (see <c>list_snapshots</c>) and maps straight onto the <see cref="Snapshot"/> facade.
-/// </summary>
+/// <summary>MCP tools over snapshots selected by ID or label.</summary>
 [McpServerToolType]
 public static class SherlockTools
 {

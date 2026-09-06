@@ -5,7 +5,7 @@ using Sherlock.Core.Analysis;
 
 namespace Sherlock.CLI.Export;
 
-/// <summary>The dominator tree as a DOT retention graph: objects hanging off a synthetic GC-roots node, shaded and sized by the heap share they retain.</summary>
+/// <summary>DOT graph weighted by retained heap share, rooted at synthetic GC roots.</summary>
 public static class DominatorDot
 {
     public static string Write(DominatorGraph graph)

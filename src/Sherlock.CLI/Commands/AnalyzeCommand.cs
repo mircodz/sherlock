@@ -11,10 +11,7 @@ using Spectre.Console.Cli;
 
 namespace Sherlock.CLI.Commands;
 
-/// <summary>
-/// Opens a dump and either starts the interactive REPL or, when one or more
-/// <c>--exec</c> commands are given, runs them non-interactively and exits.
-/// </summary>
+/// <summary>Opens a dump for interactive or scripted analysis.</summary>
 public sealed class AnalyzeCommand : Command<AnalyzeCommand.Settings>
 {
     public sealed class Settings : CommandSettings
@@ -64,7 +61,6 @@ public sealed class AnalyzeCommand : Command<AnalyzeCommand.Settings>
             return 1;
         }
 
-        // A dump path is optional; when given, open it as the current target.
         if (!string.IsNullOrEmpty(settings.DumpPath))
         {
             try
@@ -83,7 +79,6 @@ public sealed class AnalyzeCommand : Command<AnalyzeCommand.Settings>
             }
         }
 
-        // Interactive when nothing was batched, or when --interactive keeps us in the REPL after.
         bool batched = settings.Exec.Length > 0 || settings.Script is not null;
         bool interactive = !batched || settings.Interactive;
         var history = new ReplHistory(interactive ? ReplHistory.DefaultPath : null);

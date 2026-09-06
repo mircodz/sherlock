@@ -7,14 +7,7 @@ using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
 
-/// <summary>
-/// Arms an event-driven snapshot trigger on a live target. Events:
-///   call:Ns.Type.Method   a method is entered (ReJIT; non-inlined methods only)
-///   alloc:Ns.Type         an instance of the type is allocated
-///   gc[:gen2]             after a (generation-N) garbage collection
-///   throw[:Ns.Exception]  an exception (of that type) is thrown
-/// A bare Ns.Type.Method is shorthand for call:.
-/// </summary>
+/// <summary>Arms a call, allocation, GC, or exception trigger on a live target.</summary>
 public sealed class SnapshotOnReplCommand : IReplCommand
 {
     public string Name => "snapshot-on";

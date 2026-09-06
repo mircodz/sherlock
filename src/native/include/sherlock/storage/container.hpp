@@ -11,10 +11,8 @@
 #include <type_traits>
 #include <vector>
 
-// The on-disk container: a fixed header + a section table + 8-byte-aligned typed sections. 
-// Sections are opaque blobs here; payload codecs layer on top.
-// Scalars are encoded little-endian explicitly, so the format is independent of struct packing and
-// host endianness. Mirrors the C# Sherlock.Core.Storage types.
+// Header + section table + 8-byte-aligned opaque sections, matching Sherlock.Core.Storage.
+// Header/table scalars are explicitly little-endian; record payloads use their native layout.
 namespace Sherlock::storage {
 
 inline constexpr char kMagic[4] = {'S', 'H', 'R', 'K'};
@@ -25,13 +23,10 @@ inline constexpr std::size_t kHeaderSize = 16;
 inline constexpr std::size_t kSectionEntrySize = 32;
 inline constexpr std::size_t kAlignment = 8;
 
-// Default max bytes per chunk when splitting a large fixed-width column (addChunkedRecords). Stays
-// well under the C# reader's ~2 GB single-section cap; a multiple of 8 so no 8/4/2-byte record
-// straddles a chunk boundary.
+// Below the C# reader's int-length section limit; chunks split only between records.
 inline constexpr std::size_t kDefaultChunkBytes = 256u << 20; // 256 MiB
 
-/// Section kinds. The container layer treats these as opaque; the payload meaning is defined
-/// by the Layer-2 codecs. Kept in sync with the C# SectionType enum.
+// Keep values in sync with the C# SectionType enum.
 enum class SectionType : std::uint32_t {
     Strings = 1,
     Frames = 2,
@@ -84,12 +79,10 @@ inline std::size_t alignUp(std::size_t n, std::size_t a) { return (n + a - 1) & 
 
 } // namespace detail
 
-/// Accumulates typed sections and serializes the container. Sections are emitted in the order
-/// added; each starts at an 8-aligned offset. There is no trailing padding.
+// Emits sections in insertion order at 8-byte-aligned offsets, without trailing padding.
 class ContainerWriter {
 public:
-    /// Adds a section of raw bytes. `recordSize` is bytes/record for fixed-width record
-    /// sections (0 for variable/blob sections); `count` is the record/entry count.
+    // recordSize is bytes per record (0 for blobs); count is the number of entries.
     void addSection(SectionType type, std::uint16_t version, std::uint16_t recordSize,
                     std::span<const std::byte> data, std::uint64_t count) {
         Section s;
@@ -101,19 +94,14 @@ public:
         sections_.push_back(std::move(s));
     }
 
-    /// Adds a fixed-width record section from a contiguous array of trivially-copyable `T`.
     template <typename T>
     void addRecords(SectionType type, std::uint16_t version, std::span<const T> records) {
         static_assert(std::is_trivially_copyable_v<T>, "record type must be trivially copyable");
         addSection(type, version, static_cast<std::uint16_t>(sizeof(T)), std::as_bytes(records), records.size());
     }
 
-    /// Adds a fixed-width column as one or more same-typed sections, each at most `chunkBytes` bytes.
-    /// The C# reader caps a single section at ~2 GB (int-length span), so a large column (e.g. one
-    /// CorrelationRecord per live object) must be split. Every chunk but the last holds exactly
-    /// `chunkBytes / sizeof(T)` records — a uniform count the reader relies on to index element `i`
-    /// arithmetically (chunk = i / elemsPerChunk), so no chunk-start table is needed. The sort (if any)
-    /// must already be applied: chunking is a pure post-sort partition preserving global order.
+    // Preserve global record order. All chunks except the last have a uniform count
+    // (at least one), required for the C# reader's arithmetic chunk indexing.
     template <typename T>
     void addChunkedRecords(SectionType type, std::uint16_t version, std::span<const T> records,
                            std::size_t chunkBytes = kDefaultChunkBytes) {
@@ -126,8 +114,7 @@ public:
         }
     }
 
-    /// Serializes the whole container into a byte buffer. For small/in-memory containers and tests;
-    /// large containers should use writeTo(ostream) to avoid a second full copy in RAM.
+    // Materializes the whole file; use writeTo for large containers.
     [[nodiscard]] std::string finish() const {
         std::string out;
         out.reserve(computeLayout());
@@ -139,8 +126,7 @@ public:
         return out;
     }
 
-    /// Streams the container to `os` without materializing the whole file — peak RAM is the largest
-    /// single section, not the sum. Byte-identical to finish(). Returns os.good().
+    // Byte-identical to finish(), without another full-file buffer. Returns stream success.
     bool writeTo(std::ostream& os) const {
         std::string head;
         head.reserve(kHeaderSize + kSectionEntrySize * sections_.size());
@@ -171,7 +157,6 @@ private:
     };
     std::vector<Section> sections_;
 
-    // Aligned byte offset of section i's data. O(i), but the section count is tiny (≤~10).
     std::size_t offsetOf(std::size_t i) const {
         std::size_t cursor = detail::alignUp(kHeaderSize + kSectionEntrySize * sections_.size(), kAlignment);
         for (std::size_t k = 0; k < i; ++k) {
@@ -180,13 +165,12 @@ private:
         return cursor;
     }
 
-    // Total container size in bytes.
     std::size_t computeLayout() const {
         if (sections_.empty()) return kHeaderSize;
         return offsetOf(sections_.size() - 1) + sections_.back().data.size();
     }
 
-    // Header + section table, emitted via sink(ptr, len). Shared by finish() and writeTo().
+    // Shared header/table encoding for finish() and writeTo().
     template <typename Sink>
     void appendHeaderAndTable(Sink sink) const {
         std::string hdr;
@@ -208,7 +192,7 @@ private:
     }
 };
 
-/// A parsed view of one section (borrows the container's bytes).
+// Borrows the container's bytes.
 struct SectionView {
     SectionType type;
     std::uint16_t version;
@@ -216,8 +200,7 @@ struct SectionView {
     std::uint64_t count;
     std::span<const std::byte> data;
 
-    /// Reinterprets a fixed-width record section as a span of `T` (zero-copy). Empty if the
-    /// stored record size doesn't match `sizeof(T)`.
+    // Zero-copy; empty if the record width or data length is incompatible.
     template <typename T>
     [[nodiscard]] std::span<const T> records() const {
         static_assert(std::is_trivially_copyable_v<T>, "record type must be trivially copyable");
@@ -228,8 +211,7 @@ struct SectionView {
     }
 };
 
-/// Parses a container from a contiguous byte buffer that the caller keeps alive (e.g. an mmap).
-/// Read-only; validates the magic, endianness flag, and section-table bounds.
+// The caller keeps the buffer alive. Validates magic, endianness and section bounds.
 class ContainerReader {
 public:
     explicit ContainerReader(std::span<const std::byte> bytes) : bytes_(bytes) { parse(); }
@@ -247,8 +229,7 @@ public:
         return std::nullopt;
     }
 
-    /// All sections of `type`, in table (add) order — for a column split across chunks by
-    /// addChunkedRecords. The real consumer is the C# reader; this exists for round-trip tests.
+    // Table order is also chunk order.
     [[nodiscard]] std::vector<SectionView> findAll(SectionType type) const {
         std::vector<SectionView> out;
         for (const SectionView& s : sections_) {

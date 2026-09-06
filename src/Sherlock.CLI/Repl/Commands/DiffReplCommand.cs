@@ -8,7 +8,7 @@ using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
 
-/// <summary>Compares two snapshots by type - what grew, what's new. The core leak-finding workflow.</summary>
+/// <summary>Compares type counts and sizes between snapshots.</summary>
 public sealed class DiffReplCommand : IReplCommand
 {
     private const int DefaultLimit = 30;
@@ -40,7 +40,6 @@ public sealed class DiffReplCommand : IReplCommand
                 return (Index(a.Histogram), Index(b.Histogram));
             });
 
-        // Per-type deltas over the union of types in both snapshots.
         var rows = new List<(string Type, long DCount, long DBytes, bool IsNew)>();
         foreach (string type in baseline.Keys.Union(target.Keys))
         {

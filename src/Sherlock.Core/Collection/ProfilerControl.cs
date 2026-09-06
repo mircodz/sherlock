@@ -190,11 +190,7 @@ internal sealed class ProfilerControl : IDisposable
         }
         finally
         {
-            bool removed = false;
-            if (pid != 0)
-            {
-                removed = _clients.TryRemove(new KeyValuePair<int, Client>(pid, client));
-            }
+            bool removed = pid != 0 && _clients.TryRemove(new KeyValuePair<int, Client>(pid, client));
             foreach ((int id, TaskCompletionSource<string[]> pending) in client.Pending)
             {
                 if (client.Pending.TryRemove(id, out _))
@@ -298,10 +294,13 @@ internal sealed class ProfilerControl : IDisposable
             client.SendLock.Dispose();
         }
         try { _listener.Dispose(); } catch { /* ignore */ }
-        try { if (File.Exists(_path))
+        try
+        {
+            if (File.Exists(_path))
             {
                 File.Delete(_path);
             }
-        } catch { /* ignore */ }
+        }
+        catch { /* best-effort socket cleanup */ }
     }
 }

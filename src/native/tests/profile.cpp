@@ -1,5 +1,4 @@
-// Tests for the allocation-profile codec (Layer 2): allocation records reference a shared
-// interned stack table, and both round-trip through the container with counters + stacks intact.
+// Allocation and correlation records resolve through the same interned stack table.
 
 #include "sherlock/storage/profile.hpp"
 
@@ -54,11 +53,10 @@ TEST(Profile, RoundTripsRecordsAndStacks) {
     EXPECT_EQ(recs[1].typeId, t2);
     EXPECT_EQ(recs[1].allocBytes, 512u);
 
-    // The typeId resolves back through the same shared table as frames.
+    // Types and frames share the symbol table.
     EXPECT_EQ(r.stacks().frame(recs[0].typeId), "Sherlock.Demo.Customer");
     EXPECT_EQ(r.stacks().frame(recs[1].typeId), "System.Byte[]");
 
-    // The record's stackId resolves back through the shared table to the original frames.
     std::span<const std::uint32_t> f1 = r.stacks().stackFrames(recs[0].stackId);
     ASSERT_EQ(f1.size(), 2u);
     EXPECT_EQ(r.stacks().frame(f1[0]), "Program.Main");
@@ -66,7 +64,6 @@ TEST(Profile, RoundTripsRecordsAndStacks) {
 }
 
 TEST(Profile, SharesOneStackAcrossSites) {
-    // Two sites with the same stack must reference the same stackId (shared identity space).
     ProvenanceWriter w;
     const std::uint32_t a = w.internStack(frames({"A", "B"}));
     const std::uint32_t b = w.internStack(frames({"A", "B"}));
@@ -122,8 +119,7 @@ TEST(Profile, NoCorrelationSectionWhenAggregateOnly) {
     EXPECT_FALSE(r.stackForAddress(0x1000).has_value());
 }
 
-// With a forced tiny chunk budget, the Correlation column is emitted as several sections. The reader
-// must reassemble them in order and keep the address-sorted binary search working across boundaries.
+// Tiny chunks force address lookups across section boundaries.
 TEST(Profile, ChunkedCorrelationBinarySearchesAcrossChunks) {
     ProvenanceWriter w;
     const std::uint32_t s1 = w.internStack(frames({"A.M", "B.N"}));

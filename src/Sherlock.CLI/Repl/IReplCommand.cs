@@ -16,11 +16,10 @@ public sealed record ReplContext(
 {
     internal HashSet<string> ActiveScripts { get; } = new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
-    /// <summary>The loaded snapshot, or a friendly error if nothing is loaded.</summary>
     public Snapshot Snapshot => Workspace.Current
         ?? throw new DumpAnalysisException("No snapshot loaded. Use `load <id>`, `collect`, or `import <file>` first.");
 
-    /// <summary>Resolves a snapshot by id or label, erroring if it's unknown or its file is gone.</summary>
+    /// <summary>Resolves an existing snapshot by ID or label.</summary>
     public SnapshotEntry ResolveSnapshot(string idOrLabel)
     {
         if (Workspace.Store.FindSnapshot(idOrLabel) is not (_, { } snap))
@@ -48,21 +47,18 @@ public enum ReplResult
 /// <summary>An analysis command, shared by both the interactive REPL and <c>--exec</c>.</summary>
 public interface IReplCommand
 {
-    /// <summary>Primary command name, e.g. <c>dumpheap</c>.</summary>
     string Name { get; }
 
-    /// <summary>Alternate names, e.g. <c>dh</c>.</summary>
     IReadOnlyList<string> Aliases => [];
 
-    /// <summary>One-line description shown by <c>help</c>.</summary>
+    /// <summary>Description shown by help.</summary>
     string Summary { get; }
 
-    /// <summary>Group heading under which <c>help</c> lists this command.</summary>
+    /// <summary>Group heading in help.</summary>
     string Category => "Analysis";
 
-    /// <summary>Usage string, e.g. <c>gcroot &lt;address&gt;</c>.</summary>
     string Usage { get; }
 
-    /// <summary>Runs the command. <paramref name="args"/> excludes the command name itself.</summary>
+    /// <summary>Arguments exclude the command name.</summary>
     ReplResult Execute(ReplContext context, string[] args);
 }

@@ -41,16 +41,10 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
     public string? CurrentName { get; private set; }
 
     /// <summary>Loads a catalogued snapshot as the current target.</summary>
-    public void Load(Session session, SnapshotEntry entry)
-    {
-        Swap(Store.Open(entry.Id), session, entry, entry.Id);
-    }
+    public void Load(Session session, SnapshotEntry entry) => Swap(Store.Open(entry.Id), session, entry, entry.Id);
 
     /// <summary>Loads a dump file directly, without adding it to the library.</summary>
-    public void LoadTransient(string path)
-    {
-        Swap(Snapshot.Open(path), session: null, entry: null, Path.GetFileName(path));
-    }
+    public void LoadTransient(string path) => Swap(Snapshot.Open(path), session: null, entry: null, Path.GetFileName(path));
 
     /// <summary>Marks exit-time allocation profiles from exited <c>run --profile</c> targets.</summary>
     public IReadOnlyList<Session> PollExitedAllocationProfiles()
@@ -71,7 +65,7 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
 
             foreach ((int pid, string path) in profiles)
             {
-                Store.MarkAllocations(session, pid, target.NameFor(pid) ?? NameOf(pid), path);
+                Store.MarkAllocations(session, pid, target.NameFor(pid) ?? ProcessLocator.NameOf(pid), path);
             }
             (marked ??= []).Add(session);
         }
@@ -142,10 +136,10 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
         RunTarget? target = _targets.FirstOrDefault(t => Owns(t, pid));
         Session session = target is not null && FindSession(target) is { } existing
             ? existing
-            : Store.BeginSession(SessionKind.Collect, NameOf(pid));
+            : Store.BeginSession(SessionKind.Collect, ProcessLocator.NameOf(pid));
 
         SnapshotEntry entry = Store.AddSnapshot(session, dumpPath, moveIntoStore: true,
-            sourcePid: pid, sourceName: NameOf(pid) ?? target?.Name,
+            sourcePid: pid, sourceName: ProcessLocator.NameOf(pid) ?? target?.Name,
             provenanceSource: provenance, correlated: correlated, reason: reason);
         if (load)
         {
@@ -188,8 +182,6 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
         _targetSessions.TryGetValue(target, out string? id)
             ? Store.GetSession(id)
             : null;
-
-    private static string? NameOf(int pid) => ProcessLocator.NameOf(pid);
 
     /// <summary>Closes the current snapshot, leaving nothing loaded.</summary>
     public void Unload()

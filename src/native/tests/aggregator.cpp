@@ -1,10 +1,4 @@
-// Full-lifecycle tests for the correlation live-set tracking in Aggregator: driving record() +
-// the GC callbacks (beginGc / noteCondemnedRange / noteSurvivorRange / noteMove / endGc) and asserting
-// the resulting live set. The live-set math does not require CLR metadata.
-//
-// These cover the cases that were historically buggy: generational eviction (gen-2 objects dropped by
-// a gen-0 GC), LOH admission (large objects never survivor-reported by an ephemeral GC), Server-GC
-// interleaved remap (the k-way merge), and the windowed update's prefix/suffix splicing.
+// Drive allocation/GC lifecycles without CLR metadata to verify live addresses and identities.
 
 #include "sherlock/profiler/aggregator.hpp"
 
@@ -29,8 +23,7 @@ using namespace Sherlock;
 
 namespace {
 
-// A single dummy stack frame + class id — the correlation live-set logic doesn't depend on their
-// values (only the address bookkeeping matters), and name resolution is null-safe.
+// Dummy metadata keeps these tests focused on address bookkeeping.
 constexpr FrameId kFrame = 0x1000;
 constexpr ClassID kClass = 0x2000;
 
@@ -39,8 +32,6 @@ MethodRegistry& testMethods() {
     return methods;
 }
 
-// Record one object at `addr` (bytes default 24). Each distinct call site would key a Site; here one
-// site is fine since we assert on addresses/ids, not per-site stats.
 void alloc(Aggregator& a, std::uint64_t addr, std::uint64_t bytes = 24) {
     FrameId frames[1] = {kFrame};
     a.record(std::span<const FrameId>(frames, 1), bytes, static_cast<ObjectID>(addr), kClass);
@@ -54,8 +45,6 @@ std::vector<std::uint64_t> liveAddrs(const Aggregator& a) {
     return v;
 }
 
-// A correlation-enabled aggregator. Aggregator holds atomics (non-copyable/non-movable), so tests
-// construct it in place; inheriting exposes all its methods directly (a.beginGc(), a.record(), ...).
 struct Agg : Aggregator {
     Agg() : Aggregator(nullptr, nullptr, testMethods()) { enableCorrelation(); }
 };
@@ -73,8 +62,6 @@ std::string readAll(const std::filesystem::path& path) {
 }
 
 } // namespace
-
-// --- basic survival / death ------------------------------------------------------------------------
 
 TEST(AggregatorLifecycle, SurvivorIsTrackedDeadIsDropped) {
     Agg a;
@@ -98,20 +85,17 @@ TEST(AggregatorLifecycle, MovedSurvivorIsRemapped) {
     EXPECT_EQ(liveAddrs(a), (std::vector<std::uint64_t>{0x9000}));
 }
 
-// --- generational: a gen-2 object must NOT be evicted by a gen-0 GC -------------------------------
-
 TEST(AggregatorLifecycle, PromotedObjectSurvivesEphemeralGC) {
     Agg a;
     alloc(a, 0x1000);                        // will be "promoted" (low address = old gen)
-    // First GC: full-ish, promotes 0x1000 (condemn a wide range, it survives in place).
+    // Admit the object before an unrelated ephemeral collection.
     a.beginGc();
     a.noteCondemnedRange(0x1000, 0x8);
     a.noteSurvivorRange(0x1000, 0x8);
     a.endGc();
     ASSERT_EQ(liveAddrs(a), (std::vector<std::uint64_t>{0x1000}));
 
-    // Now a gen-0 GC condemning ONLY a high-address ephemeral window [0x8000,0x9000). 0x1000 is NOT
-    // condemned and NOT survivor-reported — it must be carried over, not dropped (the generational bug).
+    // 0x1000 is uncondemned and has no survivor report; retain it.
     alloc(a, 0x8000);
     a.beginGc();
     a.noteCondemnedRange(0x8000, 0x1000);
@@ -120,12 +104,9 @@ TEST(AggregatorLifecycle, PromotedObjectSurvivesEphemeralGC) {
     EXPECT_EQ(liveAddrs(a), (std::vector<std::uint64_t>{0x1000, 0x8000}));
 }
 
-// --- LOH: a large object is never survivor-reported by an ephemeral GC, but is alive ---------------
-
 TEST(AggregatorLifecycle, LargeObjectAdmittedWhenNotCondemned) {
     Agg a;
-    // A large object on the LOH at 0x40000000, allocated then a gen-0 GC runs that does NOT collect
-    // the LOH. It's on the LOH range but not condemned → must be admitted as alive.
+    // Ephemeral GC must admit the unexamined LOH object without a survivor report.
     alloc(a, 0x40000000, 2 * 1024 * 1024);
     a.beginGc();
     a.noteCondemnedRange(0x8000, 0x1000);        // gen-0 ephemeral segment only
@@ -154,8 +135,6 @@ TEST(AggregatorLifecycle, LargeObjectDroppedWhenCondemnedAndDead) {
     EXPECT_TRUE(liveAddrs(a).empty());
 }
 
-// --- pending admission across a first GC (newSurvivors_) ------------------------------------------
-
 TEST(AggregatorLifecycle, PendingObjectsAdmittedOnFirstSurvival) {
     Agg a;
     alloc(a, 0x2000);
@@ -169,8 +148,6 @@ TEST(AggregatorLifecycle, PendingObjectsAdmittedOnFirstSurvival) {
     EXPECT_EQ(liveAddrs(a), (std::vector<std::uint64_t>{0x1000, 0x3000}));
 }
 
-// --- Server GC: interleaved moves produce K>1 runs; the k-way merge must re-sort correctly ---------
-
 TEST(AggregatorLifecycle, ServerGCInterleavedMovesStaySorted) {
     Agg a;
     // Two "heaps": low block A around 0x1000, high block B around 0x2000. Both are live and promoted.
@@ -183,9 +160,7 @@ TEST(AggregatorLifecycle, ServerGCInterleavedMovesStaySorted) {
     a.noteCondemnedRange(0x1008, 0x8);
     a.noteCondemnedRange(0x2000, 0x8);
     a.noteCondemnedRange(0x2008, 0x8);
-    // Heap A moves UP to 0x9000; heap B moves DOWN to 0x8000 — so remapped order reverses relative to
-    // source order: sweeping source-sorted live_ yields runs [0x9000,0x9008] then [0x8000,0x8008],
-    // which the k-way merge must reorder to a globally sorted result.
+    // Cross-heap moves reverse block order; the live set must remain globally sorted.
     a.noteMove(0x1000, 0x9000, 0x8);
     a.noteMove(0x1008, 0x9008, 0x8);
     a.noteMove(0x2000, 0x8000, 0x8);
@@ -196,11 +171,9 @@ TEST(AggregatorLifecycle, ServerGCInterleavedMovesStaySorted) {
     EXPECT_EQ(live, (std::vector<std::uint64_t>{0x8000, 0x8008, 0x9000, 0x9008}));
 }
 
-// --- windowed update: the untouched prefix/suffix are preserved unchanged --------------------------
-
 TEST(AggregatorLifecycle, WindowedUpdatePreservesPrefixAndSuffix) {
     Agg a;
-    // Build a spread-out live set across three address regions via a full-ish GC that admits all.
+    // Admit objects across three address regions.
     for (std::uint64_t addr : {0x1000ull, 0x2000ull, 0x8000ull, 0x9000ull, 0x40000000ull}) {
         alloc(a, addr);
     }
@@ -217,8 +190,7 @@ TEST(AggregatorLifecycle, WindowedUpdatePreservesPrefixAndSuffix) {
     ASSERT_EQ(liveAddrs(a),
               (std::vector<std::uint64_t>{0x1000, 0x2000, 0x8000, 0x9000, 0x40000000}));
 
-    // A gen-0 GC touching ONLY the middle window [0x8000,0x9008): 0x8000 dies, 0x9000 survives. The
-    // prefix (0x1000,0x2000) and suffix (0x40000000) must be untouched.
+    // Change only [0x8000,0x9008); preserve the prefix and LOH suffix.
     alloc(a, 0x8800);   // a new gen-0 object in the window that survives
     a.beginGc();
     a.noteCondemnedRange(0x8000, 0x1008);   // [0x8000, 0x9008)
@@ -228,8 +200,6 @@ TEST(AggregatorLifecycle, WindowedUpdatePreservesPrefixAndSuffix) {
     EXPECT_EQ(liveAddrs(a),
               (std::vector<std::uint64_t>{0x1000, 0x2000, 0x8800, 0x9000, 0x40000000}));
 }
-
-// --- empty condemned = whole-heap (full GC with no bounds) → all non-survivors dropped -------------
 
 TEST(AggregatorLifecycle, EmptyCondemnedTreatsWholeHeapAsCondemned) {
     Agg a;
@@ -241,8 +211,6 @@ TEST(AggregatorLifecycle, EmptyCondemnedTreatsWholeHeapAsCondemned) {
     a.endGc();
     EXPECT_EQ(liveAddrs(a), (std::vector<std::uint64_t>{0x2000}));
 }
-
-// --- ids are stable across moves (identity travels with the object) -------------------------------
 
 TEST(AggregatorLifecycle, ObjectIdIsStableAcrossMoves) {
     Agg a;
@@ -266,11 +234,8 @@ TEST(AggregatorLifecycle, ObjectIdIsStableAcrossMoves) {
     EXPECT_EQ(after[0].id, id) << "object id must be stable across a move";
 }
 
-// --- a longer randomized-ish sequence: many GCs, growth, no loss/dup, always sorted ---------------
-
 TEST(AggregatorLifecycle, ManyGCsKeepLiveSetSortedAndConsistent) {
     Agg a;
-    std::uint64_t base = 0x100000;
     for (int gc = 0; gc < 20; ++gc) {
         // allocate a fresh ephemeral batch high in the address space
         std::uint64_t ephBase = 0x10000000 + static_cast<std::uint64_t>(gc) * 0x10000;
@@ -287,7 +252,6 @@ TEST(AggregatorLifecycle, ManyGCsKeepLiveSetSortedAndConsistent) {
     }
     // 20 GCs * 4 survivors each = 80 live objects retained.
     EXPECT_EQ(a.inspectLiveObjects().size(), 80u);
-    (void)base;
 }
 
 TEST(AggregatorSnapshot, RepeatedProfilesAreIndependentAndParseable) {

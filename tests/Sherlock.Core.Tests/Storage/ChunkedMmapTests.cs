@@ -6,12 +6,6 @@ using Xunit;
 
 namespace Sherlock.Core.Tests.Storage;
 
-/// <summary>
-/// Verifies <see cref="ChunkedMmap"/> reads correctly across chunk boundaries, the primitive that
-/// lets containers exceed the 2&nbsp;GiB single-mmap-view cap. Boundary math is off-by-one-prone, so
-/// these exercise reads that start in one chunk and end in another. ChunkSize is a const, so we
-/// validate the arithmetic on sub-chunk files plus a straddling read against a known pattern.
-/// </summary>
 public sealed class ChunkedMmapTests : IDisposable
 {
     private readonly TempDir _tmp = new();
@@ -78,7 +72,6 @@ public sealed class ChunkedMmapTests : IDisposable
         Assert.True(mmap.TryGetContiguous(100, 500, out ReadOnlySpan<byte> span));
         Assert.Equal(data.AsSpan(100, 500).ToArray(), span.ToArray());
 
-        // Beyond the file → not contiguous.
         Assert.False(mmap.TryGetContiguous(9_900, 500, out _));
     }
 

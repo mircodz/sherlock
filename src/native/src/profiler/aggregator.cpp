@@ -29,10 +29,7 @@ namespace Sherlock {
 
 namespace {
 
-// One shard pointer per thread, tagged with its owning Aggregator's id. The tag lets a new
-// Aggregator on the same thread allocate a fresh shard instead of reusing the previous one's
-// (freed in its destructor: use-after-free). Keyed on a monotonic id, not `this`, because a
-// stack-allocated Aggregator can be reborn at a just-destroyed one's address.
+// Use a monotonic owner ID, not this: a new Aggregator may reuse a destroyed one's address.
 struct ThreadShard {
     std::uint64_t ownerId = 0;
     Aggregator::Shard* shard = nullptr;
@@ -51,9 +48,7 @@ std::uint64_t hashFrames(std::span<const FrameId> frames) {
     return h;
 }
 
-/// Narrows a UTF-16 metadata string to ASCII (type/method names are ASCII); non-ASCII
-/// code units become '?'. Portable across the WCHAR/wchar_t difference between Windows
-/// and the Unix PAL.
+// Preserve ASCII type names; replace other UTF-16 units with '?' on Windows and PAL.
 std::string narrow(const WCHAR* s, ULONG len) {
     std::string out;
     out.reserve(len);
@@ -62,8 +57,7 @@ std::string narrow(const WCHAR* s, ULONG len) {
     return out;
 }
 
-// The BCL name for a primitive array element, so a Double[] reads "System.Double[]" as ClrMD spells
-// it. Empty for anything not a primitive element type (the caller resolves those via the class id).
+// ClrMD-compatible primitive names; other element types need ClassID resolution.
 const char* primitiveElementName(CorElementType t) {
     switch (t) {
         case ELEMENT_TYPE_BOOLEAN: return "System.Boolean";
@@ -86,10 +80,8 @@ const char* primitiveElementName(CorElementType t) {
     }
 }
 
-// A typeDef's name, joining enclosing types with '+' as ClrMD does (e.g. "System.Collections.
-// Generic.List`1+Enumerator"). GetTypeDefProps gives a nested type only its leaf name, so we climb
-// GetNestedClassProps to the outermost, which carries the namespace. Generic arity stays as the
-// metadata backtick suffix, matching ClrMD.
+// Nested TypeDefs supply only leaf names. Join enclosing types with '+' and retain
+// metadata's generic-arity suffixes to match ClrMD.
 std::string typeDefName(IMetaDataImport* md, mdTypeDef typeDef) {
     std::string name;
     mdTypeDef cur = typeDef;
@@ -124,8 +116,7 @@ Aggregator::~Aggregator() {
     }
 }
 
-// Reserve the per-thread shard structures up front so the hot path never pays for a map rehash
-// or a pending realloc mid-allocation. `pending` is clear()ed (not freed) each GC, keeping capacity.
+// Reserve initial shard capacity; pending retains its capacity across GCs.
 namespace {
 constexpr std::size_t kSitesReserve = 4096;    // distinct allocation stacks per thread
 constexpr std::size_t kPendingReserve = 2048;  // sampled objects awaiting their first GC
@@ -146,8 +137,7 @@ Aggregator::Shard& Aggregator::localShard() {
 }
 
 void Aggregator::record(std::span<const FrameId> frames, std::uint64_t bytes, ObjectID addr, ClassID classId) {
-    // Key by (stack, type): mix classId into the stack hash so one call site allocating two types
-    // lands in two sites. A key collision across distinct pairs would only merge counts.
+    // Include type so one call site allocating different types gets separate sites.
     std::uint64_t key = hashFrames(frames);
     key = (key ^ static_cast<std::uint64_t>(classId)) * 1099511628211ull;
     Shard& shard = localShard();
@@ -194,8 +184,7 @@ void Aggregator::noteSurvivorRange(ObjectID start, std::uint64_t length) {
 }
 
 void Aggregator::noteMove(ObjectID oldStart, ObjectID newStart, std::uint64_t length) {
-    // The old range is also a survivor span (for the liveness test); the old->new delta lets us
-    // follow the object's identity to its new address.
+    // Test liveness at the old address before following the relocation.
     std::lock_guard<std::mutex> lock(noteMutex_);
     survivorRanges_.emplace_back(static_cast<std::uint64_t>(oldStart),
                                  static_cast<std::uint64_t>(oldStart) + length);
@@ -226,8 +215,7 @@ void Aggregator::endGc() {
         correlationLock.lock();
     }
 
-    // Sort the range vectors (required by inSortedRanges / ForwardCursor). The runtime tends to
-    // report these already in address order, so guard each sort behind an is_sorted check.
+    // Range queries require address order; skip sorting already-ordered callbacks.
     if (!std::is_sorted(survivorRanges_.begin(), survivorRanges_.end()))
         std::sort(survivorRanges_.begin(), survivorRanges_.end());
     if (!std::is_sorted(condemnedRanges_.begin(), condemnedRanges_.end()))
@@ -239,10 +227,7 @@ void Aggregator::endGc() {
         std::sort(moves_.begin(), moves_.end(),
                   [](const intervals::MoveRange& a, const intervals::MoveRange& b) { return a.oldStart < b.oldStart; });
 
-    // Fold per-site survived-stats and collect this GC's fresh survivors. An object survives if it's
-    // in a survivor span, OR it's on the LOH/POH but uncondemned: an ephemeral GC never reports large-
-    // object survivors, yet they're alive (not examined). Without this, large objects would be dropped
-    // from `pending` at the first ephemeral GC.
+    // Uncondemned LOH/POH objects are alive even without an ephemeral-GC survivor report.
     if (correlate_)
         newSurvivors_.clear();
     for (Shard* shard : registeredShards()) {
@@ -260,10 +245,7 @@ void Aggregator::endGc() {
     }
 
     if (correlate_) {
-        // live_ is sorted by address and grows monotonically, so touching all of it every GC makes
-        // frequent gen-0 GCs progressively slower. Sweep only the contiguous address window this GC
-        // could have changed; everything outside is carried verbatim. A full GC condemns the whole
-        // heap, so window = whole vector.
+        // Sweep only the address window this GC could change; carry the rest verbatim.
         auto byAddr = [](const LiveEntry& a, const LiveEntry& b) { return a.addr < b.addr; };
         std::sort(newSurvivors_.begin(), newSurvivors_.end(), byAddr);
 
@@ -275,8 +257,7 @@ void Aggregator::endGc() {
         } else {
             windowStart = condemnedRanges_.front().first;
             windowEnd = condemnedRanges_.back().second;
-            // A relocated entry (move target) or fresh survivor must fall inside the window, else the
-            // splice would misorder it; fold both into the bounds.
+            // Include move targets and fresh survivors so the splice preserves global order.
             for (const intervals::MoveRange& m : moves_) {
                 windowStart = std::min(windowStart, m.newStart);
                 windowEnd = std::max(windowEnd, m.newStart + m.length);
@@ -295,10 +276,8 @@ void Aggregator::endGc() {
             std::upper_bound(live_.begin(), live_.end(), windowEnd,
                              [](std::uint64_t v, const LiveEntry& e) { return v < e.addr; }) - live_.begin());
 
-        // (a) Sweep live_[lo, hi) into windowScratch_: carry uncondemned survivors verbatim, remap
-        // collected survivors, drop the dead. Compaction preserves order within a heap, so the output
-        // is K ascending runs (K = interleaving GC heaps; 1 for Workstation GC). A run boundary is
-        // where an emitted address drops, recorded free, so we k-way merge instead of re-sorting.
+        // Carry uncondemned objects, remap survivors and drop deaths. Cross-heap moves can
+        // reorder addresses; record each descending transition for the subsequent run merge.
         intervals::ForwardCursor cursor(survivorRanges_, moves_, condemnedRanges_);
         windowScratch_.clear();
         windowScratch_.reserve((hi - lo) + newSurvivors_.size());
@@ -323,8 +302,7 @@ void Aggregator::endGc() {
             havePrev = true;
         }
 
-        // (b) Merge the K swept runs (plus newSurvivors_) into sorted order. One run and no fresh
-        // survivors: already sorted, skip the merge (the Workstation-GC fast path).
+        // Merge remapped runs with fresh survivors unless the result is already sorted.
         std::vector<LiveEntry>* merged;
         std::size_t nRuns = runStarts_.size();
         if (nRuns <= 1 && newSurvivors_.empty()) {
@@ -343,9 +321,8 @@ void Aggregator::endGc() {
 
             mergeOut_.clear();
             mergeOut_.reserve(windowScratch_.size() + newSurvivors_.size());
-            // K is tiny (heaps ~ cores, plus one). A flat min-scan over the run heads beats a heap's
-            // cache misses at this K. Ties resolve to the lower-indexed run so a carried survivor wins
-            // over a colliding fresh one (swept runs precede newSurvivors_); dedup below drops the loser.
+            // Lower-indexed runs win ties: carried survivors precede fresh ones,
+            // so deduplication below preserves the carried identity.
             for (;;) {
                 int best = -1;
                 std::uint64_t bestAddr = 0;
@@ -362,15 +339,13 @@ void Aggregator::endGc() {
             merged = &mergeOut_;
         }
 
-        // Drop duplicate addresses (a fresh survivor colliding with a carried one; keep the carried
-        // identity if it happens).
+        // Keep the carried identity when a fresh survivor has the same address.
         merged->erase(
             std::unique(merged->begin(), merged->end(),
                         [](const LiveEntry& a, const LiveEntry& b) { return a.addr == b.addr; }),
             merged->end());
 
-        // (c) Splice the merged window back at lo. erase/insert shift only the suffix live_[hi,end);
-        // the large, growing prefix live_[0,lo) is untouched, so per-GC cost is O(window + suffix).
+        // Splice at lo, shifting only the suffix; the untouched prefix stays in place.
         live_.erase(live_.begin() + lo, live_.begin() + hi);
         live_.insert(live_.begin() + lo, merged->begin(), merged->end());
 
@@ -390,8 +365,7 @@ void Aggregator::countPendingAsSurvived() {
         correlationLock.lock();
     }
 
-    // At shutdown, anything still pending was never collected, i.e. still alive. Append the newly
-    // discovered live objects and re-sort once (cold, one-shot path).
+    // Uncollected pending objects are still alive at shutdown.
     std::size_t appended = 0;
     for (Shard* shard : registeredShards()) {
         std::lock_guard shardLock(shard->mutex);
@@ -408,8 +382,7 @@ void Aggregator::countPendingAsSurvived() {
     if (correlate_ && appended > 0) {
         std::sort(live_.begin(), live_.end(),
                   [](const LiveEntry& a, const LiveEntry& b) { return a.addr < b.addr; });
-        // A pending object's address may already be tracked (allocated then survived a prior GC);
-        // keep the first of any duplicate so each address maps to one identity.
+        // Keep one identity per address.
         live_.erase(std::unique(live_.begin(), live_.end(),
                                 [](const LiveEntry& a, const LiveEntry& b) { return a.addr == b.addr; }),
                     live_.end());
@@ -502,8 +475,7 @@ bool Aggregator::emitCorrelation(const std::string& path) noexcept {
         storage::ProvenanceWriter pw;
         writeProfile(pw, merged);
 
-        // Site frames and class ids are immutable after insertion, so copied live entries can safely
-        // resolve them after the short shard-locking snapshot phase.
+        // Site frames and class IDs are immutable, so resolve them outside shard locks.
         std::unordered_map<const Site*, std::uint32_t> siteStack;
         for (const LiveEntry& lv : live) {
             auto [it, inserted] = siteStack.try_emplace(lv.site, 0u);
@@ -623,6 +595,7 @@ const std::string& Aggregator::resolveTypeName(ClassID classId) {
             return cached->second;
     }
 
+    // CLR metadata calls and recursive array resolution must run outside the cache lock.
     std::string name = resolveTypeNameUncached(classId);
     std::lock_guard lock(typeNameMutex_);
     return typeNameCache_.emplace(classId, std::move(name)).first->second;
@@ -642,9 +615,7 @@ std::string Aggregator::resolveTypeNameUncached(ClassID classId) {
     if (classId == 0 || info_ == nullptr)
         return "<unknown>";
 
-    // Arrays have no typeDef; the runtime describes them via IsArrayClass. Format the element name
-    // plus one bracket group per dimension ("System.Double[]", "System.Int32[,]"), as ClrMD spells
-    // them. The element is itself resolved (recursively for jagged arrays).
+    // Arrays have no TypeDef. Resolve jagged elements recursively and use ClrMD rank syntax.
     CorElementType elementType{};
     ClassID elementClass = 0;
     ULONG rank = 0;

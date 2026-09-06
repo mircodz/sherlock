@@ -13,7 +13,6 @@ public sealed class ExceptionAnalyzer(Snapshot snapshot)
     {
         var byAddress = new Dictionary<ulong, ExceptionInfo>();
 
-        // Exceptions in flight on a thread are the most interesting.
         foreach (ClrThread thread in snapshot.Runtime.Threads)
         {
             ClrException? current = thread.CurrentException;
@@ -23,7 +22,6 @@ public sealed class ExceptionAnalyzer(Snapshot snapshot)
             }
         }
 
-        // Plus other exception objects still alive on the heap.
         foreach (ClrObject obj in snapshot.Runtime.Heap.EnumerateObjects())
         {
             cancellationToken.ThrowIfCancellationRequested();

@@ -7,15 +7,9 @@ using Xunit;
 
 namespace Sherlock.Core.Tests.Analysis;
 
-/// <summary>
-/// Ground-truth tests for dominator and real root paths over hand-built graphs whose chains are known by
-/// construction. No ClrMD: the tree is built from a computed <see cref="DominatorAnalyzer.DominatorResult"/>
-/// with a graph-backed type-name resolver, so the heap reference is never touched.
-/// </summary>
 public sealed class RetentionPathTests
 {
-    // Builds a HeapGraph from an explicit edge list. Nodes 0..n-1 with the given sizes; `roots` are the
-    // GC roots (successors of the synthetic root n). Type names are "T{id}" so paths are checkable.
+    // Nodes are 0..n-1 with names T{id}; node n is the synthetic GC root.
     private static HeapGraph Build(uint[] sizes, int[] roots, params (int From, int To)[] edges)
     {
         int n = sizes.Length;
@@ -40,7 +34,7 @@ public sealed class RetentionPathTests
         return new HeapGraph(addresses, sizes, offsets, edgeList.ToArray(), typeIds, typeNames);
     }
 
-    // Constructs a graph-backed DominatorTree without opening a dump.
+    // Resolve names from the graph so the null ClrHeap is never dereferenced.
     private static DominatorTree TreeOf(HeapGraph g)
     {
         DominatorAnalyzer.DominatorResult r = DominatorAnalyzer.Compute(g);
@@ -56,7 +50,6 @@ public sealed class RetentionPathTests
     [Fact]
     public void Chain_PathIsRootToTargetInclusive()
     {
-        // root -> 0 -> 1 -> 2. Retention path of 2 is [T0, T1, T2] (root-most first, target last).
         HeapGraph g = Build([10, 10, 10], roots: [0], (0, 1), (1, 2));
         DominatorTree t = TreeOf(g);
 
@@ -68,8 +61,7 @@ public sealed class RetentionPathTests
     [Fact]
     public void Diamond_PathStopsAtDominatorNotEveryHolder()
     {
-        // root -> 0; 0 -> 1; 0 -> 2; 1 -> 3; 2 -> 3. Node 3 has two holders (1 and 2), but its dominator
-        // is 0 (every root path to 3 goes through 0), so the retention path is [T0, T3] — not T1/T2.
+        // Every root path to 3 passes through 0, but neither holder 1 nor 2 dominates it.
         HeapGraph g = Build([10, 10, 10, 10], roots: [0], (0, 1), (0, 2), (1, 3), (2, 3));
         DominatorTree t = TreeOf(g);
 
@@ -138,7 +130,6 @@ public sealed class RetentionPathTests
     [Fact]
     public void Unreachable_ReturnsNull()
     {
-        // Node 1 is not reachable from the root (no edge into it) → collectable → null path.
         HeapGraph g = Build([10, 10], roots: [0]);
         DominatorTree t = TreeOf(g);
 

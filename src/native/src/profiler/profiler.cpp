@@ -30,8 +30,7 @@ namespace {
 constexpr std::size_t kMaxFrames = 64;
 constexpr std::chrono::seconds kExitCaptureTimeout{90};
 
-// Insert the current pid before the extension (allocations.tsv -> allocations.<pid>.tsv), so every
-// profiled process (including children that inherit the env) writes a distinct file.
+// Insert PID before the extension so children inheriting the environment write distinct files.
 std::string withPid(const std::string& path) {
 #ifdef _WIN32
     int pid = _getpid();
@@ -146,19 +145,16 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
     bool hasStartupTriggers = triggerEnv != nullptr && triggerEnv[0] != '\0';
     const char* ctlSocketEnv = std::getenv("SHERLOCK_CONTROL_SOCKET");
     bool controlPresent = ctlSocketEnv != nullptr && ctlSocketEnv[0] != '\0';
-    // Snapshot triggers are possible if pre-armed at startup, or if the control channel lets the
-    // REPL arm them live.
+    // The control channel can arm triggers after startup.
     bool triggersEnabled = hasStartupTriggers || controlPresent;
 
-    // Allocation tracking (ObjectAllocated) and GC callbacks are always on. The shadow stack (per-thread
-    // call stack maintained by ReJIT-injected IL, read O(1) in ObjectAllocated) captures allocation
-    // stacks, so ReJIT + module loads are always enabled too.
+    // Allocation provenance always needs GC callbacks and ReJIT-maintained shadow stacks.
     DWORD eventMask = COR_PRF_MONITOR_OBJECT_ALLOCATED |
                       COR_PRF_ENABLE_OBJECT_ALLOCATED |
                       COR_PRF_MONITOR_GC | // GC callbacks for survivor tracking + gc: triggers
                       COR_PRF_ENABLE_REJIT | COR_PRF_MONITOR_MODULE_LOADS;
     if (triggersEnabled)
-        // Exceptions for throw: triggers. call: triggers simply don't fire on inlined/tiny methods.
+        // throw: triggers need exception callbacks.
         eventMask |= COR_PRF_MONITOR_EXCEPTIONS;
 
     hr = corProfilerInfo->SetEventMask(eventMask);
@@ -208,8 +204,6 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
         }
     }
 
-    // Control channel: connect to sl if a socket was provided. Carries on-demand requests
-    // (emit-correlation, flush-allocations, arm-trigger) and pushes events (snapshot triggers).
     if (controlPresent) {
         control = std::make_unique<control::ControlChannel>(logger.get());
         if (std::optional<std::string> err = control->connect(ctlSocketEnv)) {
@@ -217,8 +211,10 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
             control.reset();
         } else {
             std::vector<std::string> features = {"allocations"};
-            if (correlate) features.push_back("correlate");
-            if (correlate) features.push_back("coherent-capture");
+            if (correlate) {
+                features.push_back("correlate");
+                features.push_back("coherent-capture");
+            }
             if (triggersEnabled) features.push_back("snapshot-triggers");
             if (snapshotOnExit_) features.push_back("exit-capture");
             control->start("0.1", features,
@@ -257,9 +253,7 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
 }
 
 HRESULT STDMETHODCALLTYPE Profiler::InitializeForAttach(IUnknown*, void*, UINT) {
-    // Attach is unsupported: allocation tracking needs COR_PRF_MONITOR_OBJECT_ALLOCATED, an IMMUTABLE
-    // flag SetEventMask rejects on attach (CORPROF_E_IMMUTABLE_FLAGS_SET), so there's no useful degraded
-    // mode. Fail clearly at load time. Sherlock attaches at process start via CORECLR_PROFILER.
+    // COR_PRF_MONITOR_OBJECT_ALLOCATED is immutable and cannot be enabled on runtime attach.
     if (logger)
         logger->error("Sherlock must be set at startup (CORECLR_PROFILER); runtime attach is not supported.");
     return E_NOTIMPL;
@@ -285,16 +279,14 @@ control::Reply Profiler::handleControl(std::string_view cmd, std::span<const std
         if (!aggregator->emitCorrelation(path)) {
             return control::Reply::error("could not write correlation snapshot");
         }
-        // Return the GC count at emit; sl re-checks after the dump to detect drift (a GC between emit
-        // and dump would move objects and invalidate the address join).
+        // sl rechecks this count after the dump: an intervening GC invalidates the address join.
         return control::Reply::success(path + "\t" + std::to_string(gcCount.load()));
     }
     if (cmd == control::commands::kGcCount) {
         return control::Reply::success(std::to_string(gcCount.load()));
     }
     if (cmd == control::commands::kHeapSize) {
-        // Live managed-heap size, from the current generation bounds (sum of each gen's live range).
-        // Reply is tab-separated: total \t gen0 \t gen1 \t gen2 \t loh \t poh (bytes).
+        // Reply: total \t gen0 \t gen1 \t gen2 \t loh \t poh, in bytes.
         if (corProfilerInfo == nullptr) {
             return control::Reply::error("no profiler info");
         }
@@ -361,10 +353,8 @@ control::Reply Profiler::handleControl(std::string_view cmd, std::span<const std
         if (!coherentCapture_.begin(token)) {
             return control::Reply::error("a coherent capture is already in progress");
         }
-        // Runs on its own native thread: ForceGC cannot be called with a profiler callback on the
-        // stack, and calling it inline here would block this control (reader) thread until release
-        // - but complete-coherent-capture/abort-coherent-capture can only arrive on that same
-        // reader thread, so it would never be able to release itself. Returns immediately.
+        // ForceGC forbids profiler-callback stacks and blocks until release. Keep the
+        // control reader free to receive complete/abort requests.
         coherentForceGcRunning_.store(true, std::memory_order_release);
         try {
             coherentForceGcThread_ = std::thread(&Profiler::runCoherentForceGc, this, token);
@@ -389,12 +379,11 @@ control::Reply Profiler::handleControl(std::string_view cmd, std::span<const std
             return control::Reply::success("aborted");
         }
 
-        std::string path;
         if (!coherentCapture_.isParkedFor(token)) {
             return control::Reply::error("no coherent capture is parked for this token");
         }
         // The GC callback is parked past endGc(), so no extra ForceGC is needed.
-        path = withCaptureId(correlationPath, snapshotSequence.fetch_add(1, std::memory_order_relaxed));
+        const std::string path = withCaptureId(correlationPath, snapshotSequence.fetch_add(1, std::memory_order_relaxed));
         if (!aggregator->emitCorrelation(path)) {
             (void)coherentCapture_.abort(token);
             if (coherentForceGcThread_.joinable()) {
@@ -449,7 +438,7 @@ bool Profiler::armTrigger(const std::string& spec, bool live) {
     if (kind == "alloc") { triggers->add(SnapshotTriggers::Kind::Alloc, arg, "alloc:" + arg); return true; }
     if (kind == "throw") { triggers->add(SnapshotTriggers::Kind::Throw, arg, arg.empty() ? "throw" : "throw:" + arg); return true; }
     if (kind == "gc")    { triggers->add(SnapshotTriggers::Kind::Gc, arg, arg.empty() ? "gc" : "gc:" + arg); return true; }
-    return false; // unknown kind
+    return false;
 }
 
 void Profiler::fireTrigger(const std::string& display) noexcept {
@@ -536,10 +525,7 @@ void Profiler::handleEntryPointReturn() noexcept {
     }
 }
 
-// EXPERIMENTAL "coherent capture". Runs on its own native thread (never the control reader thread
-// or a profiler-callback thread - ForceGC forbids the latter). ForceGC blocks until the induced GC
-// (and, if it's the armed one, the park in handleCoherentCaptureGc) fully completes, so this thread
-// stays alive for the whole barrier lifetime.
+// ForceGC keeps this native thread alive until the GC callback's barrier is released.
 void Profiler::runCoherentForceGc(std::string token) noexcept {
     try {
         HRESULT hr = corProfilerInfo->ForceGC();
@@ -551,8 +537,6 @@ void Profiler::runCoherentForceGc(std::string token) noexcept {
                     std::format("ForceGC failed: 0x{:08x}", static_cast<unsigned>(hr))});
             }
         }
-        // On success the armed GC's GarbageCollectionFinished has already parked and been released
-        // by the time ForceGC() returns; nothing left to do here.
     } catch (const std::exception& ex) {
         (void)coherentCapture_.abort(token);
         logger->error("coherent capture: ForceGC thread failed: {}", ex.what());
@@ -563,9 +547,7 @@ void Profiler::runCoherentForceGc(std::string token) noexcept {
     coherentForceGcRunning_.store(false, std::memory_order_release);
 }
 
-// Called from GarbageCollectionFinished, after aggregator->endGc() has remapped the live set, only
-// when coherentCapture_.active() is true (Arming or Parked somewhere). Must not throw across the
-// callback boundary.
+// Park only after endGc() remaps the live set. Exceptions must not cross the CLR callback boundary.
 void Profiler::handleCoherentCaptureGc() noexcept {
     try {
         const std::uint64_t gc = gcCount.load(std::memory_order_relaxed);
@@ -588,9 +570,7 @@ void Profiler::handleCoherentCaptureGc() noexcept {
             logger->error("coherent capture: could not send ready event; releasing GC barrier");
             coherentCapture_.forceRelease();
         }
-        // Blocks this GC callback - and so the CLR, which stays GC-stalled - until complete/abort
-        // releases it or the hard timeout below fires. The timeout always releases: it's a safety
-        // net against a crashed or hung sl leaving the target process wedged forever.
+        // Keep the CLR GC-stalled until complete/abort. The timeout releases a stranded target.
         control::CoherentCaptureBarrier::ParkResult result =
             coherentCapture_.park(std::chrono::seconds(60));
         if (result == control::CoherentCaptureBarrier::ParkResult::TimedOut) {
@@ -611,10 +591,8 @@ HRESULT STDMETHODCALLTYPE Profiler::Shutdown() {
     if (control) {
         control->stop(); // stop serving requests before we tear down the aggregator
     }
-    // Only safe to touch coherentForceGcThread_/coherentCapture_ here because control->stop() just
-    // above has already joined the reader thread, so no in-flight begin/complete/abort call can be
-    // racing this. Wake a barrier that's Arming or Parked (bounded by its own 60s hard timeout if
-    // it's genuinely stuck) and join, before the aggregator it may still be reading gets torn down.
+    // stop() joined the control reader, so no begin/complete/abort can race this.
+    // Release and join the GC thread before tearing down the aggregator it may read.
     coherentCapture_.forceRelease();
     exitCapture_.forceRelease();
     if (coherentForceGcThread_.joinable()) {
@@ -646,12 +624,9 @@ HRESULT STDMETHODCALLTYPE Profiler::ObjectAllocated(ObjectID objectId, ClassID c
     if (!isInitialized.load() || isShuttingDown.load()) {
         return S_OK;
     }
-    // The body allocates (record/resolveTypeName/std::string) and must never let an exception escape
-    // into the CLR across the COM boundary (UB). Contain it and always return S_OK.
+    // Allocation and metadata failures must not unwind across the CLR COM boundary.
     try {
-        // Object size drives totals, the sampling gate, and the aggregator record. GetObjectSize2
-        // returns SIZE_T (64-bit) so it doesn't truncate >4 GB LOH objects; skip on failure rather
-        // than record a bogus 0.
+        // GetObjectSize2 preserves large-object sizes; skip failures instead of recording zero.
         SIZE_T objectSize = 0;
         if (FAILED(corProfilerInfo->GetObjectSize2(objectId, &objectSize)) || objectSize == 0) {
             return S_OK;
@@ -660,15 +635,13 @@ HRESULT STDMETHODCALLTYPE Profiler::ObjectAllocated(ObjectID objectId, ClassID c
         totalAllocations.fetch_add(1, std::memory_order_relaxed);
         totalBytes.fetch_add(objectSize, std::memory_order_relaxed);
 
-        // alloc: triggers, fire once when an instance of the armed type is allocated. resolveTypeName
-        // is a (cached) metadata lookup, so only pay it when an alloc trigger is actually armed.
+        // Resolve type names here only when allocation triggers need them.
         if (triggers && triggers->wantsAlloc()) {
             if (auto display = triggers->onAlloc(aggregator->resolveTypeName(classId)))
                 fireTrigger(*display);
         }
 
-        // Sampling gate: when an interval is set, only every ~N bytes pays for the (expensive)
-        // stack walk; 0 means sample every allocation.
+        // A zero interval samples every allocation; otherwise sample after each byte threshold.
         bool take = sampleInterval == 0;
         if (!take) {
             t_bytesSinceSample += objectSize;
@@ -680,9 +653,7 @@ HRESULT STDMETHODCALLTYPE Profiler::ObjectAllocated(ObjectID objectId, ClassID c
         if (!take)
             return S_OK;
 
-        // Attribute the allocation to the shadow stack. It's stored root->leaf; we hand record() a
-        // span directly into that storage (no copy, no stack walk). When deeper than kMaxFrames, keep
-        // the leaf-most frames (innermost callers nearest the allocation), the contiguous tail.
+        // Borrow the root -> leaf FrameId buffer; retain the last kMaxFrames stored frames.
         const std::uint32_t depth = shadow::storedDepth();
         const std::uint32_t n = depth < kMaxFrames ? depth : static_cast<std::uint32_t>(kMaxFrames);
         const FrameId* sf = shadow::frames();
@@ -697,7 +668,7 @@ HRESULT STDMETHODCALLTYPE Profiler::ObjectAllocated(ObjectID objectId, ClassID c
     return S_OK;
 }
 
-// --- Required ICorProfilerCallback8 stubs --------------------------------------------------------
+// CLR callbacks include no-op methods required by ICorProfilerCallback8.
 HRESULT STDMETHODCALLTYPE Profiler::AppDomainCreationStarted(AppDomainID) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::AppDomainCreationFinished(AppDomainID, HRESULT) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::AppDomainShutdownStarted(AppDomainID) { return S_OK; }
@@ -718,8 +689,7 @@ HRESULT STDMETHODCALLTYPE Profiler::ModuleLoadFinished(ModuleID moduleId, HRESUL
         if (snapshotOnExit_) {
             (void)armExitEntryPoint(moduleId);
         }
-        // Resolve probes first. The global shadow-stack ReJIT that follows then sees and
-        // composes those plans without issuing a duplicate startup ReJIT request.
+        // Resolve probes before the shared rewrite to avoid duplicate startup ReJIT requests.
         if (probes) {
             probes->onModuleLoaded(moduleId);
         }
@@ -790,7 +760,6 @@ HRESULT STDMETHODCALLTYPE Profiler::ObjectsAllocatedByClass(ULONG, ClassID[], UL
 HRESULT STDMETHODCALLTYPE Profiler::ObjectReferences(ObjectID, ClassID, ULONG, ObjectID[]) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::RootReferences(ULONG, ObjectID[]) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ExceptionThrown(ObjectID thrownObjectId) {
-    // throw: triggers, fire once when a matching exception type is thrown.
     if (triggers && triggers->wantsThrow() && aggregator) {
         ClassID classId = 0;
         if (SUCCEEDED(corProfilerInfo->GetClassFromObject(thrownObjectId, &classId))) {
@@ -821,15 +790,13 @@ HRESULT STDMETHODCALLTYPE Profiler::ThreadNameChanged(ThreadID, ULONG, WCHAR[]) 
 HRESULT STDMETHODCALLTYPE Profiler::GarbageCollectionStarted(int cGenerations, BOOL generationCollected[], COR_PRF_GC_REASON) {
     gcCount.fetch_add(1, std::memory_order_relaxed); // for snapshot drift detection
     if (aggregator) aggregator->beginGc();
-    // Remember the highest generation being collected, for gc: triggers.
     int maxGen = 0;
     for (int g = 0; g < cGenerations; ++g)
         if (generationCollected[g]) maxGen = g;
     maxGenCollected.store(maxGen, std::memory_order_relaxed);
 
-    // Report the address spans of the condemned generation(s) to the aggregator. The GC only reports
-    // survivors for generations it collects; a tracked object in a higher, un-collected gen must be
-    // carried over, not dropped. GetGenerationBounds here reflects the pre-collection layout.
+    // Bounds are pre-GC. Higher, uncollected generations have no survivor reports
+    // and must be carried over rather than treated as dead.
     if (aggregator && corProfilerInfo) {
         ULONG count = 0;
         if (SUCCEEDED(corProfilerInfo->GetGenerationBounds(0, &count, nullptr)) && count > 0) {
@@ -847,9 +814,7 @@ HRESULT STDMETHODCALLTYPE Profiler::GarbageCollectionStarted(int cGenerations, B
                         aggregator->noteCondemnedRange(
                             ranges[i].rangeStart, static_cast<std::uint64_t>(ranges[i].rangeLength));
                     }
-                    // Separately report the LOH/POH spans (gen 3/4) regardless of condemnation: a large
-                    // object allocated between full GCs is never survivor-reported by an ephemeral GC,
-                    // so the aggregator admits it as alive when it's on the LOH/POH but not condemned.
+                    // Uncondemned LOH/POH objects need admission without survivor reports.
                     if (g >= 3) {
                         aggregator->noteLargeObjectRange(
                             ranges[i].rangeStart, static_cast<std::uint64_t>(ranges[i].rangeLength));
@@ -863,14 +828,11 @@ HRESULT STDMETHODCALLTYPE Profiler::GarbageCollectionStarted(int cGenerations, B
 HRESULT STDMETHODCALLTYPE Profiler::SurvivingReferences(ULONG, ObjectID[], ULONG[]) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::GarbageCollectionFinished() {
     if (aggregator) aggregator->endGc();
-    // gc: triggers, fire once after a collection of the armed generation.
     if (triggers && triggers->wantsGc()) {
         if (auto display = triggers->onGc(maxGenCollected.load(std::memory_order_relaxed)))
             fireTrigger(*display);
     }
-    // EXPERIMENTAL coherent capture: active() is a lock-free check, so this costs nothing when no
-    // capture is in flight (the overwhelmingly common case for this opt-in feature). endGc() above
-    // has already remapped the live set, which is the precondition for parking here.
+    // endGc() must remap the live set before the capture barrier parks.
     if (coherentCapture_.active()) {
         handleCoherentCaptureGc();
     }
@@ -885,8 +847,7 @@ HRESULT STDMETHODCALLTYPE Profiler::ProfilerDetachSucceeded() { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ReJITCompilationStarted(FunctionID, ReJITID, BOOL) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::GetReJITParameters(ModuleID moduleId, mdMethodDef methodId, ICorProfilerFunctionControl* pFunctionControl) {
     try {
-        // There is exactly one body rewrite. Trigger lookup happens once here; the resulting
-        // stable cookie is embedded into the method alongside shadow-stack maintenance.
+        // One rewrite embeds the stable probe cookie alongside shadow-stack maintenance.
         ProbePlan probe = probes ? probes->planFor(moduleId, methodId) : ProbePlan{};
         if (shadowInstr) {
             const bool rewritten =
@@ -909,8 +870,6 @@ HRESULT STDMETHODCALLTYPE Profiler::ReJITError(ModuleID, mdMethodDef methodId, F
     logger->error(
         "ReJIT error for token {}: 0x{:08x}",
         methodId, static_cast<unsigned>(hrStatus));
-    // Feed the circuit breaker: enough rewrite rejections latch the shadow-stack instrumenter off so
-    // we stop handing the runtime IL it won't accept.
     if (shadowInstr)
         shadowInstr->noteReJITError();
     return S_OK;

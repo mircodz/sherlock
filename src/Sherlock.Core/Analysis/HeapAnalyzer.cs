@@ -65,8 +65,7 @@ public sealed class HeapAnalyzer(Snapshot snapshot)
             return listing with { Instances = selected };
         }
 
-        // Min-heap keyed by size: the smallest of the current top-K sits at the front, evicted when a
-        // larger instance arrives.
+        // Keep the smallest selected instance at the front for eviction.
         var top = new PriorityQueue<ObjectInstance, ulong>(limit);
         long totalMatched = 0;
         ulong totalSize = 0;

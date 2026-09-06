@@ -9,18 +9,18 @@
 #include <unordered_map>
 #include <vector>
 
-// The interned symbol tables (Strings/Frames/Stacks/StackFrames). Frames dedup by name, stacks by
-// frame-id sequence, so a stack is stored once and referenced by a 4-byte stackId.
+// Storage frame IDs are name-table indices, distinct from profiler-owned FrameIds.
+// Stacks deduplicate storage-ID sequences and are referenced by 32-bit stackId.
 namespace Sherlock::storage {
 
-/// A frame: a slice of the Strings blob. frameId is the record's index in the Frames section.
+// Strings slice; frameId is this record's index in Frames.
 struct FrameRecord {
     std::uint32_t strOffset;
     std::uint32_t strLen;
 };
 static_assert(sizeof(FrameRecord) == 8, "FrameRecord must be a packed 8-byte record");
 
-/// A stack: a slice of the StackFrames pool. stackId is the record's index in the Stacks section.
+// StackFrames slice; stackId is this record's index in Stacks.
 struct StackRecord {
     std::uint32_t firstFrame;
     std::uint32_t frameCount;
@@ -29,11 +29,9 @@ static_assert(sizeof(StackRecord) == 8, "StackRecord must be a packed 8-byte rec
 
 inline constexpr std::uint16_t kSymbolsVersion = 1;
 
-/// Interns frames + stacks while capturing, then emits the four tables into a container. Frame
-/// order is first-seen; a stack is keyed by the raw bytes of its frame-id sequence.
+// Frames retain first-seen order; stack keys are the raw bytes of storage frame-ID sequences.
 class StackInterner {
 public:
-    /// Returns the id for a frame name, assigning a new one on first sight.
     std::uint32_t internFrame(std::string_view name) {
         auto [it, inserted] =
             frameIds_.try_emplace(std::string(name), static_cast<std::uint32_t>(frameNames_.size()));
@@ -43,7 +41,6 @@ public:
         return it->second;
     }
 
-    /// Returns the id for a frame-id sequence (a stack), deduplicating identical stacks.
     std::uint32_t internStack(std::span<const std::uint32_t> frames) {
         std::string key(reinterpret_cast<const char*>(frames.data()), frames.size() * sizeof(std::uint32_t));
         auto [it, inserted] = stackIds_.try_emplace(std::move(key), static_cast<std::uint32_t>(stacks_.size()));
@@ -56,7 +53,6 @@ public:
     [[nodiscard]] std::size_t frameCount() const { return frameNames_.size(); }
     [[nodiscard]] std::size_t stackCount() const { return stacks_.size(); }
 
-    /// Emits the Strings/Frames/Stacks/StackFrames sections into `w`.
     void writeTo(ContainerWriter& w) const {
         std::string strings;
         std::vector<FrameRecord> frames(frameNames_.size());
@@ -89,7 +85,7 @@ private:
     std::vector<std::vector<std::uint32_t>> stacks_;
 };
 
-/// Read-only view over the interned tables in a parsed container. Borrows the container's bytes.
+// Borrows the container's symbol-table bytes.
 class StackTable {
 public:
     static StackTable read(const ContainerReader& c) {

@@ -25,6 +25,7 @@ public:
     MethodRegistry(ICorProfilerInfo10* info, Logger* logger);
     explicit MethodRegistry(Resolver resolver, Logger* logger = nullptr);
 
+    // Repeated loads are idempotent; unload/reload starts a new lifetime without reusing FrameIds.
     void moduleLoaded(ModuleID module);
     void moduleUnloaded(ModuleID module);
 

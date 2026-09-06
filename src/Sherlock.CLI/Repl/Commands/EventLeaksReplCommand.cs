@@ -6,7 +6,7 @@ using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
 
-/// <summary>Delegates with oversized invocation lists: suspected event-handler leaks where a long-lived event pins every subscriber that never unsubscribed (-=).</summary>
+/// <summary>Reports delegates with oversized invocation lists.</summary>
 public sealed class EventLeaksReplCommand : IReplCommand
 {
     private const int DefaultMin = 16;

@@ -11,15 +11,12 @@
 
 namespace Sherlock {
 
-// ===========================================================================
-// Thread-local shadow stack + trampolines
-// ===========================================================================
 namespace shadow {
 thread_local ThreadStack* t_stack = nullptr;
 
 ThreadStack* ensureStack() {
     if (t_stack == nullptr)
-        t_stack = new ThreadStack(); // leaked at thread exit; fine for a profiler's lifetime
+        t_stack = new ThreadStack(); // retained for the process lifetime
     return t_stack;
 }
 } // namespace shadow
@@ -39,21 +36,14 @@ extern "C" void Sherlock_ShadowPop() {
         s->depth--;
 }
 
-// ===========================================================================
-// IL rewriting
-// ===========================================================================
 namespace {
 
-// Opcode tables, il::Insn, method-header/body decode, and compress/uncompress live in il_writer.{hpp,cpp}.
-// The helpers below are shadow-stack-specific (they mint a return-value local + LocalVarSig).
 struct RetType {
-    bool nonVoid = false;         // false for void (no return-value local needed)
-    std::vector<BYTE> blob;       // the RetType signature bytes (only when nonVoid), for the LocalVarSig
+    bool nonVoid = false;
+    std::vector<BYTE> blob; // non-void RetType bytes for the return-value local
 };
 
-// Parse the method's return type from its signature. Returns false for return shapes we refuse to
-// instrument (byref/typedref, or an exotic RetType we can't size); the caller then skips the method.
-// A void return is success with nonVoid=false.
+// Reject byref, typedref and unsupported return shapes. Void needs no return-value local.
 bool parseReturnType(ICorProfilerInfo10* info, ModuleID moduleId, mdMethodDef methodToken, RetType& rt) {
     rt = {};
     IMetaDataImport* md = nullptr;
@@ -135,9 +125,7 @@ bool parseReturnType(ICorProfilerInfo10* info, ModuleID moduleId, mdMethodDef me
     return result;
 }
 
-// Build a new LocalVarSig = the method's original locals plus one appended local (the return-value slot),
-// emit it, and return its token in `newLocalTok` and the appended local's index in `retLocalIndex`.
-// Only called for non-void methods. Returns false if the new signature token can't be minted.
+// Append a return-value local for a non-void method; return its index and new signature token.
 bool buildLocalSig(ICorProfilerInfo10* info, ModuleID moduleId, std::uint32_t localSigTok,
                    const std::vector<BYTE>& retTypeBlob, std::uint32_t& retLocalIndex, mdSignature& newLocalTok) {
     std::uint32_t origLocalCount = 0;
@@ -251,32 +239,28 @@ bool ShadowStackInstrumenter::buildIL(FrameId frameId, ModuleID moduleId,
     const bool initLocals = hdr.initLocals;
     const bool moreSects = hdr.moreSects;
 
-    // ---- decode the body ----
     std::vector<il::Insn> insns;
     bool unsafeToWrap = false; // constructs illegal inside a try/finally region
     if (!il::decodeBody(code, codeSize, insns, unsafeToWrap)) { return false; }
     if (insns.empty() || unsafeToWrap) { return false; }
 
-    // ---- return type: extract the RetType blob so we can add a local to stash the returned value
-    // before `leave`. Void => no local; exotic/byref return => skip. ----
+    // leave clears the evaluation stack, so preserve non-void returns in a local.
     RetType rt;
     if (!parseReturnType(info_, moduleId, methodToken, rt)) { return false; }
     const bool nonVoid = rt.nonVoid;
     const std::vector<BYTE>& retTypeBlob = rt.blob;
 
-    // ---- build a new LocalVarSig = original locals + (optional) one retType local ----
     std::uint32_t retLocalIndex = 0;
     mdSignature newLocalTok = static_cast<mdSignature>(localSigTok);
     if (nonVoid && !buildLocalSig(info_, moduleId, localSigTok, retTypeBlob, retLocalIndex, newLocalTok)) {
         return false;
     }
 
-    // ---- layout pass 1: assign new offsets ----
-    // Output segments (in order):
+    // Layout:
     //   [prologue]  shadow push; optional trigger enter
     //   [TRY]       transformed body (ret -> [stloc ret]; leave END)
     //   [FINALLY]   optional trigger exit; shadow pop; endfinally
-    //   [END]       (ldloc ret;) ret
+    //   [END]       optional normal-return hook; (ldloc ret;) ret
     il::ILStream prologue;
     prologue.ldc_i8(frameId);
     prologue.ldc_i8(reinterpret_cast<std::uint64_t>(&Sherlock_ShadowPush));
@@ -288,8 +272,7 @@ bool ShadowStackInstrumenter::buildIL(FrameId frameId, ModuleID moduleId,
             reinterpret_cast<std::uintptr_t>(&Sherlock_ProbeEnter), sigs.probe);
     }
 
-    // Per-body-instruction new offset map. Each transformed instruction's size is known up front
-    // (branches all long-form; ret expands), so we assign offsets directly.
+    // Widened branches and expanded returns have fixed sizes, so assign offsets in one pass.
     std::uint32_t tryStart = static_cast<std::uint32_t>(prologue.size());
     std::vector<std::uint32_t> newOff(insns.size());
     auto transformedLen = [&](const il::Insn& in) -> std::uint32_t {
@@ -304,7 +287,6 @@ bool ShadowStackInstrumenter::buildIL(FrameId frameId, ModuleID moduleId,
     std::uint32_t cur = tryStart;
     for (std::size_t i = 0; i < insns.size(); ++i) { newOff[i] = cur; cur += transformedLen(insns[i]); }
     std::uint32_t tryEnd = cur;                 // == handler start
-    // finally body
     il::ILStream finallyBody;
     if (probe.onExit()) {
         emitProbeCall(
@@ -327,7 +309,6 @@ bool ShadowStackInstrumenter::buildIL(FrameId frameId, ModuleID moduleId,
         return false;
     };
 
-    // ---- layout pass 2: emit transformed body bytes ----
     il::ILStream bodyStream;
     std::vector<BYTE>& body = bodyStream.bytes();
     body.reserve(codeSize + insns.size());
@@ -360,22 +341,16 @@ bool ShadowStackInstrumenter::buildIL(FrameId frameId, ModuleID moduleId,
             il::put32(body, static_cast<std::uint32_t>(static_cast<std::int32_t>(tn) - static_cast<std::int32_t>(after)));
             continue;
         }
-        // plain instruction: copy raw bytes verbatim
         body.insert(body.end(), in.raw, in.raw + in.len);
     }
 
-    // ---- relocate original EH clauses into the new offset space ----
-    // Offsets move non-uniformly (branches widened, ret expanded), unlike the probe's constant shift,
-    // so any offset that doesn't land on an instruction boundary means we can't safely rewrite: bail.
+    // Relocate EH offsets non-uniformly; reject offsets outside instruction boundaries.
     std::vector<il::EHClause> clauses;
     {
         std::vector<il::EHClause> original;
         il::parseEHClauses(header, code, codeSize, moreSects, original);
-        // EH region END offsets need a different end-of-body mapping than branch targets: the whole
-        // original body lives inside our outer try [tryStart, tryEnd), so an original EH region that
-        // ended at codeSize (end of body) must end at tryEnd — NOT endLabel (which is past our own
-        // finally). Mapping it to endLabel makes the original handler straddle our try boundary =>
-        // illegal non-nested EH => InvalidProgramException. Interior offsets use the normal lookup.
+        // Original EH regions ending at codeSize must end at tryEnd, not endLabel:
+        // crossing our outer try/finally boundary would produce illegal non-nested EH.
         auto mapEnd = [&](std::uint32_t oldOff, std::uint32_t& res) -> bool {
             if (oldOff == codeSize) { res = tryEnd; return true; }
             return mapOff(oldOff, res);
@@ -397,10 +372,9 @@ bool ShadowStackInstrumenter::buildIL(FrameId frameId, ModuleID moduleId,
             clauses.push_back(*e);
         }
     }
-    // Add our finally clause covering the whole try.
     clauses.push_back(il::EHClause{il::kClauseFinally, tryStart, tryEnd - tryStart, handlerStart, handlerLen, 0});
 
-    // ---- END sequence ----
+    // Only normal returns reach END; exceptional unwinds run the finally but not this hook.
     il::ILStream endStream;
     if (probe.onReturn()) {
         emitProbeCall(
@@ -411,7 +385,6 @@ bool ShadowStackInstrumenter::buildIL(FrameId frameId, ModuleID moduleId,
     endStream.bytes().push_back(0x2A); // ret
     const std::vector<BYTE>& endSeq = endStream.bytes();
 
-    // ---- assemble the full method ----
     const std::vector<BYTE>& prologueBytes = prologue.bytes();
     const std::vector<BYTE>& finallyBytes = finallyBody.bytes();
     const std::uint64_t newCodeSize64 =
@@ -422,10 +395,7 @@ bool ShadowStackInstrumenter::buildIL(FrameId frameId, ModuleID moduleId,
     }
     const std::uint32_t newCodeSize = static_cast<std::uint32_t>(newCodeSize64);
 
-    // Our transform prepends a fixed prologue/finally and grows the body by a few bytes per instruction,
-    // so the rewritten code can't legitimately exceed the original plus a bounded margin. A gross overrun
-    // means a layout bug produced a malformed body; handing that to the runtime is the in-process hazard
-    // we must avoid. Bail (leave the original IL) rather than emit something we can't vouch for.
+    // Reject implausible growth: a layout bug must not hand malformed IL to the runtime.
     constexpr std::uint32_t kFixedOverhead = 256; // prologue + finally + end + slack
     if (newCodeSize > static_cast<std::uint64_t>(codeSize) * 2 + kFixedOverhead) {
         if (logger_)
@@ -460,16 +430,12 @@ bool ShadowStackInstrumenter::buildIL(FrameId frameId, ModuleID moduleId,
     return true;
 }
 
-// --- ReJIT path --------------------------------------------------------------------------
 void ShadowStackInstrumenter::onModuleLoaded(ModuleID moduleId) {
     IMetaDataImport* md = nullptr;
     if (FAILED(info_->GetModuleMetaData(moduleId, ofRead, IID_IMetaDataImport, (IUnknown**)&md)) || md == nullptr)
         return;
 
-    // Enumerate every method in this module and request a ReJIT for each. The rewritten IL is supplied
-    // later from getReJITParameters (called before first use, and used for inlined bodies too, so we can
-    // leave inlining ON). EnumMethods needs a concrete typedef, so walk all type defs (plus the module's
-    // <Module> global-methods pseudo-type).
+    // EnumMethods needs a TypeDef; include <Module> for global methods.
     std::vector<ModuleID> reMods;
     std::vector<mdMethodDef> reToks;
 
@@ -519,7 +485,7 @@ void ShadowStackInstrumenter::onModuleUnloaded(ModuleID moduleId) {
 bool ShadowStackInstrumenter::rewrite(ModuleID moduleId, mdMethodDef methodToken,
                                       const ProbePlan& probe,
                                       ICorProfilerFunctionControl* control) {
-    // Circuit breaker: once latched off (too many prior ReJITErrors), never rewrite again.
+    // The circuit breaker is permanent for this process.
     if (disabled_.load(std::memory_order_relaxed)) {
         skipped_.fetch_add(1, std::memory_order_relaxed);
         return false;
@@ -542,10 +508,7 @@ bool ShadowStackInstrumenter::rewrite(ModuleID moduleId, mdMethodDef methodToken
 }
 
 void ShadowStackInstrumenter::noteReJITError() {
-    // The runtime rejected one of our rewritten bodies. A handful happen on exotic IL we mis-handled;
-    // a flood means our rewriting is systematically wrong for this app, so latch off to protect the
-    // process. Already-instrumented methods stay instrumented (they compiled fine); we only stop
-    // rewriting further ones.
+    // Leave already-compiled methods instrumented; only stop further rewrites.
     std::uint64_t n = rejitErrors_.fetch_add(1, std::memory_order_relaxed) + 1;
     if (n >= kMaxReJITErrors && !disabled_.exchange(true, std::memory_order_relaxed)) {
         if (logger_)

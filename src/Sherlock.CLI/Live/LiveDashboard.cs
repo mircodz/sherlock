@@ -26,7 +26,7 @@ public static class LiveDashboard
     private sealed record ProcessList(IReadOnlyList<RunProcess> Processes);
     private sealed record Capturing(int Pid, string Name, DateTimeOffset At);
     private sealed record Captured(
-        int Pid, string Id, long Bytes, string Reason, ProvenanceState Provenance,
+        string Id, long Bytes, ProvenanceState Provenance,
         bool HasAllocations, TimeSpan Duration, DateTimeOffset At);
     private sealed record Status(string Text, Color Color);
     private sealed record LiveEvent(DateTimeOffset At, string Text, Color Color);
@@ -102,13 +102,9 @@ public static class LiveDashboard
         var snapshotSection = new Stack(Direction.Vertical)
             .Add(Section("SNAPSHOTS"), Constraint.Length(1))
             .Add(new Padding(snapshots, new Thickness(1, 0)), Constraint.Fill());
-        Widget lower = terminal.Size.Width >= 100
-            ? new Stack(Direction.Horizontal)
-                .Add(processSection, Constraint.Fill())
-                .Add(snapshotSection, Constraint.Fill())
-            : new Stack(Direction.Vertical)
-                .Add(processSection, Constraint.Fill())
-                .Add(snapshotSection, Constraint.Fill());
+        Widget lower = new Stack(terminal.Size.Width >= 100 ? Direction.Horizontal : Direction.Vertical)
+            .Add(processSection, Constraint.Fill())
+            .Add(snapshotSection, Constraint.Fill());
 
         var eventRule = Section("EVENTS");
         var eventSection = new Stack(Direction.Vertical).Add(eventRule, Constraint.Length(1));
@@ -206,8 +202,8 @@ public static class LiveDashboard
                 try
                 {
                     CaptureResult result = workspace.Capture(pid, load: false);
-                    app.Post(new Captured(pid, result.Entry.Id, result.Entry.TotalSizeBytes,
-                        result.Entry.Reason ?? "manual", result.Provenance, result.Entry.HasAllocations,
+                    app.Post(new Captured(result.Entry.Id, result.Entry.TotalSizeBytes,
+                        result.Provenance, result.Entry.HasAllocations,
                         elapsed.Elapsed, DateTimeOffset.Now));
                 }
                 catch (Exception ex)
@@ -237,7 +233,7 @@ public static class LiveDashboard
             .Add(FooterButton("Enter", "Snapshot", SnapshotSelected), Constraint.Length(18))
             .Add(FooterButton("l", "Events/logs", ToggleLogs), Constraint.Length(16))
             .Add(FooterButton("p", "Pause", TogglePause), Constraint.Length(11))
-            .Add(FooterButton("k", "Kill x2", () => ArmOrKill()), Constraint.Length(12))
+            .Add(FooterButton("k", "Kill x2", ArmOrKill), Constraint.Length(12))
             .Add(FooterButton("q", "Quit", app.Quit), Constraint.Length(9));
 
         void ArmOrKill()

@@ -4,7 +4,7 @@ using System.IO;
 
 namespace Sherlock.CLI.Repl;
 
-/// <summary>Command history for the REPL, persisted across sessions to a file in the user's home directory.</summary>
+/// <summary>REPL history with best-effort persistence.</summary>
 public sealed class ReplHistory
 {
     private readonly string? _path;
@@ -23,12 +23,7 @@ public sealed class ReplHistory
     /// <summary>Records a line, skipping blanks and consecutive duplicates.</summary>
     public void Add(string line)
     {
-        if (string.IsNullOrWhiteSpace(line))
-        {
-            return;
-        }
-
-        if (_entries.Count > 0 && _entries[^1] == line)
+        if (string.IsNullOrWhiteSpace(line) || (_entries.Count > 0 && _entries[^1] == line))
         {
             return;
         }
@@ -56,7 +51,7 @@ public sealed class ReplHistory
         }
         catch
         {
-            // History is best-effort; a missing or unreadable file is not fatal.
+            // History failures must not prevent analysis.
         }
     }
 
@@ -73,7 +68,7 @@ public sealed class ReplHistory
         }
         catch
         {
-            // Ignore write failures (read-only home, etc.).
+            // History failures must not prevent analysis.
         }
     }
 }

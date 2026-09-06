@@ -5,13 +5,7 @@ using System.Text;
 
 namespace Sherlock.CLI.Export;
 
-/// <summary>
-/// A weighted directed graph rendered to Graphviz DOT, styled after Go's pprof: nodes are boxes with
-/// a light pastel fill and strong-coloured text, both shaded grey to red by their share of the whole;
-/// the font grows with a node's own (self) weight; edges are shaded and thickened by the flow along
-/// them. Both the dominator tree and the allocation call graph build through this, so they read
-/// identically. Render with <c>dot -Tsvg g.dot -o g.svg</c>.
-/// </summary>
+/// <summary>DOT renderer shared by allocation and retention graphs; weights control color and size.</summary>
 public sealed class DotGraph(string name)
 {
     private readonly List<Node> _nodes = [];
@@ -39,8 +33,10 @@ public sealed class DotGraph(string name)
         {
             int fontSize = 8 + (int)Math.Ceiling(16.0 * Math.Sqrt(Math.Clamp(node.Size, 0, 1)));
             string label = string.Join("\\n", Array.ConvertAll(node.Lines, line => Escape(Cap(line))));
+            string fill = Heat(node.Heat, foreground: false);
+            string color = Heat(node.Heat, foreground: true);
             sb.AppendLine(CultureInfo.InvariantCulture,
-                $"  {node.Id} [label=\"{label}\", fontsize={fontSize}, fillcolor=\"{Heat(node.Heat, foreground: false)}\", color=\"{Heat(node.Heat, foreground: true)}\", fontcolor=\"{Heat(node.Heat, foreground: true)}\"];");
+                $"  {node.Id} [label=\"{label}\", fontsize={fontSize}, fillcolor=\"{fill}\", color=\"{color}\", fontcolor=\"{color}\"];");
         }
 
         foreach (Edge edge in _edges)
@@ -57,10 +53,7 @@ public sealed class DotGraph(string name)
         return sb.ToString();
     }
 
-    /// <summary>
-    /// pprof's heat colour: grey at 0, red as the share approaches 1. Foreground (text/border/edge)
-    /// is strong and dark; background (fill) is a light pastel of the same hue.
-    /// </summary>
+    // Grey near zero, red for positive heat, green for negative; fills use a pale tint.
     private static string Heat(double score, bool foreground)
     {
         const double shift = 0.7;

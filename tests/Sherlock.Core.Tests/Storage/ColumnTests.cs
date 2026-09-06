@@ -7,17 +7,13 @@ using Xunit;
 
 namespace Sherlock.Core.Tests.Storage;
 
-// Tests for the unified long-indexed column layer: SlabFile.Open + Column<T>. A column reads identically
-// whether it's one on-disk section or many, with indexing / binary-search / slicing working across
-// section and mmap-chunk boundaries and no ~2 GB single-section ceiling.
 public class ColumnTests : IDisposable
 {
     private readonly TempDir _tmp = new();
 
     public void Dispose() => _tmp.Dispose();
 
-    // Writes `records` split into `sections` same-typed sections (mirrors the native addChunkedRecords
-    // N-section layout) and opens the result as a SlabFile.
+    // Partition like native addChunkedRecords, with small sections to exercise boundaries.
     private SlabFile WriteSlab<T>(SectionType type, ushort version, ReadOnlySpan<T> records, int sections)
         where T : unmanaged
     {
@@ -53,12 +49,11 @@ public class ColumnTests : IDisposable
     {
         var recs = new long[20];
         for (int i = 0; i < recs.Length; i++) recs[i] = i * 1000L;
-        // 4 sections of 5 elements each.
         using var slab = WriteSlab(SectionType.GraphOffsets, 3, recs, sections: 4);
         Column<long> col = slab.GetColumn<long>(SectionType.GraphOffsets);
         Assert.Equal(20L, col.Length);
         for (long i = 0; i < col.Length; i++)
-            Assert.Equal(recs[i], col[i]); // global order preserved across the 4 sections
+            Assert.Equal(recs[i], col[i]);
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -67,8 +62,7 @@ public class ColumnTests : IDisposable
     [Fact]
     public void BinarySearchWorksAcrossSectionBoundaries()
     {
-        // Mirrors the whoalloc correlation lookup: a sorted column split into several sections, searched
-        // by a long-indexed binary search that must resolve addresses in any section.
+        // Match whoalloc's long-indexed search over a sectioned correlation column.
         var recs = new Corr[30];
         for (int i = 0; i < recs.Length; i++)
             recs[i] = new Corr { Address = (ulong)((i + 1) * 0x1000), StackId = (uint)(i % 3), Reserved = 0 };
@@ -113,14 +107,11 @@ public class ColumnTests : IDisposable
         using var slab = WriteSlab(SectionType.GraphSizes, 3, recs, sections: 3); // 8/section
         Column<uint> col = slab.GetColumn<uint>(SectionType.GraphSizes);
 
-        // Slice within one section → zero-copy span.
         ReadOnlySpan<uint> s = col.Slice(2, 4);
         Assert.Equal(new uint[] { 14, 21, 28, 35 }, s.ToArray());
 
-        // A run spanning a section boundary is not sliceable (must CopyTo).
         Assert.False(col.TrySlice(6, 4, out _)); // 6..10 crosses the 8-element section boundary
 
-        // CopyTo stitches across boundaries.
         var dest = new uint[10];
         col.CopyTo(5, dest);
         for (int i = 0; i < dest.Length; i++) Assert.Equal((uint)((5 + i) * 7), dest[i]);
@@ -140,15 +131,12 @@ public class ColumnTests : IDisposable
     {
         var recs = new ulong[] { 1, 2, 3 };
         using var slab = WriteSlab(SectionType.GraphAddresses, 3, recs, sections: 1);
-        // Section recordSize is 8 (ulong); reading as uint (4) must be rejected, not silently misread.
         Assert.Throws<InvalidDataException>(() => slab.GetColumn<uint>(SectionType.GraphAddresses));
     }
 
     [Fact]
     public void CorruptCountOverrunningBytesIsRejected()
     {
-        // A hand-forged section whose declared count exceeds its byte length must be rejected on
-        // GetColumn, not silently expose a too-long column that reads garbage past the section.
         var w = new ContainerWriter();
         w.AddSection(SectionType.GraphSizes, version: 3, recordSize: 4,
             new byte[] { 1, 0, 0, 0, 2, 0, 0, 0 }, count: 100); // 8 bytes, but claims 100 uints
@@ -188,8 +176,7 @@ public class ColumnTests : IDisposable
     [Fact]
     public void SliceAtSectionEndIsEmptyNotOutOfBounds()
     {
-        // A zero-length slice at the very end (offset == Length) must succeed, guarding the
-        // ChunkedMmap.TryGetPointer end-of-file edge case.
+        // Empty end-of-column slices must not dereference a one-past-end mmap pointer.
         var recs = new uint[] { 1, 2, 3, 4 };
         using var slab = WriteSlab(SectionType.GraphSizes, 3, recs, sections: 1);
         Column<uint> col = slab.GetColumn<uint>(SectionType.GraphSizes);

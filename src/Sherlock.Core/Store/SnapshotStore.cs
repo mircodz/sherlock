@@ -172,6 +172,7 @@ public sealed class SnapshotStore
                 }
 
                 process.Snapshots.Add(snapshot);
+                // Metadata commits the bundle; keep source provenance until that succeeds.
                 WriteSession(session);
                 DeleteFile(provenanceSource);
                 return snapshot;
@@ -434,14 +435,13 @@ public sealed class SnapshotStore
         }
     }
 
-    private static void WriteSession(Session session) => WriteJson(Path.Combine(session.Dir, "metadata.json"), session);
-
-    private static void WriteJson<T>(string path, T value)
+    private static void WriteSession(Session session)
     {
+        string path = Path.Combine(session.Dir, "metadata.json");
         string tmp = $"{path}.{Guid.NewGuid():N}.tmp";
         try
         {
-            File.WriteAllText(tmp, JsonSerializer.Serialize(value, JsonOptions));
+            File.WriteAllText(tmp, JsonSerializer.Serialize(session, JsonOptions));
             File.Move(tmp, path, overwrite: true);
         }
         finally

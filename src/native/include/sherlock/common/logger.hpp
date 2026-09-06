@@ -25,21 +25,14 @@ public:
     Logger& operator=(const Logger&) = delete;
 
     void setLogLevel(LogLevel level) { min_level_.store(level, std::memory_order_relaxed); }
-    LogLevel getLogLevel() const { return min_level_.load(std::memory_order_relaxed); }
 
     void trace(std::string_view message) noexcept { write(LogLevel::Trace, message); }
-    void info(std::string_view message) noexcept { write(LogLevel::Info, message); }
     void warn(std::string_view message) noexcept { write(LogLevel::Warning, message); }
     void error(std::string_view message) noexcept { write(LogLevel::Error, message); }
 
     template <typename... Args>
     void trace(std::format_string<Args...> format, Args&&... args) noexcept {
         writeFormatted(LogLevel::Trace, format, std::forward<Args>(args)...);
-    }
-
-    template <typename... Args>
-    void info(std::format_string<Args...> format, Args&&... args) noexcept {
-        writeFormatted(LogLevel::Info, format, std::forward<Args>(args)...);
     }
 
     template <typename... Args>

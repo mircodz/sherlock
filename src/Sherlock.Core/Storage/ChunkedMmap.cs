@@ -5,9 +5,8 @@ using System.IO.MemoryMappedFiles;
 namespace Sherlock.Core.Storage;
 
 /// <summary>
-/// Read-only view of a file mapped in ≤1&nbsp;GiB chunks, so files and reads larger than an int-length
-/// span still work. A global <c>long</c> offset resolves to <c>(chunk, offsetInChunk)</c>; reads
-/// straddling a chunk boundary are stitched by <see cref="CopyTo"/>.
+/// Read-only file mapping in chunks of at most 1 GiB, addressed by long offsets.
+/// CopyTo stitches reads across chunk boundaries; borrowed spans and pointers expire on disposal.
 /// </summary>
 public sealed unsafe class ChunkedMmap : IDisposable
 {

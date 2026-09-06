@@ -7,7 +7,7 @@ using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
 
-/// <summary>Prints an object's reference graph to a depth (cycle-detecting). <c>print</c> shows one object's fields flat.</summary>
+/// <summary>Prints a depth-limited reference graph with cycle detection.</summary>
 public sealed class PrintExReplCommand : IReplCommand
 {
     private const int DefaultDepth = 2;
@@ -46,7 +46,6 @@ public sealed class PrintExReplCommand : IReplCommand
             return;
         }
 
-        // Scalar/string fields as inline values.
         foreach ((string name, string value) in ScalarFields(obj))
         {
             parent.AddNode($"{Markup.Escape(name)} [#808791]=[/] {value}");
@@ -57,7 +56,6 @@ public sealed class PrintExReplCommand : IReplCommand
             return;
         }
 
-        // Reference fields and array elements, recursed to the next level.
         int shown = 0;
         foreach ((string edge, ClrObject child) in ObjectFields(obj))
         {
@@ -78,7 +76,6 @@ public sealed class PrintExReplCommand : IReplCommand
         }
     }
 
-    /// <summary>Primitive and string fields, formatted as printable values.</summary>
     private static IEnumerable<(string Name, string Value)> ScalarFields(ClrObject obj)
     {
         if (obj.Type is null || obj.IsArray)
@@ -103,7 +100,7 @@ public sealed class PrintExReplCommand : IReplCommand
         }
     }
 
-    /// <summary>Reference fields (non-string) and array elements, the recursable edges.</summary>
+    // Strings appear inline rather than as graph edges.
     private static IEnumerable<(string Edge, ClrObject Target)> ObjectFields(ClrObject obj)
     {
         if (obj.IsArray)
@@ -145,7 +142,7 @@ public sealed class PrintExReplCommand : IReplCommand
         }
     }
 
-    /// <summary>Reads a primitive/string field as a display string, or null if it isn't scalar.</summary>
+    /// <summary>Returns null for non-scalar fields.</summary>
     private static string? ScalarValue(ClrInstanceField field, ulong addr) =>
         field.ElementType switch
         {
@@ -170,7 +167,7 @@ public sealed class PrintExReplCommand : IReplCommand
     private static string FormatString(string? value) =>
         value is null ? "[#808791]null[/]" : $"[#F2F2F2]\"{Markup.Escape(TextUtil.Preview(value, 48))}\"[/]";
 
-    /// <summary>Unwraps an auto-property backing field <c>&lt;Name&gt;k__BackingField</c> to <c>Name</c>.</summary>
+    /// <summary>Uses the property name for compiler-generated backing fields.</summary>
     private static string FieldName(string? name)
     {
         if (name is null)

@@ -1,7 +1,5 @@
 using System;
-using System.Buffers;
 using System.Collections.Generic;
-using System.Runtime.InteropServices;
 using Sherlock.Core.Storage;
 
 namespace Sherlock.Core.HeapModel;
@@ -15,7 +13,7 @@ public sealed class EdgeColumn
     /// <summary>Total number of edges across every chunk.</summary>
     public long Count => _chunkStartEdge[^1];
 
-    /// <summary>Number of physical chunks (1 for an in-memory graph).</summary>
+    /// <summary>Number of physical chunks.</summary>
     public int ChunkCount => _chunks.Length;
 
     /// <summary>Materializes columns that fit one CLR array.</summary>

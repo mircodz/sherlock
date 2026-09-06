@@ -4,13 +4,10 @@ using Sherlock.Core.Profiling;
 
 namespace Sherlock.CLI.Export;
 
-/// <summary>
-/// The allocation profile as folded stacks, one line per call stack, <c>root;...;leaf value</c>,
-/// the format Speedscope and flamegraph.pl read directly. Value is bytes allocated, or bytes that
-/// survived their first GC when <paramref name="survived"/> is set.
-/// </summary>
+/// <summary>Allocation profiles as <c>root;...;leaf bytes</c> lines for flamegraph tools.</summary>
 public static class FoldedStacks
 {
+    /// <param name="survived">Use first-GC-survived bytes instead of allocated bytes.</param>
     public static string Write(AllocationProfile profile, bool survived = false)
     {
         var sb = new StringBuilder();
@@ -22,14 +19,12 @@ public static class FoldedStacks
                 continue;
             }
 
-            // Frames run root to leaf; ';' separates them, so it can't appear inside a frame.
-            sb.Append(string.Join(';', site.Frames.Select(Clean)));
+            // Escape legacy names containing the frame separator.
+            sb.Append(string.Join(';', site.Frames.Select(frame => frame.Replace(';', ':'))));
             sb.Append(' ');
             sb.Append(value);
             sb.Append('\n');
         }
         return sb.ToString();
     }
-
-    private static string Clean(string frame) => frame.Replace(';', ':');
 }

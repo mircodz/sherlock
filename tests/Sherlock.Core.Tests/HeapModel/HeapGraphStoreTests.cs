@@ -7,11 +7,6 @@ using Xunit;
 
 namespace Sherlock.Core.Tests.HeapModel;
 
-/// <summary>
-/// Round-trips a <see cref="HeapGraph"/> through <see cref="HeapGraphStore"/> and asserts the reloaded
-/// graph is structurally identical, guarding the persisted <c>.slab</c> format: a silent encoding
-/// bug here corrupts every graph analysis (dominators, retained sizes, gcroot).
-/// </summary>
 public sealed class HeapGraphStoreTests : IDisposable
 {
     private readonly TempDir _tmp = new();
@@ -21,20 +16,13 @@ public sealed class HeapGraphStoreTests : IDisposable
 
     public void Dispose() => _tmp.Dispose();
 
-    // A small hand-built graph: 4 objects + the synthetic root.
-    //   root -> 0 (a GC root)
-    //   0 -> 1, 2
-    //   1 -> 3
-    //   2 -> 3
-    //   3 -> (leaf)
-    // CSR: Offsets has ObjectCount + 2 entries (objects 0..3, then the synthetic root, then the terminator).
+    // Diamond: root -> 0; 0 -> 1,2; 1 -> 3; 2 -> 3.
     private static HeapGraph SampleGraph()
     {
         ulong[] addresses = [0x1000, 0x2000, 0x3000, 0x4000];
         uint[] sizes = [16, 24, 24, 48];
-        //           obj0    obj1  obj2  obj3  root(4)  end
         int[] offsets = [0, 2, 3, 4, 4, 5];
-        int[] edges = [1, 2, /*0->1,2*/ 3, /*1->3*/ 3, /*2->3*/ 0 /*root->0*/];
+        int[] edges = [1, 2, 3, 3, 0];
         return new HeapGraph(addresses, sizes, offsets, edges);
     }
 
@@ -93,14 +81,11 @@ public sealed class HeapGraphStoreTests : IDisposable
     [Fact]
     public void RoundTrips_MultiChunkEdges_SplitAndReassemble()
     {
-        // Force the edge column to split into several chunks via a tiny per-chunk budget, then
-        // round-trip. Exercises the >2.1B-edge path (GraphEdgesChunk sections + chunk-start meta)
-        // at small scale: the reload must reassemble byte-identical successors and carry multiple chunks.
+        // A tiny budget exercises multi-chunk persistence without allocating billions of edges.
         ulong[] addresses = [0x1000, 0x2000, 0x3000, 0x4000];
         uint[] sizes = [16, 24, 24, 48];
         long[] offsets = [0, 2, 3, 4, 4, 5]; // same CSR as SampleGraph, as long
         int[] flatEdges = [1, 2, 3, 3, 0];
-        // Budget of 2 edges/chunk → node-aligned splits at nodes whose run would overflow.
         var col = EdgeColumn.Build([new ReadOnlyMemory<int>(flatEdges)], offsets, maxEdgesPerChunk: 2);
         Assert.True(col.ChunkCount > 1, "test setup should produce multiple chunks");
 
@@ -108,7 +93,7 @@ public sealed class HeapGraphStoreTests : IDisposable
         HeapGraphStore.Save(_path, original);
         using HeapGraph loaded = HeapGraphStore.Load(_path)!;
 
-        Assert.True(loaded.Edges.ChunkCount > 1); // chunking survived the round-trip
+        Assert.True(loaded.Edges.ChunkCount > 1);
         Assert.Equal(5, loaded.Edges.Count);
         Assert.Equal([1, 2], loaded.Successors(0).ToArray());
         Assert.Equal([3], loaded.Successors(1).ToArray());
@@ -132,13 +117,10 @@ public sealed class HeapGraphStoreTests : IDisposable
     [Fact]
     public void LoadedGraph_IsMmapBacked_StaysValidUntilDisposed()
     {
-        // Columns are zero-copy views into the memory-mapped slab, kept alive by the graph. Reading
-        // long after Load must still work, and Dispose must release the mapping so the caller can
-        // delete the sidecar afterwards.
+        // Edge chunks borrow the slab mapping; the graph owns its lifetime.
         HeapGraphStore.Save(_path, SampleGraphWithTypes());
         HeapGraph loaded = HeapGraphStore.Load(_path)!;
 
-        // Force real reads well after the ContainerReader would once have been disposed.
         Assert.Equal([0x1000, 0x2000, 0x3000, 0x4000], loaded.Addresses.ToArray());
         Assert.Equal([1, 2], loaded.Successors(0).ToArray());
         Assert.Equal("System.String", loaded.TypeNameOf(0));
@@ -165,7 +147,6 @@ public sealed class HeapGraphStoreTests : IDisposable
     [Fact]
     public void MissingFile_ReturnsNullOrThrows()
     {
-        // Loading a path with no container should not silently return a corrupt graph.
         string missing = Path.Combine(Path.GetTempPath(), $"nonexistent-{Guid.NewGuid():n}.slab");
         Assert.ThrowsAny<Exception>(() => HeapGraphStore.Load(missing));
     }
@@ -200,7 +181,7 @@ public sealed class HeapGraphStoreTests : IDisposable
     [Fact]
     public void GraphWithoutTypes_LoadsWithoutTypes()
     {
-        // The core graph (no type column) round-trips with HasTypes == false; callers fall back to ClrMD.
+        // Missing type columns require the ClrMD fallback.
         HeapGraphStore.Save(_path, SampleGraph());
         HeapGraph loaded = HeapGraphStore.Load(_path)!;
 
@@ -231,8 +212,7 @@ public sealed class HeapGraphStoreTests : IDisposable
     [Fact]
     public void FreeBytes_RoundTripAndSyntheticFreeRow()
     {
-        // A graph with types + free space: the histogram carries a synthetic "Free" row that must
-        // survive the round-trip (the doctor's fragmentation check reads it).
+        // The doctor's fragmentation check relies on the synthetic Free row.
         ulong[] addresses = [0x1000, 0x2000];
         uint[] sizes = [16, 24];
         int[] offsets = [0, 0, 0, 0];

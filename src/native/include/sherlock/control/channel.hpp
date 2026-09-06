@@ -17,11 +17,8 @@ class Logger;
 
 namespace Sherlock::control {
 
-// Storage for the OS socket handle. Windows' SOCKET is an unsigned, pointer-width handle (not a
-// small int, and its invalid value is all-bits-set rather than -1), so it can't be stored in an
-// `int` without truncation/UB on 64-bit. We use a plain uintptr_t here (rather than <winsock2.h>'s
-// SOCKET) so this header never pulls in Windows headers - channel.cpp owns the winsock2.h/windows.h
-// include order.
+// Windows SOCKET is pointer-width with an all-bits-set invalid value; int would truncate it.
+// Keep Windows headers out of this file so channel.cpp controls Winsock include order.
 #ifdef _WIN32
 using SocketHandle = std::uintptr_t;
 #else
@@ -29,7 +26,6 @@ using SocketHandle = int;
 #endif
 inline constexpr SocketHandle kInvalidSocket = static_cast<SocketHandle>(-1); // matches INVALID_SOCKET's bit pattern too
 
-/// A handler's answer to a request: ok + optional detail, or an error message.
 struct Reply {
     bool ok = true;
     std::string detail;
@@ -38,14 +34,11 @@ struct Reply {
     static Reply error(std::string message) { return {false, std::move(message)}; }
 };
 
-/// The profiler side of the sl <-> profiler control channel: a Unix-domain-socket client
-/// that connects to sl, announces its capabilities, serves requests on a background
-/// thread, and can push unsolicited events (e.g. probe hits). See protocol.hpp for the
-/// wire format. One channel per process.
+// One AF_UNIX client per process. Serves sl requests on a native thread and pushes events.
+// Wire format is defined in protocol.hpp.
 class ControlChannel {
 public:
-    /// cmd + args -> Reply. Runs on the channel's reader thread (a native thread, so it's
-    /// safe to call ForceGC etc. from here).
+    // Runs on the native reader thread, outside CLR callbacks.
     using Handler = std::function<Reply(std::string_view cmd, std::span<const std::string_view> args)>;
     using DisconnectHandler = std::function<void()>;
 
@@ -55,19 +48,17 @@ public:
     ControlChannel(const ControlChannel&) = delete;
     ControlChannel& operator=(const ControlChannel&) = delete;
 
-    /// Connects to sl's listening socket at `socketPath`. Returns nullopt on success, or
-    /// an error message on failure. (std::optional rather than std::expected for portable
-    /// C++23 - libstdc++ on some CI toolchains lacks <expected>.)
+    // nullopt on success, otherwise an error message.
     [[nodiscard]] std::optional<std::string> connect(const std::string& socketPath);
 
-    /// Sends HELLO (version + features), then serves requests on a background thread.
+    // Send HELLO before serving requests.
     void start(
         std::string_view version,
         const std::vector<std::string>& features,
         Handler handler,
         DisconnectHandler disconnected = {});
 
-    /// Pushes an unsolicited EVENT frame to sl (fields after the "EVENT" verb). Thread-safe.
+    // Thread-safe; fields follow the EVENT verb.
     [[nodiscard]] bool sendEvent(const std::vector<std::string>& fields);
 
     void stop();
@@ -79,11 +70,10 @@ public:
 
 private:
     void serve();
-    bool sendAll(std::span<const char> bytes); // best-effort; callers ignore the result
+    bool sendAll(std::span<const char> bytes);
 
     Logger* logger_;
-    // The socket handle is read on the worker thread (serve/sendAll) and by connected() from other
-    // threads, while stop() closes and resets it — make it atomic to avoid a torn/racy read.
+    // Concurrent readers observe stop() resetting the handle.
     std::atomic<SocketHandle> fd_{kInvalidSocket};
     Handler handler_;
     DisconnectHandler disconnected_;

@@ -9,9 +9,8 @@ public enum SectionType : uint
     Allocations = 5,
     Correlation = 6,
 
-    // Heap-graph sections (the persisted object graph, see Sherlock.Core.HeapModel). Columnar POD arrays
-    // indexed by dense object id; the synthetic root is the last node and its successors are the GC
-    // roots, so roots need no separate section.
+    // Heap columns use dense object ids; the last node is the synthetic root.
+    // Its successors are rooted objects; GraphRoots preserves each root's CLR metadata.
     GraphAddresses = 7,   // ulong[] object addresses, sorted (id = index)
     GraphSizes = 8,       // uint[] shallow sizes, by id
     GraphOffsets = 9,     // long[] CSR row offsets (length ObjectCount + 2; long so edge count can exceed 2.1B)
@@ -24,10 +23,8 @@ public enum SectionType : uint
     GraphEdgeChunkMeta = 15, // long[] first global edge index of each chunk (length chunkCount + 1, last = total)
     GraphRoots = 16,
 
-    // Derived dominator-tree cache (computed from the graph, cached beside the dump so reopen skips the
-    // recompute, see Sherlock.Core.Analysis.DominatorTreeStore). RPO-indexed; index 0 is the root.
-    // Address and own-size are NOT stored (they're the graph's columns re-permuted): NodeByRpo maps each
-    // RPO slot to its object id, and on load address/own are looked up from the graph.
+    // Dominator columns use RPO ids, with the synthetic root at 0.
+    // Address and shallow size are reconstructed from the graph via NodeByRpo.
     DomMeta = 20,         // ulong[1]: { graph ContentHash }; validity key, reject if it != the graph's
     DomNodeByRpo = 21,    // int[]   RPO -> object id (graph.Root at index 0)
     DomRetained = 23,     // ulong[] RPO -> retained size

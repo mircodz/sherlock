@@ -10,10 +10,7 @@
 #include <utility>
 
 #ifdef _WIN32
-// winsock2.h must precede windows.h in this translation unit: windows.h pulls in the legacy
-// winsock.h unless _WINSOCKAPI_ is already defined, and winsock2.h/winsock.h can't coexist.
-// This file never includes the CLR profiler headers (which define their own COM_NO_WINDOWS_H /
-// shim windows.h for the Unix build), so we're free to pick this order here.
+// winsock2.h must precede windows.h to exclude the incompatible legacy winsock.h.
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -42,8 +39,7 @@ constexpr int kSendFlags = 0;            // macOS uses SO_NOSIGPIPE (set below);
 #endif
 
 #ifdef _WIN32
-// WSAStartup/WSACleanup are process-wide and must be balanced; ref-count across ControlChannel
-// instances so the first connect() initializes Winsock and the last stop()/destructor tears it down.
+// Balance process-wide WSAStartup/WSACleanup across channel instances.
 std::mutex& wsaMutex() {
     static std::mutex m;
     return m;
@@ -62,8 +58,6 @@ std::string winsockError(int code) {
     return message + " (WSA " + std::to_string(code) + ")";
 }
 
-// Bumps the process-wide WSAStartup refcount, initializing Winsock on the first call. Returns an
-// error message on failure.
 std::optional<std::string> wsaAcquire() {
     std::lock_guard<std::mutex> lock(wsaMutex());
     if (g_wsaRefCount > 0) {
@@ -79,7 +73,6 @@ std::optional<std::string> wsaAcquire() {
     return std::nullopt;
 }
 
-// Drops the process-wide WSAStartup refcount, calling WSACleanup once the last channel releases it.
 void wsaRelease() {
     std::lock_guard<std::mutex> lock(wsaMutex());
     if (g_wsaRefCount > 0 && --g_wsaRefCount == 0) {
@@ -104,8 +97,7 @@ void closeSocket(SocketHandle handle) {
 #endif
 }
 
-// Reads up to `len` bytes. Returns bytes read (>0), 0 on an orderly close, or -1 on error.
-// Retries transparently on an interrupted call.
+// Retry interruptions; return bytes read, 0 for orderly close, or -1 for error.
 long long recvSome(SocketHandle handle, char* buf, std::size_t len) {
 #ifdef _WIN32
     const SOCKET fd = static_cast<SOCKET>(handle);
@@ -116,7 +108,7 @@ long long recvSome(SocketHandle handle, char* buf, std::size_t len) {
             return n;
         }
         if (WSAGetLastError() == WSAEINTR) {
-            continue; // interrupted — retry rather than drop the connection
+            continue;
         }
         return -1;
     }
@@ -124,15 +116,14 @@ long long recvSome(SocketHandle handle, char* buf, std::size_t len) {
     for (;;) {
         ssize_t n = ::recv(handle, buf, len, 0);
         if (n < 0 && errno == EINTR) {
-            continue; // interrupted by a signal — retry rather than drop the connection
+            continue;
         }
         return n;
     }
 #endif
 }
 
-// Sends up to `len` bytes in one call. Returns bytes sent (>0), or -1 on error. Retries
-// transparently on an interrupted call.
+// Retry interruptions; return bytes sent or -1 for error.
 long long sendSome(SocketHandle handle, const char* buf, std::size_t len) {
 #ifdef _WIN32
     const SOCKET fd = static_cast<SOCKET>(handle);
@@ -143,7 +134,7 @@ long long sendSome(SocketHandle handle, const char* buf, std::size_t len) {
             return n;
         }
         if (WSAGetLastError() == WSAEINTR) {
-            continue; // interrupted — retry
+            continue;
         }
         return -1;
     }
@@ -151,7 +142,7 @@ long long sendSome(SocketHandle handle, const char* buf, std::size_t len) {
     for (;;) {
         ssize_t n = ::send(handle, buf, len, kSendFlags);
         if (n < 0 && errno == EINTR) {
-            continue; // interrupted — retry
+            continue;
         }
         return n;
     }
@@ -246,8 +237,7 @@ void ControlChannel::start(
         if (i != 0) featureList += ',';
         featureList += features[i];
     }
-    // Identify ourselves by pid so sl can address this specific process on a shared socket
-    // (a whole `dotnet run` subtree connects to one control socket).
+    // Inherited environments can connect several processes to sl's socket; identify each by PID.
 #ifdef _WIN32
     const int pid = _getpid();
 #else
@@ -350,8 +340,7 @@ void ControlChannel::stop() {
         worker_.join(); // serve() only touches fd_ up to this point
     }
 
-    // Take writeMutex_ before closing so an in-flight sendAll() (e.g. an EVENT pushed from a GC
-    // callback thread) always completes against a still-open fd rather than a reused one.
+    // Finish in-flight sends before close, preventing sends through a reused descriptor.
     std::lock_guard<std::mutex> lock(writeMutex_);
     const SocketHandle toClose = fd_.exchange(kInvalidSocket, std::memory_order_acq_rel);
     if (toClose != kInvalidSocket) {

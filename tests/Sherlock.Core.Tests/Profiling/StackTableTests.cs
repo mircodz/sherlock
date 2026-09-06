@@ -13,8 +13,6 @@ public class StackTableTests : IDisposable
 
     public void Dispose() => _tmp.Dispose();
 
-    private SlabFile Write(ContainerWriter w) => _tmp.WriteSlab(w);
-
     [Fact]
     public void RecordLayoutsMatchNative()
     {
@@ -29,10 +27,10 @@ public class StackTableTests : IDisposable
         var b = new StackTableBuilder();
         uint main = b.InternFrame("Program.Main");
         uint add = b.InternFrame("Registry.Add");
-        Assert.Equal(main, b.InternFrame("Program.Main")); // same name → same id
+        Assert.Equal(main, b.InternFrame("Program.Main"));
 
         uint s1 = b.InternStack([main, add]);
-        Assert.Equal(s1, b.InternStack([main, add]));       // same stack → same id
+        Assert.Equal(s1, b.InternStack([main, add]));
         Assert.NotEqual(s1, b.InternStack([add, main]));    // order matters
     }
 
@@ -47,7 +45,7 @@ public class StackTableTests : IDisposable
 
         var w = new ContainerWriter();
         b.WriteTo(w);
-        using SlabFile slab = Write(w);
+        using SlabFile slab = _tmp.WriteSlab(w);
         var table = StackTable.Read(slab);
 
         Assert.Equal(3, table.FrameCount);
@@ -64,7 +62,7 @@ public class StackTableTests : IDisposable
     {
         var w = new ContainerWriter();
         new StackTableBuilder().WriteTo(w);
-        using SlabFile slab = Write(w);
+        using SlabFile slab = _tmp.WriteSlab(w);
         var table = StackTable.Read(slab);
         Assert.Equal(0, table.FrameCount);
         Assert.Equal(0, table.StackCount);

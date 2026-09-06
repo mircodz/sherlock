@@ -4,11 +4,7 @@ using Spectre.Console.Cli;
 
 namespace Sherlock.CLI.Commands;
 
-/// <summary>
-/// Opens the interactive heap explorer (a Cellar TUI) over the snapshot library: pick a snapshot,
-/// then drill through the Health / Types / Retention / Allocations lenses with clickable, linked
-/// navigation. Needs at least one captured snapshot (<c>sl run</c> / <c>sl collect</c>).
-/// </summary>
+/// <summary>Opens the TUI over the snapshot library.</summary>
 public sealed class TuiCommand : Command<TuiCommand.Settings>
 {
     public sealed class Settings : CommandSettings;

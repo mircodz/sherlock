@@ -8,10 +8,8 @@ using System.Runtime.InteropServices;
 namespace Sherlock.Core.Storage;
 
 /// <summary>
-/// Reads a <c>.slab</c> container: open a file, ask for a section as a long-indexed
-/// <see cref="Column{T}"/>. Hides memory-mapping, chunk boundaries, and the multi-section layout of
-/// large columns; there is no ~2&nbsp;GB per-section ceiling. Owns one <see cref="ChunkedMmap"/>; every
-/// column and blob it hands out is a zero-copy view valid until this <see cref="SlabFile"/> is disposed.
+/// Owns a mapped slab container. Columns borrow the mapping and are valid until disposal;
+/// blobs are copied into owned arrays. Sections and columns may exceed 2 GiB.
 /// </summary>
 public sealed class SlabFile : IDisposable
 {
@@ -141,8 +139,7 @@ public sealed class SlabFile : IDisposable
         return 0;
     }
 
-    /// <summary>A section as a long-indexed column, reassembling every same-typed section into one
-    /// logical column (a large column is written as several).</summary>
+    /// <summary>Reassembles same-typed sections into one long-indexed column.</summary>
     public Column<T> GetColumn<T>(SectionType type) where T : unmanaged
     {
         int width = Unsafe.SizeOf<T>();
@@ -163,8 +160,7 @@ public sealed class SlabFile : IDisposable
             : new Column<T>(_mmap, CollectionsMarshal.AsSpan(segs));
     }
 
-    /// <summary>Each same-typed section as its own column, in table order; unlike
-    /// <see cref="GetColumn{T}"/>, kept separate (the heap-graph edge chunks feeding <c>EdgeColumn</c>).</summary>
+    /// <summary>Returns each same-typed section separately, in table order, preserving edge-chunk boundaries.</summary>
     public IReadOnlyList<Column<T>> SectionColumns<T>(SectionType type) where T : unmanaged
     {
         int width = Unsafe.SizeOf<T>();
@@ -183,8 +179,7 @@ public sealed class SlabFile : IDisposable
         return result;
     }
 
-    // Guards a typed section against a corrupt/mismatched descriptor before it's exposed as a column:
-    // a wrong record size or a Count that overruns the section's bytes would otherwise read garbage.
+    // Validate descriptors before exposing typed access to mapped bytes.
     private static ushort Validate<T>(SectionType type, SectionInfo s, int width, ushort version) where T : unmanaged
     {
         if (s.RecordSize != width)

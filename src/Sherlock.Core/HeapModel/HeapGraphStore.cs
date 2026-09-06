@@ -74,7 +74,7 @@ public static class HeapGraphStore
             ReadOnlyMemory<long> offsets = Materialize(slab.GetColumn<long>(SectionType.GraphOffsets));
             ReadOnlyMemory<HeapRootRecord> roots = Materialize(slab.GetColumn<HeapRootRecord>(SectionType.GraphRoots));
 
-            long[] chunkStarts = MaterializeArray(slab.GetColumn<long>(SectionType.GraphEdgeChunkMeta));
+            long[] chunkStarts = Materialize(slab.GetColumn<long>(SectionType.GraphEdgeChunkMeta));
             IReadOnlyList<Column<int>> edgeSections = slab.SectionColumns<int>(SectionType.GraphEdgesChunk);
             var chunks = new ReadOnlyMemory<int>[edgeSections.Count];
             for (int i = 0; i < chunks.Length; i++)
@@ -112,9 +112,6 @@ public static class HeapGraphStore
         }
     }
 
-    private static ReadOnlyMemory<T> Materialize<T>(Column<T> col) where T : unmanaged =>
-        MaterializeArray(col);
-
     private static (long Length, long Modified) SourceStamp(string? path)
     {
         if (path is null)
@@ -125,7 +122,7 @@ public static class HeapGraphStore
         return (file.Length, file.LastWriteTimeUtc.Ticks);
     }
 
-    private static T[] MaterializeArray<T>(Column<T> col) where T : unmanaged
+    private static T[] Materialize<T>(Column<T> col) where T : unmanaged
     {
         var arr = GC.AllocateUninitializedArray<T>(checked((int)col.Length));
         col.CopyTo(0, arr);

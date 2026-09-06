@@ -8,26 +8,21 @@
 
 namespace Sherlock {
 
-/// Non-call snapshot triggers: fire (once each) on an allocation of a type, a GC of a
-/// generation, or a thrown exception type. `call:` triggers are handled separately by
-/// ProbeManager (they need ReJIT); these ride callbacks the profiler already receives.
-/// Matching is cheap so it's safe on the allocation hot path / GC thread; the actual
-/// heap dump happens out-of-process in sl in response to the event we emit.
+// One-shot alloc/gc/throw triggers run in CLR callbacks; sl captures the heap out of process.
+// ProbeManager handles call triggers through ReJIT.
 class SnapshotTriggers {
 public:
     enum class Kind { Alloc, Gc, Throw };
 
-    /// Arm a trigger. `arg` is a type name (Alloc/Throw) or a minimum generation
-    /// (Gc, e.g. "gen2"; empty = any). `display` is what sl shows (e.g. "alloc:Customer").
+    // arg is a type name or minimum GC generation ("gen2"; empty = any).
+    // display is the label sent to sl.
     void add(Kind kind, std::string arg, std::string display);
 
-    bool empty() const { return triggers_.empty(); }
     bool wantsAlloc() const { return alloc_ > 0; }
     bool wantsGc() const { return gc_ > 0; }
     bool wantsThrow() const { return throw_ > 0; }
 
-    /// If an unfired Alloc/Throw trigger matches `typeName` (or a Gc trigger matches
-    /// `generation`), latch it and return its display name. Otherwise nullopt.
+    // Latch the first unfired match and return its display name, or nullopt.
     std::optional<std::string> onAlloc(std::string_view typeName);
     std::optional<std::string> onThrow(std::string_view typeName);
     std::optional<std::string> onGc(int generation);

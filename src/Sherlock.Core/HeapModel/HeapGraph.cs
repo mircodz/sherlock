@@ -186,7 +186,8 @@ public sealed class HeapGraph : IDisposable
             Mix((ulong)Roots.Length);
             if (addr.Length > 0) { Mix(addr[0]); Mix(addr[^1]); }
 
-            SampleU64(addr, Mix);
+            int step = Math.Max(1, addr.Length / 4096);
+            for (int i = 0; i < addr.Length; i += step) Mix(addr[i]);
             Edges.Sample(4096, v => Mix((uint)v));
             foreach (HeapRootRecord root in Roots.Span)
             {
@@ -200,12 +201,6 @@ public sealed class HeapGraph : IDisposable
             _contentHash = h;
             _hashed = true;
             return _contentHash;
-
-            static void SampleU64(ReadOnlySpan<ulong> a, Action<ulong> mix)
-            {
-                int step = System.Math.Max(1, a.Length / 4096);
-                for (int i = 0; i < a.Length; i += step) mix(a[i]);
-            }
         }
     }
 

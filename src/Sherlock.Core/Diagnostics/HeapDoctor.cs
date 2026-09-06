@@ -7,9 +7,7 @@ using Sherlock.Core.Analysis;
 namespace Sherlock.Core.Diagnostics;
 
 /// <summary>
-/// Sweeps a snapshot through every inspector and reports the obvious problems (the <c>doctor</c>
-/// command). Each inspector is independent and failure-isolated, and each finding carries the next
-/// command to run.
+/// Combines independent inspectors. Inspector failures become warnings; cancellation propagates.
 /// </summary>
 public sealed class HeapDoctor(Snapshot snapshot)
 {
@@ -53,7 +51,6 @@ public sealed class HeapDoctor(Snapshot snapshot)
         }
     }
 
-    /// <summary>The single biggest retained graph, where memory concentrates and a leak hides.</summary>
     private static void Retention(List<Finding> findings, DominatorTree tree)
     {
         ulong total = tree.TotalReachableBytes;
@@ -71,7 +68,7 @@ public sealed class HeapDoctor(Snapshot snapshot)
         string kind = IsCollection(node.TypeName) ? "collection " : "";
         findings.Add(new Finding(
             pct >= 50 ? FindingSeverity.High : FindingSeverity.Warning, "retention",
-            $"{TypeNames.Short(node.TypeName)} {kind}retains {Bytes(node.RetainedSize)} ({pct:0}% of the reachable heap)",
+            $"{TypeNames.Short(node.TypeName)} {kind}retains {ByteFormat.Human(node.RetainedSize)} ({pct:0}% of the reachable heap)",
             "The biggest retained graph. See what holds it and what it holds.")
         {
             Address = node.Address,
@@ -81,7 +78,6 @@ public sealed class HeapDoctor(Snapshot snapshot)
         });
     }
 
-    /// <summary>A delegate with a large invocation list, the classic event-handler leak.</summary>
     private void EventHandlers(List<Finding> findings, CancellationToken cancellation)
     {
         if (new EventHandlerAnalyzer(snapshot).Analyze(minSubscribers: 32, limit: 1, cancellation: cancellation).FirstOrDefault() is not { } worst)
@@ -103,7 +99,6 @@ public sealed class HeapDoctor(Snapshot snapshot)
         });
     }
 
-    /// <summary>Objects still registered for finalization: a finalizer that wasn't suppressed (missed Dispose).</summary>
     private void Finalizers(List<Finding> findings, CancellationToken cancellation)
     {
         FinalizerReport report = new FinalizerAnalyzer(snapshot).Analyze(cancellation);
@@ -114,7 +109,7 @@ public sealed class HeapDoctor(Snapshot snapshot)
 
         string top = string.Join(", ", report.ByType.Take(3).Select(s => $"{TypeNames.Short(s.TypeName)} x{s.Count:N0}"));
         findings.Add(new Finding(FindingSeverity.Warning, "finalizers",
-            $"{report.TotalObjects:N0} finalizable objects awaiting finalization ({Bytes(report.TotalBytes)})",
+            $"{report.TotalObjects:N0} finalizable objects awaiting finalization ({ByteFormat.Human(report.TotalBytes)})",
             $"A live finalizer that wasn't suppressed usually means a missing Dispose(). Most common: {top}.")
         {
             Bytes = (long)report.TotalBytes,
@@ -134,7 +129,7 @@ public sealed class HeapDoctor(Snapshot snapshot)
 
         DuplicateString? top = dups.FirstOrDefault();
         findings.Add(new Finding(FindingSeverity.Warning, "duplicate-strings",
-            $"Duplicate strings waste {Bytes((ulong)wasted)} across {dups.Count} values",
+            $"Duplicate strings waste {ByteFormat.Human((ulong)wasted)} across {dups.Count} values",
             top is null ? "Intern or dedupe them." : $"e.g. \"{Preview(top.Value)}\" x{top.Count}. Intern or dedupe them.")
         {
             Bytes = wasted,
@@ -157,7 +152,7 @@ public sealed class HeapDoctor(Snapshot snapshot)
         }
 
         findings.Add(new Finding(FindingSeverity.Warning, "fragmentation",
-            $"Heap fragmentation: {Bytes(free.TotalSize)} free ({pct:0}% of heap)",
+            $"Heap fragmentation: {ByteFormat.Human(free.TotalSize)} free ({pct:0}% of heap)",
             "A high free-space ratio means fragmentation (or a large collection that just happened).")
         {
             Bytes = (long)free.TotalSize,
@@ -165,7 +160,6 @@ public sealed class HeapDoctor(Snapshot snapshot)
         });
     }
 
-    /// <summary>A user type with a very large instance count, a candidate for unbounded growth.</summary>
     private static void Growth(List<Finding> findings, IReadOnlyList<HeapTypeStat> histogram)
     {
         HeapTypeStat? suspect = histogram
@@ -178,7 +172,7 @@ public sealed class HeapDoctor(Snapshot snapshot)
         }
 
         findings.Add(new Finding(FindingSeverity.Info, "growth",
-            $"{suspect.Count:N0} instances of {TypeNames.Short(suspect.TypeName)} ({Bytes(suspect.TotalSize)})",
+            $"{suspect.Count:N0} instances of {TypeNames.Short(suspect.TypeName)} ({ByteFormat.Human(suspect.TotalSize)})",
             "A large population - check for unbounded growth (a cache or list that never shrinks).")
         {
             Type = suspect.TypeName,
@@ -194,9 +188,6 @@ public sealed class HeapDoctor(Snapshot snapshot)
 
     private static bool IsFramework(string type) =>
         type.StartsWith("System.", StringComparison.Ordinal) || type.StartsWith("Microsoft.", StringComparison.Ordinal);
-
-    private static string Bytes(ulong bytes) => ByteFormat.Human(bytes);
-    private static string Bytes(long bytes) => ByteFormat.Human(bytes);
 
     private static string Preview(string value)
     {

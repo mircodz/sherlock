@@ -4,8 +4,7 @@ using Sherlock.Core.Storage;
 
 namespace Sherlock.Core.Tests.Common;
 
-/// <summary>A scratch directory that deletes itself on dispose. Hold one per test class:
-/// <c>private readonly TempDir _tmp = new();</c> and implement <see cref="IDisposable"/> to dispose it.</summary>
+/// <summary>Owns a scratch directory and deletes it on disposal.</summary>
 public sealed class TempDir : IDisposable
 {
     public string Path { get; } = Directory.CreateTempSubdirectory("sherlock-test").FullName;

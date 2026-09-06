@@ -1,6 +1,4 @@
-// Tests for the on-disk storage container (Layer 1): header + section table + aligned typed
-// sections. The GoldenBytes test pins the exact byte layout so the C++ writer and the C#
-// reader can never silently drift apart (the same expected blob is asserted on both sides).
+// GoldenBytes pins the same container layout in C++ and C#.
 
 #include "sherlock/storage/container.hpp"
 
@@ -27,8 +25,7 @@ std::span<const std::byte> asBytes(const std::vector<std::uint8_t>& v) {
 
 } // namespace
 
-// The canonical fixture used by the cross-language GoldenBytes contract: one Frames section,
-// version 1, blob (recordSize 0), count 2, data {1,2,3,4}. Kept identical in the C# test.
+// Keep this one-section fixture identical to the C# GoldenBytes test.
 TEST(Container, GoldenBytesMatchSpec) {
     ContainerWriter w;
     const std::vector<std::uint8_t> data = {0x01, 0x02, 0x03, 0x04};
@@ -124,9 +121,7 @@ TEST(Container, RejectsBadMagicAndTruncation) {
     EXPECT_FALSE(ContainerReader(asBytes(tooSmall)).valid());
 }
 
-// addChunkedRecords splits a fixed-width column into N same-typed sections of a uniform element
-// count (last is short), so the C# reader can map each chunk under its ~2 GB section cap and index
-// element i arithmetically. Forced tiny chunkBytes here to exercise the multi-chunk path.
+// Tiny chunks exercise the uniform record count required by C# arithmetic indexing.
 TEST(Container, ChunkedRecordsSplitUniformlyAndReassemble) {
     struct Rec { std::uint64_t a; std::uint64_t b; }; // 16 bytes
     std::vector<Rec> recs;
@@ -151,7 +146,7 @@ TEST(Container, ChunkedRecordsSplitUniformlyAndReassemble) {
         EXPECT_EQ(s.recordSize, sizeof(Rec));
     }
 
-    // Reassemble in table order and check element-for-element (global order preserved across chunks).
+    // Chunk boundaries must preserve global record order.
     std::vector<Rec> got;
     for (const SectionView& s : chunks) {
         std::span<const Rec> c = s.records<Rec>();
@@ -180,7 +175,6 @@ TEST(Container, ChunkedRecordsSingleChunkAndEmpty) {
     EXPECT_TRUE(r2.findAll(SectionType::Allocations).empty());
 }
 
-// writeTo(ostream) must be byte-identical to finish() for a chunked (multi-section) container too.
 TEST(Container, ChunkedWriteToMatchesFinish) {
     struct Rec { std::uint64_t a; std::uint64_t b; };
     std::vector<Rec> recs;

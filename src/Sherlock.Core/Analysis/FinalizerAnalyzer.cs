@@ -6,11 +6,7 @@ using Microsoft.Diagnostics.Runtime;
 
 namespace Sherlock.Core.Analysis;
 
-/// <summary>
-/// Summarizes objects still registered for finalization. A live registration means <c>Dispose()</c>
-/// never ran (a proper Dispose calls <c>GC.SuppressFinalize</c>), so a large population is the classic
-/// "forgot to dispose" leak, and those objects survive an extra GC.
-/// </summary>
+/// <summary>Summarizes objects still registered for finalization, grouped by type.</summary>
 public sealed class FinalizerAnalyzer(Snapshot snapshot)
 {
     public FinalizerReport Analyze(CancellationToken cancellation = default)

@@ -11,12 +11,10 @@ public sealed class HelpReplCommand : IReplCommand
 {
     private readonly Func<IEnumerable<IReplCommand>> _commands;
 
-    /// <param name="commands">
-    /// Provider for the full command set. A delegate (not a list) so the registry can include this command in the set it describes.
-    /// </param>
+    /// <param name="commands">Deferred so the list can include help itself.</param>
     public HelpReplCommand(Func<IEnumerable<IReplCommand>> commands) => _commands = commands;
 
-    // Categories are printed in this order; any others follow after.
+    // Unlisted categories follow these.
     private static readonly string[] CategoryOrder = ["Analysis", "Allocation profiling", "Live", "Library", "Session"];
 
     public string Name => "help";
@@ -36,7 +34,11 @@ public sealed class HelpReplCommand : IReplCommand
 
         IEnumerable<IGrouping<string, IReplCommand>> groups = commands
             .GroupBy(c => c.Category)
-            .OrderBy(g => Array.IndexOf(CategoryOrder, g.Key) is var i && i >= 0 ? i : int.MaxValue)
+            .OrderBy(g =>
+            {
+                int index = Array.IndexOf(CategoryOrder, g.Key);
+                return index < 0 ? int.MaxValue : index;
+            })
             .ThenBy(g => g.Key);
 
         foreach (IGrouping<string, IReplCommand> group in groups)

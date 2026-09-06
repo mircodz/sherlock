@@ -230,8 +230,7 @@ MethodRegistry::Resolution resolveDefinition(ICorProfilerInfo10* info, ModuleID 
             return metadata->GetMethodProps(token, &type, buffer, capacity, length, nullptr, nullptr, nullptr, nullptr, nullptr);
         });
         method += genericParameters(metadata.get(), token);
-        // Module lifetime + MethodDef token disambiguate every overload, including return-only
-        // and custom-modifier overloads. No unbounded signature-blob parsing is necessary.
+        // Lifetime + MethodDef token disambiguate overloads without parsing signature blobs.
         return {declaringType(metadata.get(), type) + "." + method, S_OK, {}};
     } catch (const MetadataFailure& failure) {
         return {{}, failure.status, failure.stage};
@@ -315,6 +314,7 @@ FrameId MethodRegistry::intern(ModuleID module, mdMethodDef token) {
 
     Resolution resolution;
     try {
+        // CLR resolution may reenter; never call it under mutex_.
         resolution = resolver_(module, token);
     } catch (...) {
         std::lock_guard lock(mutex_);

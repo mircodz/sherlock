@@ -15,20 +15,14 @@ namespace Sherlock {
 class Logger;
 struct ProbePlan;
 
-// ---------------------------------------------------------------------------
-// Thread-local shadow stack. Maintained by IL injected into every managed method
-// (push on entry, pop in a finally). ObjectAllocated reads the top instead of
-// calling DoStackSnapshot (O(1) per allocation vs O(stack depth)). Exposed here so
-// ObjectAllocated can read it directly (no vtable call on the hot path).
-// ---------------------------------------------------------------------------
+// ReJIT-injected IL pushes on entry and pops in a finally. ObjectAllocated reads
+// these profiler-owned FrameIds directly instead of walking the CLR stack.
 namespace shadow {
 
 constexpr std::size_t kMaxShadow = 1024; // frames retained; deeper is counted but not stored
 
-// Per-thread shadow stack. The frame buffer is heap-allocated on first use and only a POINTER is kept
-// in thread_local storage: a large in-TLS array would blow the dlopen static-TLS surplus and fail to
-// load ("cannot allocate memory in static TLS block"). The library is built -ftls-model=initial-exec,
-// so this pointer is read via a direct thread-pointer offset on the hot push/pop path (see CMakeLists.txt).
+// Keep only a pointer in initial-exec TLS: an inline frame array can exhaust
+// dlopen's static-TLS surplus. Each thread allocates its buffer on first use.
 struct ThreadStack {
     FrameId frames[kMaxShadow];
     std::uint32_t depth = 0; // may exceed kMaxShadow; readers clamp
@@ -48,39 +42,26 @@ inline const FrameId* frames() {
 
 } // namespace shadow
 
-// The two trampolines the injected IL calls (unmanaged C calling convention, via calli). Global,
-// no client data, mirroring probe.cpp's Sherlock_ProbeEnter.
+// Called by injected IL via unmanaged C calli.
 extern "C" void Sherlock_ShadowPush(std::int64_t frameId);
 extern "C" void Sherlock_ShadowPop();
 
-// ---------------------------------------------------------------------------
-// The sole ReJIT method-body rewriter. It always composes shadow-stack maintenance and
-// may also inject trigger calls for a method selected by ProbeManager.
-// ---------------------------------------------------------------------------
+// The sole ReJIT rewriter, composing shadow-stack and optional probe hooks.
 class ShadowStackInstrumenter {
 public:
     ShadowStackInstrumenter(ICorProfilerInfo10* info, Logger* logger, MethodRegistry& methods);
 
-    // --- ReJIT instrumentation (ModuleLoadFinished -> RequestReJIT -> GetReJITParameters) ---
-    // Enumerate every method in a freshly loaded module and request a ReJIT for each, so the
-    // rewritten IL applies from first call AND is used for inlined bodies (inline-aware) —
-    // letting us keep inlining ON.
+    // Request ReJIT for every method in a newly loaded module; inlining stays enabled.
     void onModuleLoaded(ModuleID moduleId);
-    // Deliver the rewritten IL for one ReJIT request. Returns false when the original IL
-    // was left untouched, allowing an armed probe to report the failed instrumentation.
+    // False leaves the original IL untouched so an armed probe can report failure.
     bool rewrite(ModuleID moduleId, mdMethodDef methodToken, const ProbePlan& probe, ICorProfilerFunctionControl* control);
     void onModuleUnloaded(ModuleID moduleId);
 
     std::uint64_t instrumentedCount() const { return instrumented_.load(std::memory_order_relaxed); }
     std::uint64_t skippedCount() const { return skipped_.load(std::memory_order_relaxed); }
 
-    // Circuit breaker. The runtime reports a rewrite the JIT rejected via ReJITError; the profiler routes
-    // it here. After too many, we latch OFF permanently — every subsequent getReJITParameters leaves the
-    // original IL untouched. Rewriting arbitrary framework IL is the profiler's biggest in-process risk
-    // (bad IL corrupts the customer's process), so if our rewrites start failing we stop rather than keep
-    // handing the runtime bodies it dislikes. One-way latch: we never re-enable within a process.
+    // Repeated JIT rejections permanently disable further rewrites to protect the process.
     void noteReJITError();
-    bool disabled() const { return disabled_; }
 
 private:
     struct ModuleSigs {
@@ -94,7 +75,6 @@ private:
     bool buildIL(FrameId frameId, ModuleID moduleId, mdMethodDef methodToken,
                  const ProbePlan& probe, std::vector<BYTE>& out);
 
-    // After this many ReJITErrors we latch the instrumenter off (see noteReJITError).
     static constexpr std::uint64_t kMaxReJITErrors = 10;
 
     ICorProfilerInfo10* info_;

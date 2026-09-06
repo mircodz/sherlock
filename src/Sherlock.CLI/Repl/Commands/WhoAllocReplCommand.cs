@@ -26,7 +26,6 @@ public sealed class WhoAllocReplCommand : IReplCommand
             return ReplResult.Failure;
         }
 
-        // Heap type + size, if the address resolves to a live object.
         ClrObject obj = context.Snapshot.Runtime.Heap.GetObject(address);
         string typeLine = obj.Type is { } t
             ? $"[bold]{Markup.Escape(t.Name ?? "<unknown>")}[/] [#808791]({ByteSize.Format((long)obj.Size)})[/]"
@@ -42,7 +41,7 @@ public sealed class WhoAllocReplCommand : IReplCommand
             return ReplResult.Success;
         }
 
-        // Folded stack is root->leaf; show backtrace-style, allocation site first.
+        // Stored root-first; display the allocation site first.
         string[] frames = folded.Split(';');
         context.Console.MarkupLine("[#808791]allocated at:[/]");
         for (int i = 0; i < frames.Length; i++)

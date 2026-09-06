@@ -14,7 +14,6 @@ public class ProvenanceTests : IDisposable
 
     public void Dispose() => _tmp.Dispose();
 
-    // Serializes a provenance writer to a temp .slab and opens it (exercises the real mmap + Column path).
     private SlabFile Write(ProvenanceWriter w)
     {
         var cw = new ContainerWriter();
@@ -55,7 +54,6 @@ public class ProvenanceTests : IDisposable
         Assert.Equal("MyApp.Customer", r.Stacks.Frame(recs[0].TypeId));
         Assert.Equal("System.Byte[]", r.Stacks.Frame(recs[1].TypeId));
 
-        // stackId resolves back through the shared table.
         Assert.Equal("Program.Main;Registry.Add", r.Stacks.FormatStack(recs[0].StackId));
         Assert.Equal("Program.Main;List.Resize", r.Stacks.FormatStack(recs[1].StackId));
     }

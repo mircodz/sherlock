@@ -7,9 +7,7 @@ using Sherlock.Core.Store;
 
 namespace Sherlock.Mcp;
 
-/// <summary>
-/// Wire shapes for tool results: hex-string addresses, raw byte counts, always top-N so one call can't flood context.
-/// </summary>
+/// <summary>MCP result shapes use hex addresses and raw byte counts.</summary>
 public static class Dto
 {
     public static string Hex(ulong address) => $"0x{address:x}";

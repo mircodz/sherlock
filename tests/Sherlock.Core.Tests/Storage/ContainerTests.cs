@@ -7,20 +7,13 @@ using Xunit;
 
 namespace Sherlock.Core.Tests.Storage;
 
-// Container-format tests. The writer's byte layout is pinned by the GoldenBytes fixture; reading is
-// exercised through SlabFile (the memory-mapped reader we actually use) + Column<T>.
 public class ContainerTests : IDisposable
 {
     private readonly TempDir _tmp = new();
 
     public void Dispose() => _tmp.Dispose();
 
-    private SlabFile Open(ContainerWriter w) => _tmp.WriteSlab(w);
-
-    // The canonical cross-language fixture: one Frames section, version 1, blob (recordSize 0),
-    // count 2, data {1,2,3,4}. The exact same expected bytes are asserted in the native test
-    // (src/native/tests/container.cpp, Container.GoldenBytesMatchSpec) — if either side's layout
-    // drifts, one of the two golden tests fails.
+    // Shared fixture: src/native/tests/container.cpp, Container.GoldenBytesMatchSpec.
     private static readonly byte[] GoldenBytes =
     [
         // header (16)
@@ -74,7 +67,7 @@ public class ContainerTests : IDisposable
         var w = new ContainerWriter();
         w.AddRecords(SectionType.Allocations, version: 3, recs);
 
-        using var r = Open(w);
+        using var r = _tmp.WriteSlab(w);
         Assert.Equal((ushort)3, r.SectionVersion(SectionType.Allocations));
         Column<Rec> got = r.GetColumn<Rec>(SectionType.Allocations);
         Assert.Equal(2L, got.Length);
@@ -87,7 +80,7 @@ public class ContainerTests : IDisposable
     {
         var w = new ContainerWriter();
         w.AddSection(SectionType.Correlation, version: 1, recordSize: 4, new byte[] { 0, 0, 0, 0 }, count: 1);
-        using var r = Open(w);
+        using var r = _tmp.WriteSlab(w);
         Assert.Throws<InvalidDataException>(() => r.GetColumn<Rec>(SectionType.Correlation));
     }
 
@@ -101,13 +94,12 @@ public class ContainerTests : IDisposable
     [Fact]
     public void OddSizedSections_RoundTrip_WithAlignmentPadding()
     {
-        // 3-byte sections force the writer to pad so the next section stays 8-aligned; the data
-        // must still come back exactly, which only holds if offsets/lengths are computed right.
+        // Three-byte payloads require padding before the next eight-byte-aligned section.
         var w = new ContainerWriter();
         w.AddSection(SectionType.Strings, 1, 0, new byte[] { 1, 2, 3 }, 3);
         w.AddSection(SectionType.Frames, 1, 0, new byte[] { 4, 5, 6 }, 3);
 
-        using var r = Open(w);
+        using var r = _tmp.WriteSlab(w);
         Assert.Equal(new byte[] { 1, 2, 3 }, r.Blob(SectionType.Strings));
         Assert.Equal(new byte[] { 4, 5, 6 }, r.Blob(SectionType.Frames));
     }
@@ -155,7 +147,7 @@ public class ContainerTests : IDisposable
     {
         var w = new ContainerWriter();
         w.AddRecords(SectionType.Frames, 1, new uint[] { 9, 8, 7, 6 });
-        using (var r = Open(w))
+        using (var r = _tmp.WriteSlab(w))
         {
             Column<uint> col = r.GetColumn<uint>(SectionType.Frames);
             Assert.Equal(new uint[] { 9, 8, 7, 6 }, col.AsMemory().ToArray());

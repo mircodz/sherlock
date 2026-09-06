@@ -21,8 +21,6 @@ public sealed class AllocationsReplCommand : IReplCommand
     public string Category => "Allocation profiling";
     public string Usage => "allocations [tree|hot|callers <method>] [path] [count]";
 
-    private static bool IsMode(string arg) => arg is "tree" or "hot" or "callers";
-
     public ReplResult Execute(ReplContext context, string[] args)
     {
         int limit = DefaultLimit;
@@ -31,7 +29,7 @@ public sealed class AllocationsReplCommand : IReplCommand
         string? method = null;
 
         int i = 0;
-        if (args.Length > 0 && IsMode(args[0]))
+        if (args.Length > 0 && args[0] is ("tree" or "hot" or "callers"))
         {
             mode = args[0];
             i = 1;
@@ -57,7 +55,7 @@ public sealed class AllocationsReplCommand : IReplCommand
             }
         }
 
-        // Profile source, in priority order: explicit path > snapshot bundle > run session > run target.
+        // Prefer explicit path, then snapshot, session, and live target.
         RunTarget? runTarget = context.Workspace.Targets.LastOrDefault(t => t.AllocationPath is not null);
         path ??= context.Workspace.CurrentEntry?.ProvenancePath
                ?? context.Workspace.CurrentSession?.Processes.FirstOrDefault(p => p.HasAllocations)?.AllocationsPath
@@ -69,8 +67,7 @@ public sealed class AllocationsReplCommand : IReplCommand
         }
         if (!File.Exists(path))
         {
-            // Aggregate profile is only written at exit; if the target is still live
-            // with a control channel, ask the profiler to flush now.
+            // Live profiles may need an explicit flush before their first read.
             RunTarget? live = context.Workspace.Targets.FirstOrDefault(
                 t => !t.HasExited && t.AllocationPath == path)
                 ?? context.Workspace.FindTarget(context.Workspace.CurrentSession);
@@ -112,7 +109,6 @@ public sealed class AllocationsReplCommand : IReplCommand
         return ReplResult.Success;
     }
 
-    /// <summary>Top-down call tree: nodes carry inclusive allocated (+survived) bytes.</summary>
     private static void RenderTree(IAnsiConsole console, AllocationProfile profile)
     {
         AllocationTreeNode root = AllocationTreeNode.Build(profile);
@@ -127,7 +123,6 @@ public sealed class AllocationsReplCommand : IReplCommand
         console.Write(tree);
     }
 
-    /// <summary>Hot methods: bottom-up, self bytes (allocated directly by the method) first.</summary>
     private static void RenderHot(IAnsiConsole console, AllocationProfile profile, int limit)
     {
         var table = Theme.Table(expand: true);
@@ -148,7 +143,6 @@ public sealed class AllocationsReplCommand : IReplCommand
         console.Write(table);
     }
 
-    /// <summary>Back-traces: the inverted caller tree of a method, weighted by bytes through it.</summary>
     private static void RenderCallers(IAnsiConsole console, AllocationProfile profile, string method)
     {
         AllocationTreeNode root = AllocationTreeNode.BuildCallers(profile, method);
@@ -228,5 +222,4 @@ public sealed class AllocationsReplCommand : IReplCommand
             return -1;
         }
     }
-
 }

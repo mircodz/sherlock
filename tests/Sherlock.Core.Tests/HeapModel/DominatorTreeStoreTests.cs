@@ -6,10 +6,6 @@ using Xunit;
 
 namespace Sherlock.Core.Tests.HeapModel;
 
-/// <summary>
-/// Round-trips the derived dominator-tree cache and asserts the validity key rejects a stale cache.
-/// A silent mismatch here would serve wrong retained sizes.
-/// </summary>
 public sealed class DominatorTreeStoreTests : IDisposable
 {
     private readonly TempDir _tmp = new();
@@ -52,17 +48,14 @@ public sealed class DominatorTreeStoreTests : IDisposable
         HeapGraph g = DiamondGraph();
         DominatorTreeStore.Save(_path, DominatorAnalyzer.Compute(g), g.ContentHash ^ 0xDEADBEEF);
 
-        // Stored key differs from the graph's actual hash, so the cache is invalid and Load returns null.
         Assert.Null(DominatorTreeStore.Load(_path, g));
     }
 
     [Fact]
     public void ContentHash_IsStableAndStructureSensitive()
     {
-        // Same structure, same hash (deterministic, not per-process randomized).
         Assert.Equal(DiamondGraph().ContentHash, DiamondGraph().ContentHash);
 
-        // A changed edge, different hash.
         ulong[] addresses = [0x1000, 0x2000, 0x3000, 0x4000];
         uint[] sizes = [10, 20, 30, 40];
         int[] offsets = [0, 2, 3, 4, 4, 5];

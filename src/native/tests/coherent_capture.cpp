@@ -25,7 +25,7 @@ TEST(CoherentCaptureBarrier, BeginArmsAndOnlyOneBarrierAtATime) {
     EXPECT_TRUE(barrier.active());
     EXPECT_EQ(barrier.token(), "tok-1");
 
-    // A second begin() while one is already in flight must fail without disturbing the first.
+    // Rejected begin must not disturb the active capture.
     EXPECT_FALSE(barrier.begin("tok-2"));
     EXPECT_EQ(barrier.state(), CoherentCaptureBarrier::State::Arming);
     EXPECT_EQ(barrier.token(), "tok-1");
@@ -33,7 +33,7 @@ TEST(CoherentCaptureBarrier, BeginArmsAndOnlyOneBarrierAtATime) {
 
 TEST(CoherentCaptureBarrier, MarkReadyRejectsAnythingOtherThanArming) {
     CoherentCaptureBarrier barrier;
-    // Idle: no capture armed, so an unrelated GC finishing must not transition anything.
+    // Unarmed GCs must not change state.
     EXPECT_FALSE(barrier.markReady(7));
     EXPECT_EQ(barrier.state(), CoherentCaptureBarrier::State::Idle);
 
@@ -41,8 +41,7 @@ TEST(CoherentCaptureBarrier, MarkReadyRejectsAnythingOtherThanArming) {
     EXPECT_TRUE(barrier.markReady(7));
     EXPECT_EQ(barrier.state(), CoherentCaptureBarrier::State::Parked);
 
-    // A second GC finishing while already Parked (this GC's callback hasn't parked yet in this unit
-    // test - there's no real GC thread here) must not be treated as another armed capture.
+    // Another GC must not claim an already-parked capture.
     EXPECT_FALSE(barrier.markReady(8));
 }
 
@@ -59,7 +58,6 @@ TEST(CoherentCaptureBarrier, AbortResetsAnArmingBarrierWithoutAGc) {
     EXPECT_FALSE(barrier.active());
     EXPECT_EQ(barrier.token(), "");
 
-    // Idle again: a fresh begin() must succeed.
     EXPECT_TRUE(barrier.begin("tok-2"));
 }
 
@@ -98,7 +96,7 @@ TEST(CoherentCaptureBarrier, ReleaseValidatesTokenAndReportsTheRecordedGcCount) 
     EXPECT_TRUE(barrier.release("tok", gcCount));
     EXPECT_EQ(gcCount, 42u);
 
-    // A second release() for the same (now-consumed) token must fail: nothing is parked anymore.
+    // Release is one-shot even before park() consumes it.
     EXPECT_FALSE(barrier.release("tok", gcCount));
 }
 
@@ -116,8 +114,6 @@ TEST(CoherentCaptureBarrier, ForceReleaseIsANoOpWhenIdle) {
     EXPECT_EQ(barrier.state(), CoherentCaptureBarrier::State::Idle);
 }
 
-// --- Real concurrency: a "parked GC callback" thread and a "control thread" rendezvousing. ---
-
 TEST(CoherentCaptureBarrier, ParkBlocksUntilReleaseWakesIt) {
     CoherentCaptureBarrier barrier;
     ASSERT_TRUE(barrier.begin("tok"));
@@ -125,12 +121,12 @@ TEST(CoherentCaptureBarrier, ParkBlocksUntilReleaseWakesIt) {
 
     std::atomic<bool> parkReturned{false};
     std::thread parked([&] {
-        auto result = barrier.park(10s); // long relative to the release below; must not time out
+        auto result = barrier.park(10s); // must release before the timeout
         EXPECT_EQ(result, CoherentCaptureBarrier::ParkResult::Released);
         parkReturned.store(true);
     });
 
-    // Give the parked thread a moment to actually enter the wait before releasing it.
+    // Allow the waiter to enter park() before checking that it blocks.
     std::this_thread::sleep_for(20ms);
     EXPECT_FALSE(parkReturned.load());
 
@@ -174,14 +170,12 @@ TEST(CoherentCaptureBarrier, ForceReleaseWakesAParkedWaiterLikeShutdown) {
 }
 
 TEST(CoherentCaptureBarrier, ForceReleaseDuringArmingIsPickedUpByTheUpcomingPark) {
-    // Regression: forceRelease() arriving before the armed GC has even reached markReady()/park()
-    // (e.g. Shutdown racing a slow ForceGC) must not be lost - the subsequent park() must wake
-    // immediately instead of waiting out its full timeout.
+    // Shutdown racing ForceGC must preserve release through markReady(), before park().
     CoherentCaptureBarrier barrier;
     ASSERT_TRUE(barrier.begin("tok"));
     barrier.forceRelease(); // still Arming: no one is parked yet
 
-    ASSERT_TRUE(barrier.markReady(2)); // the GC eventually "happens" and reaches the callback
+    ASSERT_TRUE(barrier.markReady(2));
 
     auto start = std::chrono::steady_clock::now();
     auto result = barrier.park(10s); // must return immediately, not block for 10s
@@ -192,8 +186,7 @@ TEST(CoherentCaptureBarrier, ForceReleaseDuringArmingIsPickedUpByTheUpcomingPark
 }
 
 TEST(CoherentCaptureBarrier, CompleteAbortRaceOnlyOneReleaseWins) {
-    // Simulates a complete/abort race for the same parked token: only one of two concurrent
-    // release() calls may succeed.
+    // Concurrent releases for one token must have a single winner.
     CoherentCaptureBarrier barrier;
     ASSERT_TRUE(barrier.begin("tok"));
     ASSERT_TRUE(barrier.markReady(11));

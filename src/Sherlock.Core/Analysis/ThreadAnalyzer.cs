@@ -30,8 +30,7 @@ public sealed class ThreadAnalyzer(Snapshot snapshot)
         return result;
     }
 
-    /// <summary>Decodes the CLR thread-state bitmask into readable flag names. Only single-bit named
-    /// flags are shown; falls back to hex if none are named.</summary>
+    // Show named single-bit flags, falling back to hex for unnamed states.
     private static string FormatState(ClrThreadState state)
     {
         long bits = Convert.ToInt64(state);
@@ -44,7 +43,7 @@ public sealed class ThreadAnalyzer(Snapshot snapshot)
         foreach (ClrThreadState flag in Enum.GetValues<ClrThreadState>())
         {
             long f = Convert.ToInt64(flag);
-            if (f != 0 && (f & (f - 1)) == 0 && (bits & f) == f) // single set bit, present
+            if (f != 0 && (f & (f - 1)) == 0 && (bits & f) == f)
             {
                 names.Add(flag.ToString().Replace("TS_", ""));
             }

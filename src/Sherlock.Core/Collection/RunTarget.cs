@@ -232,13 +232,8 @@ public sealed class RunTarget : IDisposable
         psi.Environment["SHERLOCK_CONTROL_SOCKET"] = _control.SocketPath;
     }
 
-    private void WriteLog(string? line)
+    private void WriteLog(string line)
     {
-        if (line is null)
-        {
-            return;
-        }
-
         lock (_logLock)
         {
             _log?.WriteLine(line);
@@ -598,7 +593,7 @@ public sealed class RunTarget : IDisposable
 
     public void Dispose()
     {
-        // We don't kill the tree on dispose; the user controls lifetime via `kill`.
+        // Dispose releases handles; only Kill terminates the process tree.
         lock (_logLock)
         {
             _log?.Dispose();

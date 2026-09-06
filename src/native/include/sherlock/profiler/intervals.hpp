@@ -5,23 +5,20 @@
 #include <span>
 #include <utility>
 
-// Pure address-interval math for correlation: following a live object's address across a GC.
-// Extracted from the aggregator so the correctness-critical part (surviving the ABA / compaction
-// hazard) is unit-tested in isolation, with no CLR dependency.
+// Correlation tests liveness at pre-GC addresses before applying compaction moves.
 namespace Sherlock::intervals {
 
-/// A compaction relocation reported by MovedReferences2: the block [oldStart, oldStart+length)
-/// was moved to begin at newStart.
+// MovedReferences2 relocates [oldStart, oldStart+length) to newStart.
 struct MoveRange {
     std::uint64_t oldStart;
     std::uint64_t newStart;
     std::uint64_t length;
 };
 
-/// A half-open address span [start, end).
+// Half-open address span [start, end).
 using AddrRange = std::pair<std::uint64_t, std::uint64_t>;
 
-/// True if `addr` lies in any span. `ranges` must be sorted by start and non-overlapping.
+// ranges must be sorted by start and non-overlapping.
 [[nodiscard]] inline bool inSortedRanges(std::uint64_t addr, std::span<const AddrRange> ranges) {
     auto it = std::upper_bound(ranges.begin(), ranges.end(), addr,
                                [](std::uint64_t a, const AddrRange& r) { return a < r.first; });
@@ -32,9 +29,7 @@ using AddrRange = std::pair<std::uint64_t, std::uint64_t>;
     return addr < it->second;
 }
 
-/// Maps a pre-GC address to its post-GC address by applying the relocations. `moves` must be sorted
-/// by oldStart and non-overlapping. Addresses not covered by any move (in-place survivors) are
-/// returned unchanged, so this is identity when `moves` is empty.
+// moves must be sorted by oldStart and non-overlapping. Uncovered addresses stay unchanged.
 [[nodiscard]] inline std::uint64_t remap(std::uint64_t addr, std::span<const MoveRange> moves) {
     auto it = std::upper_bound(moves.begin(), moves.end(), addr,
                                [](std::uint64_t a, const MoveRange& m) { return a < m.oldStart; });
@@ -48,11 +43,8 @@ using AddrRange = std::pair<std::uint64_t, std::uint64_t>;
     return addr;
 }
 
-/// A forward-only cursor over the sorted survivor spans and move ranges of a single GC. When the live
-/// set is walked in ascending address order, membership and remap become monotonic: each query only
-/// advances the cursors, turning the per-object O(log R) binary searches into one amortized O(L + R)
-/// linear pass. Correctness rests on GC compaction being order-preserving (a survivor's remapped
-/// address is non-decreasing in its old address); the caller asserts the emitted run stays sorted.
+// Single-GC cursor over sorted, non-overlapping ranges. Queries must use non-decreasing
+// old addresses; remapped addresses may be out of order across GC heaps.
 class ForwardCursor {
 public:
     ForwardCursor(std::span<const AddrRange> survivors, std::span<const MoveRange> moves)
@@ -62,11 +54,8 @@ public:
                   std::span<const AddrRange> condemned)
         : survivors_(survivors), moves_(moves), condemned_(condemned) {}
 
-    /// True if `addr` lies in a condemned generation's span (the GC actually looked at it, so its
-    /// absence from the survivor spans means it died). An object OUTSIDE every condemned span was not
-    /// part of this collection and is alive by definition. Empty condemned span (a full GC that
-    /// supplied none, or the two-arg ctor) means "treat the whole heap as condemned". `addr` must be
-    /// non-decreasing across calls.
+    // Uncondemned objects are unexamined, not dead. Empty spans (including the two-arg
+    // constructor) treat the whole heap as condemned.
     [[nodiscard]] bool condemned(std::uint64_t addr) {
         if (condemned_.empty()) {
             return true;
@@ -77,7 +66,6 @@ public:
         return c_ < condemned_.size() && addr >= condemned_[c_].first;
     }
 
-    /// True if `addr` lies in a survivor span. `addr` must be non-decreasing across calls.
     [[nodiscard]] bool survived(std::uint64_t addr) {
         while (s_ < survivors_.size() && survivors_[s_].second <= addr) {
             ++s_;
@@ -85,7 +73,7 @@ public:
         return s_ < survivors_.size() && addr >= survivors_[s_].first;
     }
 
-    /// Follows `addr` through the moves (identity if uncovered). `addr` must be non-decreasing.
+    // Uncovered addresses stay unchanged.
     [[nodiscard]] std::uint64_t remap(std::uint64_t addr) {
         while (m_ < moves_.size() && moves_[m_].oldStart + moves_[m_].length <= addr) {
             ++m_;

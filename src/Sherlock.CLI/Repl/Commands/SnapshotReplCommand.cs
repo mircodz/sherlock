@@ -28,8 +28,7 @@ public sealed class SnapshotReplCommand : IReplCommand
         }
         else
         {
-            // No pid: pick from live .NET processes. Prefer the single app child (target under a
-            // launcher like `dotnet run`), else the single live process, else make the user choose.
+            // Prefer a sole child app over its launcher, then a sole live process.
             List<RunProcess> live = context.Workspace.Targets
                 .SelectMany(t => t.Processes())
                 .Where(p => p.IsDotnet)

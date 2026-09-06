@@ -38,12 +38,13 @@ public sealed record SnapshotEntry(
 
     /// <summary>The allocation-provenance container, if bundled. Read via <c>ProvenanceReader</c>.</summary>
     [JsonIgnore]
-    public string? ProvenancePath => Bundled("provenance.slab");
-
-    private string? Bundled(string name)
+    public string? ProvenancePath
     {
-        string p = System.IO.Path.Combine(Dir, name);
-        return File.Exists(p) ? p : null;
+        get
+        {
+            string path = System.IO.Path.Combine(Dir, "provenance.slab");
+            return File.Exists(path) ? path : null;
+        }
     }
 
     /// <summary>True if the underlying dump file still exists on disk.</summary>
