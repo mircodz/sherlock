@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Threading;
 
 namespace Sherlock.Core.HeapModel;
 
@@ -237,6 +239,72 @@ public sealed class HeapGraph : IDisposable
             result[names.Length] = ("Free", FreeCount, FreeBytes);
         }
         return result;
+    }
+
+    /// <summary>Lists the largest matching objects without previews, or null when type columns are absent.</summary>
+    public InstanceListing? ListInstances(string typeFilter, int limit = 20, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        ArgumentException.ThrowIfNullOrEmpty(typeFilter);
+        ArgumentOutOfRangeException.ThrowIfNegative(limit);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (TypeIds is not { } idsMem || TypeNames is not { } names)
+        {
+            return null;
+        }
+
+        var matches = new bool[names.Length];
+        bool anyMatch = false;
+        for (int t = 0; t < names.Length; t++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            matches[t] = names[t].Contains(typeFilter, StringComparison.OrdinalIgnoreCase);
+            anyMatch |= matches[t];
+        }
+        if (!anyMatch)
+        {
+            return new InstanceListing([], 0, 0);
+        }
+
+        ReadOnlySpan<int> ids = idsMem.Span;
+        ReadOnlySpan<uint> sizes = Sizes.Span;
+        var top = new PriorityQueue<int, uint>();
+        long totalMatched = 0;
+        ulong totalSize = 0;
+        for (int i = 0; i < ids.Length; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!matches[ids[i]])
+            {
+                continue;
+            }
+
+            totalMatched++;
+            uint size = sizes[i];
+            totalSize += size;
+            if (limit == 0)
+            {
+                continue;
+            }
+            if (top.Count < limit)
+            {
+                top.Enqueue(i, size);
+            }
+            else if (size > sizes[top.Peek()])
+            {
+                top.EnqueueDequeue(i, size);
+            }
+        }
+
+        var instances = new ObjectInstance[top.Count];
+        ReadOnlySpan<ulong> addresses = Addresses.Span;
+        for (int i = instances.Length - 1; i >= 0; i--)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            int id = top.Dequeue();
+            instances[i] = new ObjectInstance(addresses[id], names[ids[id]], sizes[id], null);
+        }
+        return new InstanceListing(instances, totalMatched, totalSize);
     }
 
     private void ThrowIfDisposed()

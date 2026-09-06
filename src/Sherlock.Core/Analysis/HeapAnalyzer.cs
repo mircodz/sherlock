@@ -46,10 +46,24 @@ public sealed class HeapAnalyzer(Snapshot snapshot)
     /// Lists instances whose type name matches <paramref name="typeFilter"/>, returning the
     /// <paramref name="limit"/> largest by size descending, plus totals over all matches.
     /// </summary>
-    /// <remarks>Bounded min-heap keeps memory at O(limit) even when millions of objects match.</remarks>
+    /// <remarks>Uses cached type columns when available, with bounded top-K selection on either path.</remarks>
     public InstanceListing ListInstances(string typeFilter, int limit = 20, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(typeFilter);
+        ArgumentOutOfRangeException.ThrowIfNegative(limit);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (snapshot.TryGetCachedHeapGraph()?.ListInstances(typeFilter, limit, cancellationToken) is { } listing)
+        {
+            var selected = new ObjectInstance[listing.Instances.Count];
+            for (int i = 0; i < selected.Length; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                ObjectInstance instance = listing.Instances[i];
+                ClrObject obj = snapshot.Runtime.Heap.GetObject(instance.Address);
+                selected[i] = instance with { Preview = Preview(obj, obj.Type) };
+            }
+            return listing with { Instances = selected };
+        }
 
         // Min-heap keyed by size: the smallest of the current top-K sits at the front, evicted when a
         // larger instance arrives.
@@ -140,18 +154,15 @@ public sealed class HeapAnalyzer(Snapshot snapshot)
             .ToList();
     }
 
-    private static ObjectInstance BuildInstance(ClrObject obj, ClrType type, string name)
-    {
-        string? preview = null;
-        if (type.IsString)
-        {
-            preview = obj.AsString(64);
-        }
-        else if (type.IsArray)
-        {
-            preview = "[]";
-        }
+    private static ObjectInstance BuildInstance(ClrObject obj, ClrType type, string name) =>
+        new(obj.Address, name, obj.Size, Preview(obj, type));
 
-        return new ObjectInstance(obj.Address, name, obj.Size, preview);
+    private static string? Preview(ClrObject obj, ClrType? type)
+    {
+        if (type?.IsString == true)
+        {
+            return obj.AsString(64);
+        }
+        return type?.IsArray == true ? "[]" : null;
     }
 }

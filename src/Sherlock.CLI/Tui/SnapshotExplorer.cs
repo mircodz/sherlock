@@ -449,29 +449,12 @@ public static class SnapshotExplorer
         // `tab` picks the panel a link wanted to land on.
         Widget InstancePage(Snapshot snap, ulong address, string tab = "Inspect")
         {
-            ObjectDetail detail = snap.Inspect(address);
+            ObjectValue value = snap.InspectValue(address);
 
             // Inspect (fields) is cheap and the default, built up front. GC roots (a graph search for
             // holder paths) and whoalloc build lazily when their tab is shown.
-            Widget BuildInspect()
-            {
-                var inspect = new TreeView<string> { RenderLabel = FieldLabel, ShowGuides = true };
-                inspect.OnLinkClick = p => Follow(snap, p);
-                TreeNode<string> obj = inspect.AddRoot($"{Short(detail.TypeName)} @ 0x{address:x}  ({ByteFormat.Human((long)detail.Size)})");
-                if (detail.StringValue is { } str)
-                {
-                    obj.AddChild($"= \"{str}\"");
-                }
-                else if (detail.IsArray) { obj.AddChild($"length : int = {detail.ElementCount}"); foreach (string el in detail.Elements.Take(64)) obj.AddChild($"[] = {el}"); }
-                else
-                {
-                    foreach (FieldValue f in detail.Fields) obj.AddChild($"{f.Name} : {Short(f.TypeName)} = {f.Value}");
-                }
-
-                obj.ExpandAll();
-                inspect.MarkDirty();
-                return new Panel(inspect, " Object — click a reference to follow it ") { BorderStyle = BorderStyle.Rounded };
-            }
+            Widget BuildInspect() => new ObjectInspectorView(value, snap.InspectChildren,
+                target => Follow(snap, new ObjTarget(target)), type => Follow(snap, new TypeTarget(type)));
 
             Widget BuildRoots(CancellationToken ct)
             {
@@ -491,7 +474,8 @@ public static class SnapshotExplorer
                     root.ExpandAll();
                 }
                 roots.MarkDirty();
-                return new Panel(roots, " Why it's alive — click a holder to inspect it ") { BorderStyle = BorderStyle.Rounded };
+                return Hinted(new Panel(roots, " Why it's alive — click a holder to inspect it ") { BorderStyle = BorderStyle.Rounded },
+                    "Tab switch view  ·  click a holder to inspect it  ·  Backspace back");
             }
 
             var tabs = new Tabs()
@@ -528,7 +512,7 @@ public static class SnapshotExplorer
                 "whoalloc" => tabs.Items.Count - 1,
                 _ => 0,
             };
-            return Hinted(tabs, "Tab / ←→ switch view  ·  click a link to drill  ·  Backspace back");
+            return tabs;
         }
 
         // Clicking a method lands here: what it allocates (by type), then who calls it (back-traces).
@@ -681,37 +665,6 @@ public static class SnapshotExplorer
             return new string('█', filled) + new string('░', width - filled);
         }
 
-        // A field row `name : type = value`, with an object-reference value rendered as a clickable link.
-        static StyledText FieldLabel(TreeNode<string> node)
-        {
-            Theme theme = Theme.Current;
-            string text = node.Value;
-            int colon = text.IndexOf(" : ", StringComparison.Ordinal);
-            if (colon < 0)
-            {
-                int e0 = text.IndexOf(" = ", StringComparison.Ordinal);
-                if (e0 >= 0 && TryAddr(text[(e0 + 3)..], out ulong a0))
-                {
-                    return StyledText.Of(text[..(e0 + 3)]).Fg(theme.Foreground).Append(text[(e0 + 3)..]).Fg(theme.Accent).Underline().Link(new ObjTarget(a0));
-                }
-
-                return new StyledText(text, new Style(theme.Foreground, Color.Default));
-            }
-            StyledText st = StyledText.Of(text[..colon]).Fg(theme.Foreground).Append(" : ").Fg(theme.Muted);
-            string rest = text[(colon + 3)..];
-            int eq = rest.IndexOf(" = ", StringComparison.Ordinal);
-            if (eq < 0)
-            {
-                return st.Append(rest).Fg(theme.Secondary);
-            }
-
-            st.Append(rest[..eq]).Fg(theme.Secondary).Append(" = ").Fg(theme.Muted);
-            string value = rest[(eq + 3)..];
-            return TryAddr(value, out ulong a)
-                ? st.Append(value).Fg(theme.Accent).Underline().Link(new ObjTarget(a))
-                : st.Append(value).Fg(theme.Foreground);
-        }
-
         // A GC-root path node: the root handle (plain), or a held object `Type @0xADDR` with the
         // address linked so you can walk up the chain of holders.
         static StyledText RootLabel(TreeNode<RootRow> node)
@@ -720,15 +673,6 @@ public static class SnapshotExplorer
             return r.Address is ulong a
                 ? StyledText.Of(r.Text + " ").Fg(Theme.Current.Foreground).Append($"@0x{a:x}").Fg(Theme.Current.Accent).Underline().Link(new ObjTarget(a))
                 : new StyledText(r.Text, new Style(Theme.Current.Muted, Color.Default));
-        }
-
-        static bool TryAddr(string s, out ulong addr)
-        {
-            addr = 0;
-            s = s.Trim();
-            return s.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
-                && ulong.TryParse(s[2..], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out addr)
-                && addr != 0;
         }
 
         static ulong ParseHex(string s) =>

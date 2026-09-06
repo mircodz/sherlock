@@ -5,6 +5,7 @@
     <Project Path="src/Sherlock.Mcp/Sherlock.Mcp.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Sherlock.CLI.Tests/Sherlock.CLI.Tests.csproj" />
     <Project Path="tests/Sherlock.Core.Tests/Sherlock.Core.Tests.csproj" />
   </Folder>
 </Solution>

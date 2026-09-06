@@ -39,4 +39,8 @@
     <PackageReference Include="Cellar" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Sherlock.CLI.Tests" />
+  </ItemGroup>
+
 </Project>

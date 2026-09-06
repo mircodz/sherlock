@@ -94,9 +94,25 @@ public sealed class Snapshot : IDisposable
         }
     }
 
-    public ObjectDetail Inspect(ulong address) => new ObjectInspector(this).Inspect(address);
+    public ObjectDetail Inspect(ulong address)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return new ObjectInspector(this).Inspect(address);
+    }
+
+    public ObjectValue InspectValue(ulong address)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return new ObjectInspector(this).InspectValue(address);
+    }
+
+    public InspectionPage InspectChildren(ObjectValue value, int startIndex = 0, int count = 64, bool raw = false)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return new ObjectInspector(this).InspectChildren(value, startIndex, count, raw);
+    }
     public IReadOnlyList<GcRootPath> Roots(ulong address, CancellationToken cancellationToken = default) => RootAnalyzer.Find(GetHeapGraph(cancellationToken), address, cancellationToken);
-    public InstanceListing Instances(string filter, int limit = 20) => new HeapAnalyzer(this).ListInstances(filter, limit);
+    public InstanceListing Instances(string filter, int limit = 20, CancellationToken cancellationToken = default) => new HeapAnalyzer(this).ListInstances(filter, limit, cancellationToken);
     public IReadOnlyList<DuplicateString> DuplicateStrings(int limit = 20) => new HeapAnalyzer(this).FindDuplicateStrings(limit);
     public FinalizerReport Finalizers() => _finalizers ??= new FinalizerAnalyzer(this).Analyze();
     public IReadOnlyList<EventSubscription> EventHandlerLeaks(int minSubscribers = 16) => new EventHandlerAnalyzer(this).Analyze(minSubscribers);
@@ -104,6 +120,7 @@ public sealed class Snapshot : IDisposable
     public string? WhoAllocated(ulong address) => HasCorrelation ? GetProvenance()?.StackFor(address) : null;
 
     internal HeapGraph GetHeapGraph(CancellationToken cancellationToken = default) => (_heapGraph ??= new HeapGraphProvider(this)).Get(cancellationToken);
+    internal HeapGraph? TryGetCachedHeapGraph() => (_heapGraph ??= new HeapGraphProvider(this)).TryGetCachedOrOnDisk();
     internal DominatorTree GetDominatorTree(CancellationToken cancellationToken = default) => _dominators ??= new DominatorAnalyzer(this).Build(cancellationToken);
 
     private ProvenanceReader? GetProvenance()
@@ -123,8 +140,7 @@ public sealed class Snapshot : IDisposable
 
     private IReadOnlyList<HeapTypeStat> BuildHistogram()
     {
-        HeapGraphProvider provider = _heapGraph ??= new HeapGraphProvider(this);
-        if (provider.TryGetCachedOrOnDisk() is not { } graph || graph.Histogram() is not { } rows)
+        if (TryGetCachedHeapGraph() is not { } graph || graph.Histogram() is not { } rows)
         {
             return new HeapAnalyzer(this).GetStatistics();
         }
