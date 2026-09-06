@@ -1,9 +1,10 @@
+using System;
 using System.ComponentModel;
 using System.IO;
-using System.Linq;
 using System.Threading;
 using Sherlock.CLI.Rendering;
 using Sherlock.CLI.Repl;
+using Sherlock.CLI.Repl.Commands;
 using Sherlock.Core;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -38,8 +39,30 @@ public sealed class AnalyzeCommand : Command<AnalyzeCommand.Settings>
     protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellation)
     {
         IAnsiConsole console = AnsiConsole.Console;
+        try
+        {
+            cancellation.ThrowIfCancellationRequested();
+            using Workspace workspace = ReplHost.CreateWorkspace();
+            return Run(console, workspace, settings, cancellation);
+        }
+        catch (OperationCanceledException)
+        {
+            Output.Warning(console, $"Analysis cancelled.");
+            return 1;
+        }
+        catch (Exception ex)
+        {
+            Output.Error(console, $"{ex.Message}");
+            return 1;
+        }
+    }
 
-        using Workspace workspace = ReplHost.CreateWorkspace();
+    internal static int Run(IAnsiConsole console, Workspace workspace, Settings settings, CancellationToken cancellation = default)
+    {
+        if (cancellation.IsCancellationRequested)
+        {
+            return 1;
+        }
 
         // A dump path is optional; when given, open it as the current target.
         if (!string.IsNullOrEmpty(settings.DumpPath))
@@ -65,6 +88,7 @@ public sealed class AnalyzeCommand : Command<AnalyzeCommand.Settings>
         bool interactive = !batched || settings.Interactive;
         var history = new ReplHistory(interactive ? ReplHistory.DefaultPath : null);
         var repl = new Repl.Repl(ReplCommandRegistry.CreateDefault(history), history, console);
+        var result = ReplResult.Success;
 
         if (settings.Script is not null)
         {
@@ -73,25 +97,18 @@ public sealed class AnalyzeCommand : Command<AnalyzeCommand.Settings>
                 Output.Error(console, $"Script not found: {settings.Script}");
                 return 1;
             }
-            repl.RunBatch(workspace, File.ReadLines(settings.Script).Where(IsCommandLine));
+            result = repl.RunBatch(workspace, SourceReplCommand.ReadCommands(settings.Script, cancellation), cancellation);
         }
         else if (settings.Exec.Length > 0)
         {
-            repl.RunBatch(workspace, settings.Exec);
+            result = repl.RunBatch(workspace, settings.Exec, cancellation);
         }
 
-        if (interactive)
+        if (interactive && (result & (ReplResult.Quit | ReplResult.Cancelled)) == 0)
         {
-            repl.RunInteractive(workspace);
+            result |= repl.RunInteractive(workspace, cancellation);
         }
 
-        return 0;
-    }
-
-    /// <summary>Skips blank lines and <c>#</c> comments when reading a script file.</summary>
-    private static bool IsCommandLine(string line)
-    {
-        string trimmed = line.Trim();
-        return trimmed.Length > 0 && !trimmed.StartsWith('#');
+        return (result & (ReplResult.Failure | ReplResult.Cancelled)) != 0 ? 1 : 0;
     }
 }

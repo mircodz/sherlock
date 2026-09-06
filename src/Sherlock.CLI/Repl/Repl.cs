@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Threading;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using Spectre.Console;
@@ -18,36 +20,86 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
     private string Prompt => _workspace?.CurrentName is { } name ? $"sl[{name}]> " : "sl> ";
 
     /// <summary>Runs commands non-interactively, then returns. Used by <c>--exec</c> and scripts.</summary>
-    public void RunBatch(Workspace workspace, IEnumerable<string> lines)
+    public ReplResult RunBatch(Workspace workspace, IEnumerable<string> lines, CancellationToken cancellation = default)
     {
         _workspace = workspace;
-        _context = new ReplContext(workspace, console, RunLine);
-        foreach (string line in lines)
+        _context = new ReplContext(workspace, console, RunLine, cancellation);
+        var result = ReplResult.Success;
+        try
         {
-            console.MarkupLineInterpolated($"[#5AF78E]{Prompt}[/]{line}");
-            if (!RunLine(line))
+            cancellation.ThrowIfCancellationRequested();
+            foreach (string line in lines)
             {
-                return;
+                console.MarkupLineInterpolated($"[#5AF78E]{Prompt}[/]{line}");
+                result |= RunLine(line);
+                if ((result & (ReplResult.Quit | ReplResult.Cancelled)) != 0)
+                {
+                    break;
+                }
             }
         }
+        catch (OperationCanceledException)
+        {
+            return result | ReplResult.Cancelled;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Output.Error(console, $"{ex.Message}");
+            return result | ReplResult.Failure;
+        }
+        return cancellation.IsCancellationRequested ? result | ReplResult.Cancelled : result;
     }
 
     /// <summary>Runs the interactive loop until the user exits or input ends.</summary>
-    public void RunInteractive(Workspace workspace)
+    public ReplResult RunInteractive(Workspace workspace, CancellationToken cancellation = default) =>
+        RunInteractive(workspace, prompt => LineEditor.ReadLine(prompt, history, console, cancellation), cancellation);
+
+    internal ReplResult RunInteractive(Workspace workspace, Func<string, string?> readLine, CancellationToken cancellation = default)
     {
         _workspace = workspace;
-        _context = new ReplContext(workspace, console, RunLine);
+        _context = new ReplContext(workspace, console, RunLine, cancellation);
         PrintBanner(workspace);
+        var result = ReplResult.Success;
 
         while (true)
         {
-            PollTargets();
-
-            string? line = LineEditor.ReadLine(Prompt, history, console);
+            if (cancellation.IsCancellationRequested)
+            {
+                return result | ReplResult.Cancelled;
+            }
+            try
+            {
+                result |= PollTargets();
+            }
+            catch (OperationCanceledException)
+            {
+                result |= ReplResult.Cancelled;
+                continue;
+            }
+            catch (Exception ex)
+            {
+                Output.Error(console, $"{ex.Message}");
+                result |= ReplResult.Failure;
+            }
+            string? line;
+            try
+            {
+                line = readLine(Prompt);
+            }
+            catch (OperationCanceledException)
+            {
+                result |= ReplResult.Cancelled;
+                continue;
+            }
+            catch (Exception ex)
+            {
+                Output.Error(console, $"{ex.Message}");
+                return result | ReplResult.Failure;
+            }
             if (line is null) // EOF (Ctrl-D)
             {
                 console.WriteLine();
-                return;
+                return result | ReplResult.Quit;
             }
 
             line = line.Trim();
@@ -69,60 +121,67 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
                 _lastCommand = line;
             }
 
-            if (!RunLine(line))
+            ReplResult commandResult = RunLine(line);
+            result |= commandResult;
+            if ((commandResult & ReplResult.Quit) != 0)
             {
-                return;
+                return result;
             }
         }
     }
 
-    /// <summary>Dispatches one input line. Returns false when the loop should stop.</summary>
-    private bool RunLine(string line)
+    /// <summary>Dispatches one input line without losing failures or cancellation.</summary>
+    private ReplResult RunLine(string line)
     {
-        string[] tokens = Tokenize(line);
-        if (tokens.Length == 0)
-        {
-            return true;
-        }
-
-        string name = tokens[0];
-        string[] args = tokens[1..];
-
-        if (ExitWords.Contains(name, StringComparer.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        IReplCommand? command = registry.Resolve(name);
-        if (command is null)
-        {
-            Output.Error(console, $"Unknown command [bold]{name}[/]. Use [bold]help[/] for a list.");
-            return true;
-        }
-
+        IReplCommand? command = null;
         try
         {
-            command.Execute(_context!, args);
+            _context!.Cancellation.ThrowIfCancellationRequested();
+            string[] tokens = Tokenize(line);
+            if (tokens.Length == 0)
+            {
+                return ReplResult.Success;
+            }
+            string name = tokens[0];
+            string[] args = tokens[1..];
+            if (ExitWords.Contains(name, StringComparer.OrdinalIgnoreCase))
+            {
+                return args.Length == 0 ? ReplResult.Quit : throw new DumpAnalysisException($"usage: {name}");
+            }
+            command = registry.Resolve(name);
+            if (command is null)
+            {
+                Output.Error(console, $"Unknown command [bold]{name}[/]. Use [bold]help[/] for a list.");
+                return ReplResult.Failure;
+            }
+            ReplResult result = command.Execute(_context, args);
+            return _context.Cancellation.IsCancellationRequested ? result | ReplResult.Cancelled : result;
+        }
+        catch (OperationCanceledException)
+        {
+            Output.Warning(console, $"Command cancelled.");
+            return ReplResult.Cancelled;
         }
         catch (DumpAnalysisException ex)
         {
             Output.Error(console, $"{ex.Message}");
+            return ReplResult.Failure;
         }
         catch (Exception ex)
         {
-            Output.Error(console, $"[bold]{command.Name}[/] failed: {ex.Message}");
+            Output.Error(console, $"[bold]{command?.Name ?? "command"}[/] failed: {ex.Message}");
+            return ReplResult.Failure;
         }
-
-        return true;
     }
 
-    private void PollTargets()
+    private ReplResult PollTargets()
     {
         if (_workspace is null)
         {
-            return;
+            return ReplResult.Success;
         }
 
+        var result = ReplResult.Success;
         foreach (Core.Store.Session session in _workspace.PollExitedAllocationProfiles())
         {
             Output.Success(console, $"Allocation profile captured for [bold]{session.Id}[/] [#808791]({session.Command})[/]");
@@ -137,13 +196,16 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
                 if (capture.Error is not null)
                 {
                     Output.Warning(console, $"{capture.Error}");
+                    result |= ReplResult.Failure;
                 }
             }
             else
             {
                 Output.Error(console, $"[bold]{capture.Probe}[/] fired but capture failed: {capture.Error}");
+                result |= ReplResult.Failure;
             }
         }
+        return result;
     }
 
     private void PrintBanner(Workspace workspace)
@@ -168,28 +230,36 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
         var tokens = new List<string>();
         var current = new System.Text.StringBuilder();
         bool inQuotes = false;
+        bool started = false;
 
         foreach (char c in line)
         {
             if (c == '"')
             {
                 inQuotes = !inQuotes;
+                started = true;
             }
             else if (char.IsWhiteSpace(c) && !inQuotes)
             {
-                if (current.Length > 0)
+                if (started)
                 {
                     tokens.Add(current.ToString());
                     current.Clear();
+                    started = false;
                 }
             }
             else
             {
                 current.Append(c);
+                started = true;
             }
         }
 
-        if (current.Length > 0)
+        if (inQuotes)
+        {
+            throw new DumpAnalysisException("Unterminated double quote.");
+        }
+        if (started)
         {
             tokens.Add(current.ToString());
         }

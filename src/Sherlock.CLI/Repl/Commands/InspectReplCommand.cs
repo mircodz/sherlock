@@ -13,15 +13,15 @@ public sealed class InspectReplCommand : IReplCommand
     public string Summary => "Sweep the heap for common problems (leaks, finalizers, dup strings, growth).";
     public string Usage => "doctor";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         IReadOnlyList<Finding> findings = context.Console.Status()
-            .Start("Examining the heap…", _ => context.Snapshot.Diagnose());
+            .Start("Examining the heap…", _ => context.Snapshot.Diagnose(context.Cancellation));
 
         if (findings.Count == 0)
         {
             context.Console.MarkupLine("[#AFFF00]Clean bill of health.[/] [#808791]No obvious issues by the current heuristics.[/]");
-            return;
+            return ReplResult.Success;
         }
 
         foreach (Finding finding in findings)
@@ -40,5 +40,6 @@ public sealed class InspectReplCommand : IReplCommand
                 context.Console.MarkupLineInterpolated($"  [#808791]→[/] [bold]{next}[/]");
             }
         }
+        return ReplResult.Success;
     }
 }

@@ -11,7 +11,7 @@ public sealed class RmReplCommand : IReplCommand
     public string Usage => "rm <id>";
     public string Category => "Library";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         Args.Require(args, 1, Usage);
         string id = args[0];
@@ -25,9 +25,10 @@ public sealed class RmReplCommand : IReplCommand
         if (!context.Workspace.Store.Remove(id))
         {
             Output.Error(context.Console, $"No snapshot or workspace '{id}'.");
-            return;
+            return ReplResult.Failure;
         }
 
         Output.Success(context.Console, $"Removed [bold]{id}[/]");
+        return ReplResult.Success;
     }
 }

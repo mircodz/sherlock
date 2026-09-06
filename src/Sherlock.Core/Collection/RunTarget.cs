@@ -8,47 +8,15 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.Diagnostics.NETCore.Client;
 
 namespace Sherlock.Core.Collection;
-
-public sealed record RunProcess(int Pid, string Name, bool IsRoot, bool IsDotnet, int ParentPid = 0);
 
 public sealed record HeapStats(long Total, long Gen0, long Gen1, long Gen2, long Loh, long Poh);
 public sealed record CoherentCaptureResult(string DumpPath, string ProvenancePath, long GcCount);
 public sealed record RunTrigger(int Pid, string Name, string? ExitToken = null);
 
-public enum ProfilerLogLevel
-{
-    Trace,
-    Info,
-    Warning,
-    Error,
-    Off,
-}
-
-public sealed record RunOptions
-{
-    public required IReadOnlyList<string> Command { get; init; }
-    public bool Profile { get; init; }
-    public bool Correlate { get; init; }
-    public bool CollectChildren { get; init; }
-    public bool ExperimentalGcBarrier { get; init; }
-    public string? SnapshotOn { get; init; }
-    public string? OutputDirectory { get; init; }
-    public string? ProfilerPath { get; init; }
-    public ProfilerLogLevel ProfilerLogLevel { get; init; } = ProfilerLogLevel.Warning;
-    public bool NeedsProfiler => Profile || Correlate || CollectChildren || ExperimentalGcBarrier || SnapshotOn is not null || ProfilerPath is not null;
-    public bool SnapshotOnExit =>
-        SnapshotOn?.Split(
-            [';', ','],
-            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-        .Any(value => value.Equals("exit", StringComparison.OrdinalIgnoreCase)) == true;
-    public bool UseGcBarrier => Correlate && (ExperimentalGcBarrier || SnapshotOnExit);
-}
-
 /// <summary>A launched process tree and its profiler connection.</summary>
-public sealed partial class RunTarget : IDisposable
+public sealed class RunTarget : IDisposable
 {
     private Process? _root;
     private readonly HashSet<string> _seenAllocations = [];
@@ -117,10 +85,7 @@ public sealed partial class RunTarget : IDisposable
     public static RunTarget Start(RunOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
-        if (options.Command is null || options.Command.Count == 0)
-        {
-            throw new ArgumentException("Run command cannot be empty.", nameof(options));
-        }
+        options.Validate();
         options = options with { Command = options.Command.ToArray() };
 
         var target = new RunTarget();
@@ -392,7 +357,7 @@ public sealed partial class RunTarget : IDisposable
     /// <summary>Forces a GC and captures cumulative allocations plus live-object correlation.</summary>
     public (string Path, long GcAtEmit) CaptureCorrelation(int pid, TimeSpan timeout)
     {
-        if (_control is null || !IsAlive(pid))
+        if (_control is null || !ProcessLocator.IsAlive(pid))
         {
             throw new DumpAnalysisException($"Process {pid} has no live profiler control channel.");
         }
@@ -415,7 +380,7 @@ public sealed partial class RunTarget : IDisposable
 
     public long GcCount(int pid, TimeSpan timeout)
     {
-        if (_control is null || !IsAlive(pid))
+        if (_control is null || !ProcessLocator.IsAlive(pid))
         {
             return -1;
         }
@@ -426,7 +391,7 @@ public sealed partial class RunTarget : IDisposable
 
     public HeapStats? HeapSize(int pid, TimeSpan timeout)
     {
-        if (_control is null || !IsAlive(pid))
+        if (_control is null || !ProcessLocator.IsAlive(pid))
         {
             return null;
         }
@@ -451,7 +416,7 @@ public sealed partial class RunTarget : IDisposable
 
     public (bool Ok, string Detail) ArmTrigger(int pid, string spec, TimeSpan timeout)
     {
-        if (_control is null || !IsAlive(pid))
+        if (_control is null || !ProcessLocator.IsAlive(pid))
         {
             return (false, "no live profiler");
         }
@@ -462,7 +427,7 @@ public sealed partial class RunTarget : IDisposable
     /// <summary>Captures the current cumulative allocation profile.</summary>
     public string CaptureAllocations(int pid, TimeSpan timeout)
     {
-        if (_control is null || !IsAlive(pid))
+        if (_control is null || !ProcessLocator.IsAlive(pid))
         {
             throw new DumpAnalysisException($"Process {pid} has no live profiler control channel.");
         }
@@ -478,7 +443,7 @@ public sealed partial class RunTarget : IDisposable
 
     public CoherentCaptureResult CaptureCoherentSnapshot(int pid, TimeSpan timeout)
     {
-        if (!_correlate || _control is null || !IsAlive(pid))
+        if (!_correlate || _control is null || !ProcessLocator.IsAlive(pid))
         {
             throw new DumpAnalysisException($"Process {pid} has no live correlation control channel.");
         }
@@ -570,39 +535,12 @@ public sealed partial class RunTarget : IDisposable
             return [];
         }
 
-        HashSet<int> dotnet = DotnetPids();
-        Dictionary<int, List<int>> children = ChildrenByParent();
-        var result = new List<RunProcess>();
-
-        // BFS from the root, carrying each pid's parent (0 for the root).
-        var seen = new HashSet<int> { _root.Id };
-        var queue = new Queue<(int Pid, int Parent)>();
-        queue.Enqueue((_root.Id, 0));
-        while (queue.Count > 0)
+        IReadOnlyList<RunProcess> result = ProcessLocator.Tree(_root.Id);
+        foreach (RunProcess process in result)
         {
-            (int pid, int parent) = queue.Dequeue();
-            if (IsAlive(pid))
-            {
-                RunProcess described = Describe(pid, pid == _root.Id, dotnet) with { ParentPid = parent };
-                _names[pid] = described.Name;
-                result.Add(described);
-            }
-            if (children.TryGetValue(pid, out List<int>? kids))
-            {
-                foreach (int child in kids)
-                {
-                    if (seen.Add(child))
-                    {
-                        queue.Enqueue((child, pid));
-                    }
-                }
-            }
+            _names[process.Pid] = process.Name;
         }
-
-        return result
-            .OrderByDescending(p => p.IsRoot)
-            .ThenBy(p => p.Pid)
-            .ToList();
+        return result;
     }
 
     public void Kill()
@@ -622,141 +560,8 @@ public sealed partial class RunTarget : IDisposable
         return _root.ExitCode;
     }
 
-    private static RunProcess Describe(int pid, bool isRoot, HashSet<int> dotnet) =>
-        new(pid, NameOf(pid), isRoot, dotnet.Contains(pid));
-
-    private static HashSet<int> DotnetPids()
-    {
-        try { return DiagnosticsClient.GetPublishedProcesses().ToHashSet(); }
-        catch { return []; }
-    }
-
-    private static Dictionary<int, List<int>> ChildrenByParent()
-    {
-        if (OperatingSystem.IsWindows())
-        {
-            return WindowsChildrenByParent();
-        }
-
-        var map = new Dictionary<int, List<int>>();
-        try
-        {
-            var psi = new ProcessStartInfo("ps", "-axo pid=,ppid=")
-            {
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-            };
-            using Process? ps = Process.Start(psi);
-            if (ps is null)
-            {
-                return map;
-            }
-
-            string output = ps.StandardOutput.ReadToEnd();
-            ps.WaitForExit(2000);
-
-            foreach (string line in output.Split('\n'))
-            {
-                string[] parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                if (parts.Length >= 2 && int.TryParse(parts[0], out int pid) && int.TryParse(parts[1], out int ppid))
-                {
-                    (map.TryGetValue(ppid, out List<int>? kids) ? kids : map[ppid] = []).Add(pid);
-                }
-            }
-        }
-        catch
-        {
-            // Process discovery is advisory; the launched root remains usable.
-        }
-        return map;
-    }
-
-    private static Dictionary<int, List<int>> WindowsChildrenByParent()
-    {
-        var map = new Dictionary<int, List<int>>();
-        nint snapshot = WindowsProcessSnapshot.CreateToolhelp32Snapshot(WindowsProcessSnapshot.Process, 0);
-        if (snapshot == -1)
-        {
-            return map;
-        }
-
-        try
-        {
-            var entry = new WindowsProcessSnapshot.ProcessEntry { Size = (uint)Marshal.SizeOf<WindowsProcessSnapshot.ProcessEntry>() };
-            if (!WindowsProcessSnapshot.Process32First(snapshot, ref entry))
-            {
-                return map;
-            }
-
-            do
-            {
-                if (entry.ProcessId > int.MaxValue || entry.ParentProcessId > int.MaxValue)
-                {
-                    continue;
-                }
-                int pid = (int)entry.ProcessId;
-                int parent = (int)entry.ParentProcessId;
-                (map.TryGetValue(parent, out List<int>? children) ? children : map[parent] = []).Add(pid);
-                entry.Size = (uint)Marshal.SizeOf<WindowsProcessSnapshot.ProcessEntry>();
-            }
-            while (WindowsProcessSnapshot.Process32Next(snapshot, ref entry));
-        }
-        finally
-        {
-            WindowsProcessSnapshot.CloseHandle(snapshot);
-        }
-        return map;
-    }
-
-    private static partial class WindowsProcessSnapshot
-    {
-        public const uint Process = 0x00000002;
-
-        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-        public unsafe struct ProcessEntry
-        {
-            public uint Size;
-            public uint Usage;
-            public uint ProcessId;
-            public nuint DefaultHeapId;
-            public uint ModuleId;
-            public uint Threads;
-            public uint ParentProcessId;
-            public int BasePriority;
-            public uint Flags;
-            public fixed char ExeFile[260];
-        }
-
-        [LibraryImport("kernel32.dll", SetLastError = true)]
-        public static partial nint CreateToolhelp32Snapshot(uint flags, uint processId);
-
-        [LibraryImport("kernel32.dll", EntryPoint = "Process32FirstW", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        public static partial bool Process32First(nint snapshot, ref ProcessEntry entry);
-
-        [LibraryImport("kernel32.dll", EntryPoint = "Process32NextW", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        public static partial bool Process32Next(nint snapshot, ref ProcessEntry entry);
-
-        [LibraryImport("kernel32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        public static partial bool CloseHandle(nint handle);
-    }
-
     private (bool Ok, string[] Fields) Request(int pid, string cmd, TimeSpan timeout, params string[] args) =>
         _control!.RequestAsync(pid, cmd, timeout, args).GetAwaiter().GetResult();
-
-    private static bool IsAlive(int pid)
-    {
-        try { return !Process.GetProcessById(pid).HasExited; }
-        catch { return false; }
-    }
-
-    private static string NameOf(int pid)
-    {
-        try { return Process.GetProcessById(pid).ProcessName; }
-        catch { return "<exited>"; }
-    }
 
     private static string ProfilerFileName => OperatingSystem.IsWindows() ? "SherlockProfiler.dll" : OperatingSystem.IsMacOS() ? "libSherlockProfiler.dylib" : "libSherlockProfiler.so";
 

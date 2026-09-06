@@ -81,9 +81,21 @@ public sealed class Snapshot : IDisposable
     public IReadOnlyList<ModuleInfo> Modules => _modules ??= new RuntimeAnalyzer(this).GetModules();
     public IReadOnlyList<SegmentInfo> Segments => _segments ??= new RuntimeAnalyzer(this).GetSegments();
     public IReadOnlyList<ThreadInfo> Threads => _threads ??= new ThreadAnalyzer(this).GetThreads();
-    public IReadOnlyList<ExceptionInfo> Exceptions => _exceptions ??= new ExceptionAnalyzer(this).FindExceptions();
+    public IReadOnlyList<ExceptionInfo> Exceptions => GetExceptions();
     public IReadOnlyList<HeapTypeStat> Histogram => _histogram ??= BuildHistogram();
-    public DominatorTree Dominators => _dominators ??= new DominatorAnalyzer(this).Build();
+    public DominatorTree Dominators => GetDominatorTree();
+
+    public IReadOnlyList<ExceptionInfo> GetExceptions(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return _exceptions ??= new ExceptionAnalyzer(this).FindExceptions(cancellationToken);
+    }
+
+    public DominatorTree GetDominatorTree(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return _dominators ??= new DominatorAnalyzer(this).Build(cancellationToken);
+    }
 
     public AllocationProfile? Allocations
     {
@@ -113,15 +125,35 @@ public sealed class Snapshot : IDisposable
     }
     public IReadOnlyList<GcRootPath> Roots(ulong address, CancellationToken cancellationToken = default) => RootAnalyzer.Find(GetHeapGraph(cancellationToken), address, cancellationToken);
     public InstanceListing Instances(string filter, int limit = 20, CancellationToken cancellationToken = default) => new HeapAnalyzer(this).ListInstances(filter, limit, cancellationToken);
-    public IReadOnlyList<DuplicateString> DuplicateStrings(int limit = 20) => new HeapAnalyzer(this).FindDuplicateStrings(limit);
-    public FinalizerReport Finalizers() => _finalizers ??= new FinalizerAnalyzer(this).Analyze();
-    public IReadOnlyList<EventSubscription> EventHandlerLeaks(int minSubscribers = 16) => new EventHandlerAnalyzer(this).Analyze(minSubscribers);
-    public IReadOnlyList<Finding> Diagnose() => _diagnosis ??= new HeapDoctor(this).Diagnose();
+
+    public IReadOnlyList<DuplicateString> DuplicateStrings(int limit = 20, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return new HeapAnalyzer(this).FindDuplicateStrings(limit, cancellationToken);
+    }
+
+    public FinalizerReport Finalizers(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return _finalizers ??= new FinalizerAnalyzer(this).Analyze(cancellationToken);
+    }
+
+    public IReadOnlyList<EventSubscription> EventHandlerLeaks(int minSubscribers = 16, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return new EventHandlerAnalyzer(this).Analyze(minSubscribers, cancellation: cancellationToken);
+    }
+
+    public IReadOnlyList<Finding> Diagnose(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return _diagnosis ??= new HeapDoctor(this).Diagnose(cancellationToken);
+    }
+
     public string? WhoAllocated(ulong address) => HasCorrelation ? GetProvenance()?.StackFor(address) : null;
 
     internal HeapGraph GetHeapGraph(CancellationToken cancellationToken = default) => (_heapGraph ??= new HeapGraphProvider(this)).Get(cancellationToken);
     internal HeapGraph? TryGetCachedHeapGraph() => (_heapGraph ??= new HeapGraphProvider(this)).TryGetCachedOrOnDisk();
-    internal DominatorTree GetDominatorTree(CancellationToken cancellationToken = default) => _dominators ??= new DominatorAnalyzer(this).Build(cancellationToken);
 
     private ProvenanceReader? GetProvenance()
     {

@@ -16,18 +16,18 @@ public sealed class EventLeaksReplCommand : IReplCommand
     public string Summary => "Delegates with large invocation lists (suspected event-handler leaks).";
     public string Usage => "eventleaks [min-subscribers]";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         int min = Args.Limit(args, 0, DefaultMin);
 
         IReadOnlyList<EventSubscription> leaks = context.Console.Status()
-            .Start("Scanning delegates…", _ => context.Snapshot.EventHandlerLeaks(min));
+            .Start("Scanning delegates…", _ => context.Snapshot.EventHandlerLeaks(min, context.Cancellation));
 
         if (leaks.Count == 0)
         {
             context.Console.MarkupLineInterpolated(
                 $"[#AFFF00]No suspicious event subscriptions[/] [#808791](no delegate has ≥ {min} subscribers).[/]");
-            return;
+            return ReplResult.Success;
         }
 
         var table = Theme.Table(expand: true);
@@ -50,5 +50,6 @@ public sealed class EventLeaksReplCommand : IReplCommand
         context.Console.Write(table);
         context.Console.MarkupLine(
             "[#808791]Each subscriber is pinned until it unsubscribes (-=).[/] gcroot <address> [#808791]to find the publisher that owns the event.[/]");
+        return ReplResult.Success;
     }
 }

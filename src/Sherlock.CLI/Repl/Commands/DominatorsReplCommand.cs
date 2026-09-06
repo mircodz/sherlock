@@ -16,12 +16,12 @@ public sealed class DominatorsReplCommand : IReplCommand
     public string Summary => "Show objects with the largest retained size (biggest memory holders).";
     public string Usage => "dominators [count]";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         int limit = Args.Limit(args, 0, DefaultLimit);
 
         DominatorTree tree = context.Console.Status()
-            .Start("Building dominator tree…", _ => context.Snapshot.Dominators);
+            .Start("Building dominator tree…", _ => context.Snapshot.GetDominatorTree(context.Cancellation));
 
         IReadOnlyList<DominatorNode> top = tree.TopDominators(limit);
         ulong total = tree.TotalReachableBytes;
@@ -48,5 +48,6 @@ public sealed class DominatorsReplCommand : IReplCommand
         context.Console.MarkupLine(
             $"[#808791]{Counts.Format(tree.ObjectCount)} reachable objects,[/] [bold #AFFF00]{ByteSize.Format((long)total)}[/] [#808791]retained from roots. " +
             $"Drill in with[/] retained <address>.");
+        return ReplResult.Success;
     }
 }

@@ -16,7 +16,7 @@ public sealed class StringsReplCommand : IReplCommand
     public string Summary => "Find duplicate string values wasting memory.";
     public string Usage => "strings [count]";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         // Leading count sets the limit; `--dup`/`-d` accepted and ignored for backward compat.
         int limit = DefaultLimit;
@@ -27,12 +27,12 @@ public sealed class StringsReplCommand : IReplCommand
         }
 
         IReadOnlyList<DuplicateString> duplicates = context.Console.Status()
-            .Start("Hashing strings…", _ => context.Snapshot.DuplicateStrings(limit));
+            .Start("Hashing strings…", _ => context.Snapshot.DuplicateStrings(limit, context.Cancellation));
 
         if (duplicates.Count == 0)
         {
             context.Console.MarkupLine("[#AFFF00]No duplicated strings found.[/]");
-            return;
+            return ReplResult.Success;
         }
 
         var table = Theme.Table(expand: true);
@@ -52,6 +52,7 @@ public sealed class StringsReplCommand : IReplCommand
 
         context.Console.Write(table);
         context.Console.MarkupLine($"[#808791]Top {duplicates.Count} duplicated strings waste[/] [bold #AFFF00]{ByteSize.Format((long)totalWasted)}[/].");
+        return ReplResult.Success;
     }
 
 }

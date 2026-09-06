@@ -1,4 +1,5 @@
 using System.IO;
+using System.Threading;
 using Sherlock.CLI.Rendering;
 using Sherlock.CLI.Repl;
 using Sherlock.Core;
@@ -14,7 +15,7 @@ internal static class ReplHost
     public static Workspace CreateWorkspace() => new(SnapshotStore.Default());
 
     /// <summary>Opens a dump as a transient current snapshot and runs the interactive REPL.</summary>
-    public static int OpenAndRun(IAnsiConsole console, string dumpPath)
+    public static int OpenAndRun(IAnsiConsole console, string dumpPath, CancellationToken cancellation = default)
     {
         using Workspace workspace = CreateWorkspace();
         try
@@ -32,15 +33,15 @@ internal static class ReplHost
             return 1;
         }
 
-        RunInteractive(console, workspace);
-        return 0;
+        ReplResult result = RunInteractive(console, workspace, cancellation);
+        return (result & (ReplResult.Failure | ReplResult.Cancelled)) != 0 ? 1 : 0;
     }
 
     /// <summary>Runs the interactive REPL against a workspace.</summary>
-    public static void RunInteractive(IAnsiConsole console, Workspace workspace)
+    public static ReplResult RunInteractive(IAnsiConsole console, Workspace workspace, CancellationToken cancellation = default)
     {
         var history = new ReplHistory(ReplHistory.DefaultPath);
         var repl = new Repl.Repl(ReplCommandRegistry.CreateDefault(history), history, console);
-        repl.RunInteractive(workspace);
+        return repl.RunInteractive(workspace, cancellation);
     }
 }

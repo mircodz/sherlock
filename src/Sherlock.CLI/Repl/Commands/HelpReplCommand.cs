@@ -25,14 +25,13 @@ public sealed class HelpReplCommand : IReplCommand
     public string Usage => "help [command]";
     public string Category => "Session";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         IReadOnlyList<IReplCommand> commands = _commands().ToList();
 
         if (args.Length > 0)
         {
-            PrintCommandDetail(context.Console, commands, args[0]);
-            return;
+            return PrintCommandDetail(context.Console, commands, args[0]);
         }
 
         IEnumerable<IGrouping<string, IReplCommand>> groups = commands
@@ -60,9 +59,10 @@ public sealed class HelpReplCommand : IReplCommand
             context.Console.Write(table);
             context.Console.WriteLine();
         }
+        return ReplResult.Success;
     }
 
-    private static void PrintCommandDetail(IAnsiConsole console, IReadOnlyList<IReplCommand> commands, string name)
+    private static ReplResult PrintCommandDetail(IAnsiConsole console, IReadOnlyList<IReplCommand> commands, string name)
     {
         IReplCommand? command = commands.FirstOrDefault(c =>
             string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase) ||
@@ -71,7 +71,7 @@ public sealed class HelpReplCommand : IReplCommand
         if (command is null)
         {
             console.MarkupLineInterpolated($"[#FFAF00]No such command:[/] {name}");
-            return;
+            return ReplResult.Failure;
         }
 
         console.MarkupLineInterpolated($"[bold]{command.Name}[/] — {command.Summary}");
@@ -80,5 +80,6 @@ public sealed class HelpReplCommand : IReplCommand
         {
             console.MarkupLineInterpolated($"  aliases: {string.Join(", ", command.Aliases)}");
         }
+        return ReplResult.Success;
     }
 }

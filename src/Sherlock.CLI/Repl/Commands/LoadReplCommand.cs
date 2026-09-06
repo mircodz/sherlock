@@ -12,23 +12,24 @@ public sealed class LoadReplCommand : IReplCommand
     public string Usage => "load <id>";
     public string Category => "Library";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         Args.Require(args, 1, Usage);
 
         if (context.Workspace.Store.FindSnapshot(args[0]) is not ({ } session, { } entry))
         {
             Output.Error(context.Console, $"No snapshot '{args[0]}'. Use [bold]ls[/] to list.");
-            return;
+            return ReplResult.Failure;
         }
 
         if (!entry.Exists)
         {
             Output.Error(context.Console, $"Dump file is missing: {entry.Path}");
-            return;
+            return ReplResult.Failure;
         }
 
         context.Workspace.Load(session, entry);
         Output.Success(context.Console, $"Loaded [bold]{entry.Id}[/] [#808791]({Path.GetFileName(entry.Path)})[/]");
+        return ReplResult.Success;
     }
 }

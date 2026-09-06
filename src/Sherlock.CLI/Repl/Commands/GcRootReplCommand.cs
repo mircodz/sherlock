@@ -12,19 +12,19 @@ public sealed class GcRootReplCommand : IReplCommand
     public string Summary => "Find every GC root that keeps an object alive.";
     public string Usage => "gcroot <address>";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         ulong address = Args.Address(args, 0, Usage);
 
         context.Console.MarkupLineInterpolated($"[#808791]Searching for roots of[/] [#FFD75F]0x{address:x12}[/][#808791]…[/]");
 
         IReadOnlyList<GcRootPath> paths = context.Console.Status()
-            .Start("Tracing the heap graph…", _ => context.Snapshot.Roots(address));
+            .Start("Tracing the heap graph…", _ => context.Snapshot.Roots(address, context.Cancellation));
 
         if (paths.Count == 0)
         {
             context.Console.MarkupLine("[#FFAF00]No root found.[/] The object may be unrooted (eligible for collection) or the address may be invalid.");
-            return;
+            return ReplResult.Success;
         }
 
         context.Console.MarkupLineInterpolated($"[#808791]{Counts.Format(paths.Count)} root{(paths.Count == 1 ? "" : "s")} found[/]");
@@ -39,5 +39,6 @@ public sealed class GcRootReplCommand : IReplCommand
                 context.Console.MarkupLineInterpolated($"{indent}[#808791]->[/] [#FFD75F]0x{node.Address:x12}[/] [#00D7FF]{TypeNames.Short(node.TypeName)}[/]");
             }
         }
+        return ReplResult.Success;
     }
 }

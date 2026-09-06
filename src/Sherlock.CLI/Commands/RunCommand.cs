@@ -68,19 +68,16 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         command.AddRange(settings.Args);
         command.AddRange(context.Remaining.Raw);
 
-        if (command.Count == 0)
-        {
-            Output.Error(console, $"No executable given. Usage: [bold]{RunLauncher.Usage}[/]");
-            return 1;
-        }
-
-        if (settings.ExperimentalGcBarrier && !settings.Correlate)
-        {
-            Output.Error(console, $"[bold]--experimental-gc-barrier[/] requires [bold]--correlate[/].");
-            return 1;
-        }
-
         var options = new RunOptions { Command = command, Profile = settings.Profile, Correlate = settings.Correlate, CollectChildren = settings.Children, ExperimentalGcBarrier = settings.ExperimentalGcBarrier, SnapshotOn = settings.SnapshotOn, ProfilerLogLevel = settings.ProfilerLogLevel };
+        try
+        {
+            options.Validate();
+        }
+        catch (ArgumentException ex)
+        {
+            Output.Error(console, $"{ex.Message} Usage: [bold]{RunLauncher.Usage}[/]");
+            return 1;
+        }
 
         if (settings.Live && options.SnapshotOnExit)
         {
@@ -93,6 +90,10 @@ public sealed class RunCommand : Command<RunCommand.Settings>
             return 1;
         }
 
+        if (cancellation.IsCancellationRequested)
+        {
+            return 1;
+        }
         using Workspace workspace = ReplHost.CreateWorkspace();
         if (RunLauncher.Launch(workspace, console, options) is not { } launched)
         {
@@ -102,17 +103,18 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         (RunTarget target, Session session) = launched;
         console.WriteLine();
 
+        bool capturesSucceeded = true;
         if (settings.Live)
         {
             Live.LiveDashboard.Run(workspace, target, options.Command, cancellation);
         }
         else
         {
-            Drain(workspace, console, target, cancellation, waitForArtifacts: options.NeedsProfiler);
+            capturesSucceeded = Drain(workspace, console, target, cancellation, waitForArtifacts: options.NeedsProfiler);
         }
 
         Summarize(console, workspace, session, target);
-        return 0;
+        return cancellation.IsCancellationRequested || !capturesSucceeded ? 1 : 0;
     }
 
     private static void Summarize(IAnsiConsole console, Workspace workspace, Session session, RunTarget target)
@@ -146,7 +148,7 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         }
     }
 
-    private static void Drain(
+    private static bool Drain(
         Workspace workspace,
         IAnsiConsole console,
         RunTarget target,
@@ -154,10 +156,11 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         bool waitForArtifacts)
     {
         long logPosition = 0;
+        bool succeeded = true;
         while (!target.HasExited && !cancellation.IsCancellationRequested)
         {
             logPosition = StreamLog(target, logPosition);
-            PumpCaptures(workspace, console);
+            succeeded &= PumpCaptures(workspace, console);
             Thread.Sleep(120);
         }
 
@@ -172,15 +175,17 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         {
             for (int i = 0; i < 20 && !cancellation.IsCancellationRequested; i++)
             {
-                PumpCaptures(workspace, console);
+                succeeded &= PumpCaptures(workspace, console);
                 Thread.Sleep(150);
             }
         }
         StreamLog(target, logPosition);
+        return succeeded;
     }
 
-    private static void PumpCaptures(Workspace workspace, IAnsiConsole console)
+    private static bool PumpCaptures(Workspace workspace, IAnsiConsole console)
     {
+        bool succeeded = true;
         foreach (Session session in workspace.PollExitedAllocationProfiles())
         {
             Output.Success(console, $"Allocation profile captured for [bold]{session.Id}[/]");
@@ -194,13 +199,16 @@ public sealed class RunCommand : Command<RunCommand.Settings>
                 if (capture.Error is not null)
                 {
                     Output.Warning(console, $"{capture.Error}");
+                    succeeded = false;
                 }
             }
             else
             {
                 Output.Error(console, $"[bold]{capture.Probe}[/] fired but capture failed: {capture.Error}");
+                succeeded = false;
             }
         }
+        return succeeded;
     }
 
     private static long StreamLog(RunTarget target, long position)

@@ -15,7 +15,7 @@ public sealed class PrintReplCommand : IReplCommand
     public string Summary => "Print one object by address: its type, size and fields (px for a graph).";
     public string Usage => "print <address> [element-count]";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         ulong address = Args.Address(args, 0, Usage);
         int elementLimit = Args.Limit(args, 1, DefaultElementLimit);
@@ -28,19 +28,19 @@ public sealed class PrintReplCommand : IReplCommand
         if (detail.StringValue is not null)
         {
             context.Console.MarkupLineInterpolated($"  [#808791]value[/] [#00D7FF]\"{detail.StringValue}\"[/]");
-            return;
+            return ReplResult.Success;
         }
 
         if (detail.ElementCount is int count)
         {
             PrintElements(context.Console, detail, count, elementLimit);
-            return;
+            return ReplResult.Success;
         }
 
         if (detail.Fields.Count == 0)
         {
             context.Console.MarkupLine("  [#808791]<no instance fields>[/]");
-            return;
+            return ReplResult.Success;
         }
 
         var table = Theme.Table();
@@ -59,6 +59,7 @@ public sealed class PrintReplCommand : IReplCommand
         }
 
         context.Console.Write(table);
+        return ReplResult.Success;
     }
 
     private static void PrintElements(IAnsiConsole console, ObjectDetail detail, int count, int limit)

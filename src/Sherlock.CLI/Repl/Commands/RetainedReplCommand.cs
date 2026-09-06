@@ -15,18 +15,18 @@ public sealed class RetainedReplCommand : IReplCommand
     public string Summary => "Show an object's retained size and what it dominates.";
     public string Usage => "retained <address>";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         ulong address = Args.Address(args, 0, Usage);
 
         DominatorTree tree = context.Console.Status()
-            .Start("Building dominator tree…", _ => context.Snapshot.Dominators);
+            .Start("Building dominator tree…", _ => context.Snapshot.GetDominatorTree(context.Cancellation));
 
         DominatorNode? node = tree.Find(address);
         if (node is null)
         {
             context.Console.MarkupLine("[#FFAF00]That object is not reachable from any GC root[/] (so its retained size is 0 — it is collectable).");
-            return;
+            return ReplResult.Success;
         }
 
         context.Console.MarkupLineInterpolated($"[bold]{node.TypeName}[/] [#808791]@[/] [#FFD75F]0x{node.Address:x}[/]");
@@ -35,7 +35,7 @@ public sealed class RetainedReplCommand : IReplCommand
         IReadOnlyList<DominatorNode> children = tree.ImmediateChildren(address, ChildLimit);
         if (children.Count == 0)
         {
-            return;
+            return ReplResult.Success;
         }
 
         context.Console.MarkupLine("[#808791]Directly dominates:[/]");
@@ -44,5 +44,6 @@ public sealed class RetainedReplCommand : IReplCommand
             context.Console.MarkupLineInterpolated(
                 $"  [bold #AFFF00]{ByteSize.Format((long)child.RetainedSize)}[/]  [#FFD75F]0x{child.Address:x}[/]  [#00D7FF]{TypeNames.Short(child.TypeName)}[/]");
         }
+        return ReplResult.Success;
     }
 }

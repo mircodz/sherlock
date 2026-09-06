@@ -15,17 +15,29 @@ public sealed class HeapDoctor(Snapshot snapshot)
 {
     public IReadOnlyList<Finding> Diagnose(CancellationToken cancellation = default)
     {
+        cancellation.ThrowIfCancellationRequested();
         IReadOnlyList<HeapTypeStat> histogram = snapshot.Histogram;
         long heapBytes = histogram.Sum(s => (long)s.TotalSize);
 
         var findings = new List<Finding>();
-        Run(findings, () => Retention(findings, cancellation));
+        Run(findings, () => Retention(findings, snapshot.GetDominatorTree(cancellation)));
         Run(findings, () => EventHandlers(findings, cancellation));
         Run(findings, () => Finalizers(findings, cancellation));
-        Run(findings, () => DuplicateStrings(findings, heapBytes));
+        Run(findings, () => DuplicateStrings(findings, heapBytes, cancellation));
         Run(findings, () => Fragmentation(findings, histogram, heapBytes));
         Run(findings, () => Growth(findings, histogram));
 
+        return findings.OrderBy(f => f.Severity).ToList();
+    }
+
+    /// <summary>Findings from an existing histogram and dominator tree only, without additional heap sweeps.</summary>
+    public static IReadOnlyList<Finding> QuickFindings(IReadOnlyList<HeapTypeStat> histogram, DominatorTree tree)
+    {
+        long heapBytes = histogram.Sum(s => (long)s.TotalSize);
+        var findings = new List<Finding>();
+        Retention(findings, tree);
+        Fragmentation(findings, histogram, heapBytes);
+        Growth(findings, histogram);
         return findings.OrderBy(f => f.Severity).ToList();
     }
 
@@ -35,16 +47,15 @@ public sealed class HeapDoctor(Snapshot snapshot)
         {
             inspector();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             findings.Add(new Finding(FindingSeverity.Warning, "inspector-error", "An inspector failed to run", ex.Message));
         }
     }
 
     /// <summary>The single biggest retained graph, where memory concentrates and a leak hides.</summary>
-    private void Retention(List<Finding> findings, CancellationToken cancellation)
+    private static void Retention(List<Finding> findings, DominatorTree tree)
     {
-        DominatorTree tree = snapshot.GetDominatorTree(cancellation);
         ulong total = tree.TotalReachableBytes;
         if (total == 0 || tree.TopDominators(1).FirstOrDefault() is not { } node)
         {
@@ -60,7 +71,7 @@ public sealed class HeapDoctor(Snapshot snapshot)
         string kind = IsCollection(node.TypeName) ? "collection " : "";
         findings.Add(new Finding(
             pct >= 50 ? FindingSeverity.High : FindingSeverity.Warning, "retention",
-            $"{ShortType(node.TypeName)} {kind}retains {Bytes(node.RetainedSize)} ({pct:0}% of the reachable heap)",
+            $"{TypeNames.Short(node.TypeName)} {kind}retains {Bytes(node.RetainedSize)} ({pct:0}% of the reachable heap)",
             "The biggest retained graph. See what holds it and what it holds.")
         {
             Address = node.Address,
@@ -78,11 +89,11 @@ public sealed class HeapDoctor(Snapshot snapshot)
             return;
         }
 
-        string targets = string.Join(", ", worst.Targets.Take(3).Select(t => $"{ShortType(t.TypeName)} x{t.Count}"));
+        string targets = string.Join(", ", worst.Targets.Take(3).Select(t => $"{TypeNames.Short(t.TypeName)} x{t.Count}"));
         findings.Add(new Finding(
             worst.SubscriberCount >= 256 ? FindingSeverity.High : FindingSeverity.Warning, "event-handlers",
             $"An event has {worst.SubscriberCount:N0} subscribers - likely an event-handler leak",
-            $"The {ShortType(worst.DelegateType)} delegate pins every subscriber until it unsubscribes (-=)."
+            $"The {TypeNames.Short(worst.DelegateType)} delegate pins every subscriber until it unsubscribes (-=)."
             + (targets.Length > 0 ? $" Subscribers: {targets}." : ""))
         {
             Address = worst.DelegateAddress,
@@ -101,7 +112,7 @@ public sealed class HeapDoctor(Snapshot snapshot)
             return;
         }
 
-        string top = string.Join(", ", report.ByType.Take(3).Select(s => $"{ShortType(s.TypeName)} x{s.Count:N0}"));
+        string top = string.Join(", ", report.ByType.Take(3).Select(s => $"{TypeNames.Short(s.TypeName)} x{s.Count:N0}"));
         findings.Add(new Finding(FindingSeverity.Warning, "finalizers",
             $"{report.TotalObjects:N0} finalizable objects awaiting finalization ({Bytes(report.TotalBytes)})",
             $"A live finalizer that wasn't suppressed usually means a missing Dispose(). Most common: {top}.")
@@ -112,9 +123,9 @@ public sealed class HeapDoctor(Snapshot snapshot)
         });
     }
 
-    private void DuplicateStrings(List<Finding> findings, long heapBytes)
+    private void DuplicateStrings(List<Finding> findings, long heapBytes, CancellationToken cancellation)
     {
-        IReadOnlyList<DuplicateString> dups = new HeapAnalyzer(snapshot).FindDuplicateStrings(limit: 100);
+        IReadOnlyList<DuplicateString> dups = new HeapAnalyzer(snapshot).FindDuplicateStrings(limit: 100, cancellationToken: cancellation);
         long wasted = dups.Sum(d => (long)d.WastedBytes);
         if (wasted < 64 * 1024 && (heapBytes == 0 || (double)wasted / heapBytes < 0.02))
         {
@@ -167,13 +178,13 @@ public sealed class HeapDoctor(Snapshot snapshot)
         }
 
         findings.Add(new Finding(FindingSeverity.Info, "growth",
-            $"{suspect.Count:N0} instances of {ShortType(suspect.TypeName)} ({Bytes(suspect.TotalSize)})",
+            $"{suspect.Count:N0} instances of {TypeNames.Short(suspect.TypeName)} ({Bytes(suspect.TotalSize)})",
             "A large population - check for unbounded growth (a cache or list that never shrinks).")
         {
             Type = suspect.TypeName,
             Bytes = (long)suspect.TotalSize,
             Count = suspect.Count,
-            NextCommand = $"objects {ShortType(suspect.TypeName)}",
+            NextCommand = $"objects {TypeNames.Short(suspect.TypeName)}",
         });
     }
 
@@ -186,15 +197,6 @@ public sealed class HeapDoctor(Snapshot snapshot)
 
     private static string Bytes(ulong bytes) => ByteFormat.Human(bytes);
     private static string Bytes(long bytes) => ByteFormat.Human(bytes);
-
-    /// <summary>Strips the namespace and generic noise for a compact type name.</summary>
-    private static string ShortType(string type)
-    {
-        int generic = type.IndexOf('<');
-        string head = generic >= 0 ? type[..generic] : type;
-        int dot = head.LastIndexOf('.');
-        return dot >= 0 ? type[(dot + 1)..] : type;
-    }
 
     private static string Preview(string value)
     {

@@ -1,4 +1,4 @@
-namespace Sherlock.CLI.Rendering;
+namespace Sherlock.Core;
 
 /// <summary>Formatting helpers for managed type names in command output.</summary>
 public static class TypeNames

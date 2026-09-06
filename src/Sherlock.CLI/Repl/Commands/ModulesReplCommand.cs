@@ -16,7 +16,7 @@ public sealed class ModulesReplCommand : IReplCommand
     public string Summary => "List loaded managed modules/assemblies.";
     public string Usage => "modules [name-filter]";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         string? filter = args.Length > 0 ? args[0] : null;
 
@@ -29,7 +29,7 @@ public sealed class ModulesReplCommand : IReplCommand
         if (modules.Count == 0)
         {
             context.Console.MarkupLine("[#FFAF00]No modules matched.[/]");
-            return;
+            return ReplResult.Success;
         }
 
         var table = Theme.Table(expand: true);
@@ -48,5 +48,6 @@ public sealed class ModulesReplCommand : IReplCommand
 
         context.Console.Write(table);
         context.Console.MarkupLine($"[#808791]{modules.Count} modules.[/]");
+        return ReplResult.Success;
     }
 }

@@ -12,7 +12,7 @@ public sealed class LabelReplCommand : IReplCommand
     public string Usage => "label <id> [name]";
     public string Category => "Library";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         Args.Require(args, 1, Usage);
         string? label = args.Length > 1 ? string.Join(' ', args[1..]) : null;
@@ -21,7 +21,7 @@ public sealed class LabelReplCommand : IReplCommand
         if (updated is null)
         {
             Output.Error(context.Console, $"No snapshot '{args[0]}'.");
-            return;
+            return ReplResult.Failure;
         }
 
         if (label is null)
@@ -32,5 +32,6 @@ public sealed class LabelReplCommand : IReplCommand
         {
             Output.Success(context.Console, $"Labeled [bold]{updated.Id}[/] · {label}");
         }
+        return ReplResult.Success;
     }
 }

@@ -14,13 +14,13 @@ public sealed class SegmentsReplCommand : IReplCommand
     public string Summary => "Show GC heap segments by generation (gen0/1/2, LOH, POH).";
     public string Usage => "segments";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         IReadOnlyList<SegmentInfo> segments = context.Snapshot.Segments;
         if (segments.Count == 0)
         {
             context.Console.MarkupLine("[#FFAF00]No GC segments found.[/]");
-            return;
+            return ReplResult.Success;
         }
 
         var table = Theme.Table(expand: true);
@@ -48,5 +48,6 @@ public sealed class SegmentsReplCommand : IReplCommand
 
         context.Console.MarkupLine($"[#808791]Totals:[/] " +
             string.Join("  ", byKind.Select(k => $"[bold]{Markup.Escape(k.Kind)}[/] {ByteSize.Format((long)k.Size)}")));
+        return ReplResult.Success;
     }
 }

@@ -16,13 +16,13 @@ public sealed class KillReplCommand : IReplCommand
     public string Usage => "kill [pid] [--no-snapshot]";
     public string Category => "Live";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         IReadOnlyList<RunTarget> targets = context.Workspace.Targets;
         if (targets.Count == 0)
         {
             Output.Info(context.Console, $"No run targets.");
-            return;
+            return ReplResult.Failure;
         }
 
         bool snapshot = !args.Contains("--no-snapshot");
@@ -34,13 +34,13 @@ public sealed class KillReplCommand : IReplCommand
             if (!int.TryParse(pidArg, out int pid))
             {
                 Output.Error(context.Console, $"'{pidArg}' is not a pid.");
-                return;
+                return ReplResult.Failure;
             }
             target = targets.FirstOrDefault(t => t.Pid == pid);
             if (target is null)
             {
                 Output.Error(context.Console, $"No run target with pid {pid}.");
-                return;
+                return ReplResult.Failure;
             }
         }
         else
@@ -48,6 +48,7 @@ public sealed class KillReplCommand : IReplCommand
             target = targets[^1];
         }
 
+        var result = ReplResult.Success;
         // Snapshot while it's still alive, then kill.
         if (snapshot && !target.HasExited)
         {
@@ -62,10 +63,12 @@ public sealed class KillReplCommand : IReplCommand
             catch (DumpAnalysisException ex)
             {
                 Output.Warning(context.Console, $"Could not snapshot: {ex.Message}. Killing anyway.");
+                result = ReplResult.Failure;
             }
         }
 
         target.Kill();
         Output.Success(context.Console, $"Killed [#00D7FF]{target.Name}[/] · pid {target.Pid}");
+        return result;
     }
 }

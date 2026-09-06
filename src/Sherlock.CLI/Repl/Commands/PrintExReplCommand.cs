@@ -1,6 +1,8 @@
 using System.Collections.Generic;
+using System.Threading;
 using Microsoft.Diagnostics.Runtime;
 using Sherlock.CLI.Rendering;
+using Sherlock.Core;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -16,7 +18,7 @@ public sealed class PrintExReplCommand : IReplCommand
     public string Summary => "Print an object graph (reference tree) to a depth. `print`/`p` for one object.";
     public string Usage => "printx <address> [depth]";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         ulong address = Args.Address(args, 0, Usage);
         int depth = args.Length > 1 && int.TryParse(args[1], out int d) && d >= 0 ? d : DefaultDepth;
@@ -26,17 +28,19 @@ public sealed class PrintExReplCommand : IReplCommand
         if (!root.IsValid || root.Type is null)
         {
             context.Console.MarkupLineInterpolated($"[#FFAF00]No object at[/] 0x{address:x}.");
-            return;
+            return ReplResult.Failure;
         }
 
         var tree = new Tree(Label(root)) { Style = new Style(foreground: Theme.MutedColor) };
         var visited = new HashSet<ulong> { root.Address };
-        AddChildren(tree, root, depth, visited);
+        AddChildren(tree, root, depth, visited, context.Cancellation);
         context.Console.Write(tree);
+        return ReplResult.Success;
     }
 
-    private static void AddChildren(IHasTreeNodes parent, ClrObject obj, int depth, HashSet<ulong> visited)
+    private static void AddChildren(IHasTreeNodes parent, ClrObject obj, int depth, HashSet<ulong> visited, CancellationToken cancellation)
     {
+        cancellation.ThrowIfCancellationRequested();
         if (obj.Type is null)
         {
             return;
@@ -70,7 +74,7 @@ public sealed class PrintExReplCommand : IReplCommand
             }
 
             TreeNode node = parent.AddNode($"{Markup.Escape(edge)} [#808791]→[/] {Label(child)}");
-            AddChildren(node, child, depth - 1, visited);
+            AddChildren(node, child, depth - 1, visited, cancellation);
         }
     }
 
@@ -105,11 +109,14 @@ public sealed class PrintExReplCommand : IReplCommand
         if (obj.IsArray)
         {
             ClrArray array = obj.AsArray();
+            if (array.Type.ComponentType?.ElementType is not (ClrElementType.Class or ClrElementType.Object or ClrElementType.String or ClrElementType.Array or ClrElementType.SZArray))
+            {
+                yield break;
+            }
             int len = array.Length;
             for (int i = 0; i < len && i < MaxChildren; i++)
             {
-                ClrObject el = default;
-                try { el = array.GetObjectValue(i); } catch { continue; }
+                ClrObject el = array.GetObjectValue(i);
                 if (el.IsValid && !el.IsNull)
                 {
                     yield return ($"[{i}]", el);
@@ -130,8 +137,7 @@ public sealed class PrintExReplCommand : IReplCommand
                 continue; // strings are shown as scalar values, not recursed
             }
 
-            ClrObject target = default;
-            try { target = field.ReadObject(obj.Address, interior: false); } catch { continue; }
+            ClrObject target = field.ReadObject(obj.Address, interior: false);
             if (target.IsValid && !target.IsNull)
             {
                 yield return (FieldName(field.Name), target);
@@ -140,35 +146,26 @@ public sealed class PrintExReplCommand : IReplCommand
     }
 
     /// <summary>Reads a primitive/string field as a display string, or null if it isn't scalar.</summary>
-    private static string? ScalarValue(ClrInstanceField field, ulong addr)
-    {
-        try
+    private static string? ScalarValue(ClrInstanceField field, ulong addr) =>
+        field.ElementType switch
         {
-            return field.ElementType switch
-            {
-                ClrElementType.Boolean => field.Read<bool>(addr, false) ? "true" : "false",
-                ClrElementType.Char => $"'{field.Read<char>(addr, false)}'",
-                ClrElementType.Int8 => field.Read<sbyte>(addr, false).ToString(),
-                ClrElementType.UInt8 => field.Read<byte>(addr, false).ToString(),
-                ClrElementType.Int16 => field.Read<short>(addr, false).ToString(),
-                ClrElementType.UInt16 => field.Read<ushort>(addr, false).ToString(),
-                ClrElementType.Int32 => field.Read<int>(addr, false).ToString(),
-                ClrElementType.UInt32 => field.Read<uint>(addr, false).ToString(),
-                ClrElementType.Int64 => field.Read<long>(addr, false).ToString(),
-                ClrElementType.UInt64 => field.Read<ulong>(addr, false).ToString(),
-                ClrElementType.Float => field.Read<float>(addr, false).ToString(),
-                ClrElementType.Double => field.Read<double>(addr, false).ToString(),
-                ClrElementType.NativeInt or ClrElementType.NativeUInt or ClrElementType.Pointer
-                    => "0x" + field.Read<nuint>(addr, false).ToString("x"),
-                ClrElementType.String => FormatString(field.ReadString(addr, false)),
-                _ => null, // object references and value types are handled elsewhere
-            };
-        }
-        catch
-        {
-            return null;
-        }
-    }
+            ClrElementType.Boolean => field.Read<bool>(addr, false) ? "true" : "false",
+            ClrElementType.Char => $"'{field.Read<char>(addr, false)}'",
+            ClrElementType.Int8 => field.Read<sbyte>(addr, false).ToString(),
+            ClrElementType.UInt8 => field.Read<byte>(addr, false).ToString(),
+            ClrElementType.Int16 => field.Read<short>(addr, false).ToString(),
+            ClrElementType.UInt16 => field.Read<ushort>(addr, false).ToString(),
+            ClrElementType.Int32 => field.Read<int>(addr, false).ToString(),
+            ClrElementType.UInt32 => field.Read<uint>(addr, false).ToString(),
+            ClrElementType.Int64 => field.Read<long>(addr, false).ToString(),
+            ClrElementType.UInt64 => field.Read<ulong>(addr, false).ToString(),
+            ClrElementType.Float => field.Read<float>(addr, false).ToString(),
+            ClrElementType.Double => field.Read<double>(addr, false).ToString(),
+            ClrElementType.NativeInt or ClrElementType.NativeUInt or ClrElementType.Pointer
+                => "0x" + field.Read<nuint>(addr, false).ToString("x"),
+            ClrElementType.String => FormatString(field.ReadString(addr, false)),
+            _ => null, // object references and value types are handled elsewhere
+        };
 
     private static string FormatString(string? value) =>
         value is null ? "[#808791]null[/]" : $"[#F2F2F2]\"{Markup.Escape(TextUtil.Preview(value, 48))}\"[/]";

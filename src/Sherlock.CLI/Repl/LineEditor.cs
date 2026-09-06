@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Text;
+using System.Threading;
 using Sherlock.CLI.Rendering;
 using Spectre.Console;
 
@@ -16,27 +17,28 @@ public static class LineEditor
 
     /// <param name="prompt">Plain-text prompt (no markup; its width drives cursor math).</param>
     /// <returns>The entered line, or null at end-of-input.</returns>
-    public static string? ReadLine(string prompt, ReplHistory history, IAnsiConsole console)
+    public static string? ReadLine(string prompt, ReplHistory history, IAnsiConsole console, CancellationToken cancellation = default)
     {
+        cancellation.ThrowIfCancellationRequested();
         if (Console.IsInputRedirected)
         {
             Console.Write(prompt);
-            return Console.ReadLine();
+            return Console.In.ReadLineAsync(cancellation).AsTask().GetAwaiter().GetResult();
         }
 
         try
         {
-            return ReadLineRaw(prompt, history, console);
+            return ReadLineRaw(prompt, history, console, cancellation);
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException)
         {
             // No real console (e.g. some CI shells); degrade gracefully.
             Console.Write(prompt);
-            return Console.ReadLine();
+            return Console.In.ReadLineAsync(cancellation).AsTask().GetAwaiter().GetResult();
         }
     }
 
-    private static string? ReadLineRaw(string prompt, ReplHistory history, IAnsiConsole console)
+    private static string? ReadLineRaw(string prompt, ReplHistory history, IAnsiConsole console, CancellationToken cancellation)
     {
         var buffer = new StringBuilder();
         int pos = 0;
@@ -67,6 +69,12 @@ public static class LineEditor
 
         while (true)
         {
+            cancellation.ThrowIfCancellationRequested();
+            if (!Console.KeyAvailable)
+            {
+                Thread.Sleep(25);
+                continue;
+            }
             ConsoleKeyInfo key = Console.ReadKey(intercept: true);
             bool ctrl = key.Modifiers.HasFlag(ConsoleModifiers.Control);
             bool alt = key.Modifiers.HasFlag(ConsoleModifiers.Alt);
@@ -111,7 +119,7 @@ public static class LineEditor
 
                     case ConsoleKey.C:
                         Console.WriteLine("^C");
-                        return string.Empty; // abandon the current line, keep the session
+                        throw new OperationCanceledException(); // do not repeat the previous command
 
                     case ConsoleKey.H: // Ctrl+H == backspace on many terminals
                         if (pos > 0) { buffer.Remove(pos - 1, 1); pos--; Render(console, prompt, buffer, pos); }

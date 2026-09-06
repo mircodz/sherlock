@@ -23,12 +23,12 @@ public sealed class SnapshotOnReplCommand : IReplCommand
     public string Category => "Live";
     public string Usage => "snapshot-on <call:Type.Method | alloc:Type | gc[:gen2] | throw[:Exception]>";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         if (args.Length == 0)
         {
             Output.Error(context.Console, $"Usage: [bold]{Usage}[/]");
-            return;
+            return ReplResult.Failure;
         }
 
         string spec = args[0];
@@ -39,7 +39,7 @@ public sealed class SnapshotOnReplCommand : IReplCommand
         if (target is null)
         {
             Output.Warning(context.Console, $"No live target with trigger support. Start one with [bold]run --correlate -- <app>[/].");
-            return;
+            return ReplResult.Failure;
         }
 
         int armPid = target.PrimaryPid; // the app (child under a launcher, if any)
@@ -54,5 +54,6 @@ public sealed class SnapshotOnReplCommand : IReplCommand
         {
             Output.Error(context.Console, $"Could not arm trigger: {detail}");
         }
+        return ok ? ReplResult.Success : ReplResult.Failure;
     }
 }

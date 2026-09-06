@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
-using System.Threading;
+using System.Threading.Tasks;
 using Sherlock.CLI.Rendering;
+using Sherlock.Core;
 using Sherlock.Core.Store;
 using Spectre.Console;
 
@@ -19,29 +21,35 @@ public sealed class WaitTriggerReplCommand : IReplCommand
     public string Category => "Live";
     public string Usage => "wait-trigger [seconds]";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         double timeout = DefaultTimeoutSeconds;
-        if (args.Length > 0 && double.TryParse(args[0], out double t) && t > 0)
+        if (args.Length > 0)
         {
-            timeout = t;
+            if (!double.TryParse(args[0], NumberStyles.Float, CultureInfo.InvariantCulture, out timeout) ||
+                !double.IsFinite(timeout) || timeout <= 0 || timeout > int.MaxValue / 1000.0)
+            {
+                throw new DumpAnalysisException($"'{args[0]}' is not a valid timeout in seconds.");
+            }
         }
 
         bool anyLive = context.Workspace.Targets.Any(target => !target.HasExited);
         if (!anyLive)
         {
             Output.Warning(context.Console, $"No live target to wait on.");
-            return;
+            return ReplResult.Failure;
         }
 
         DateTime deadline = DateTime.UtcNow.AddSeconds(timeout);
-        context.Console.Status().Start("Waiting for a trigger to fire…", _ =>
+        return context.Console.Status().Start("Waiting for a trigger to fire…", _ =>
         {
             while (DateTime.UtcNow < deadline)
             {
+                context.Cancellation.ThrowIfCancellationRequested();
                 IReadOnlyList<TriggeredCaptureResult> caught = context.Workspace.PollTriggeredSnapshots();
                 if (caught.Count > 0)
                 {
+                    var result = ReplResult.Success;
                     foreach (TriggeredCaptureResult capture in caught)
                     {
                         if (capture.Entry is { } entry)
@@ -51,18 +59,21 @@ public sealed class WaitTriggerReplCommand : IReplCommand
                             if (capture.Error is not null)
                             {
                                 Output.Warning(context.Console, $"{capture.Error}");
+                                result |= ReplResult.Failure;
                             }
                         }
                         else
                         {
                             Output.Error(context.Console, $"[bold]{capture.Probe}[/] fired but capture failed: {capture.Error}");
+                            result |= ReplResult.Failure;
                         }
                     }
-                    return;
+                    return result;
                 }
-                Thread.Sleep(150);
+                Task.Delay(150, context.Cancellation).GetAwaiter().GetResult();
             }
             Output.Warning(context.Console, $"Timed out waiting for a trigger.");
+            return ReplResult.Failure;
         });
     }
 }

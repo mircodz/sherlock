@@ -23,7 +23,7 @@ public sealed class AllocationsReplCommand : IReplCommand
 
     private static bool IsMode(string arg) => arg is "tree" or "hot" or "callers";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         int limit = DefaultLimit;
         string? path = null;
@@ -40,7 +40,7 @@ public sealed class AllocationsReplCommand : IReplCommand
                 if (args.Length <= i)
                 {
                     Output.Error(context.Console, $"Usage: [bold]{Usage}[/]");
-                    return;
+                    return ReplResult.Failure;
                 }
                 method = args[i++];
             }
@@ -65,7 +65,7 @@ public sealed class AllocationsReplCommand : IReplCommand
         if (path is null)
         {
             context.Console.MarkupLine("[#FFAF00]No allocation profile.[/] Pass a path, or run something with [bold]run --profile[/].");
-            return;
+            return ReplResult.Failure;
         }
         if (!File.Exists(path))
         {
@@ -83,13 +83,13 @@ public sealed class AllocationsReplCommand : IReplCommand
                 catch (DumpAnalysisException ex)
                 {
                     context.Console.MarkupLineInterpolated($"[#FFAF00]Couldn't flush[/] — {ex.Message}");
-                    return;
+                    return ReplResult.Failure;
                 }
             }
             else
             {
                 Output.Error(context.Console, $"Profile not found: {path}");
-                return;
+                return ReplResult.Failure;
             }
         }
 
@@ -97,7 +97,7 @@ public sealed class AllocationsReplCommand : IReplCommand
         if (profile.Sites.Count == 0)
         {
             context.Console.MarkupLine("[#FFAF00]Profile has no sites.[/]");
-            return;
+            return ReplResult.Success;
         }
 
         switch (mode)
@@ -109,6 +109,7 @@ public sealed class AllocationsReplCommand : IReplCommand
 
         context.Console.MarkupLineInterpolated(
             $"[#808791]{Counts.Format(profile.Sites.Count)} call paths,[/] [bold #AFFF00]{ByteSize.Format(profile.TotalAllocBytes)}[/] [#808791]allocated,[/] [bold #F2F2F2]{ByteSize.Format(profile.TotalSurvivedBytes)}[/] [#808791]survived first GC.[/]");
+        return ReplResult.Success;
     }
 
     /// <summary>Top-down call tree: nodes carry inclusive allocated (+survived) bytes.</summary>
@@ -129,36 +130,19 @@ public sealed class AllocationsReplCommand : IReplCommand
     /// <summary>Hot methods: bottom-up, self bytes (allocated directly by the method) first.</summary>
     private static void RenderHot(IAnsiConsole console, AllocationProfile profile, int limit)
     {
-        var self = new Dictionary<string, (long Bytes, long Count)>();
-        var inclusive = new Dictionary<string, long>();
-        foreach (AllocationSite site in profile.Sites)
-        {
-            if (site.Frames.Count == 0)
-            {
-                continue; // no managed frames (native/entry allocation)
-            }
-            string leaf = site.Frames[^1];
-            (long Bytes, long Count) cur = self.GetValueOrDefault(leaf);
-            self[leaf] = (cur.Bytes + site.AllocBytes, cur.Count + site.AllocCount);
-            foreach (string frame in site.Frames.Distinct()) // inclusive: once per stack
-            {
-                inclusive[frame] = inclusive.GetValueOrDefault(frame) + site.AllocBytes;
-            }
-        }
-
         var table = Theme.Table(expand: true);
         table.AddColumn(new TableColumn("[bold]Self[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]Inclusive[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]Count[/]").RightAligned());
         table.AddColumn("[bold]Method[/]");
 
-        foreach ((string method, (long Bytes, long Count) val) in self.OrderByDescending(kv => kv.Value.Bytes).Take(limit))
+        foreach (AllocationMethodStat method in profile.HotMethods(limit))
         {
             table.AddRow(
-                $"[bold #AFFF00]{ByteSize.Format(val.Bytes)}[/]",
-                $"[#F2F2F2]{ByteSize.Format(inclusive.GetValueOrDefault(method))}[/]",
-                $"[#808791]{Counts.Compact(val.Count)}×[/]",
-                Markup.Escape(method));
+                $"[bold #AFFF00]{ByteSize.Format(method.SelfBytes)}[/]",
+                $"[#F2F2F2]{ByteSize.Format(method.InclusiveBytes)}[/]",
+                $"[#808791]{Counts.Compact(method.AllocCount)}×[/]",
+                Markup.Escape(method.Method));
         }
 
         console.Write(table);

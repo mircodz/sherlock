@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 using System.Globalization;
-using System.Threading;
+using System.Threading.Tasks;
 using Sherlock.Core;
 using Spectre.Console;
 
@@ -15,15 +15,17 @@ public sealed class SleepReplCommand : IReplCommand
     public string Category => "Live";
     public string Usage => "sleep <seconds>";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         Args.Require(args, 1, Usage);
-        if (!double.TryParse(args[0], NumberStyles.Float, CultureInfo.InvariantCulture, out double seconds) || seconds < 0)
+        if (!double.TryParse(args[0], NumberStyles.Float, CultureInfo.InvariantCulture, out double seconds) ||
+            !double.IsFinite(seconds) || seconds < 0 || seconds > int.MaxValue / 1000.0)
         {
             throw new DumpAnalysisException($"'{args[0]}' is not a valid duration in seconds.");
         }
 
         context.Console.MarkupLineInterpolated($"[#808791]sleeping {seconds:0.##}s…[/]");
-        Thread.Sleep((int)(seconds * 1000));
+        Task.Delay((int)(seconds * 1000), context.Cancellation).GetAwaiter().GetResult();
+        return ReplResult.Success;
     }
 }

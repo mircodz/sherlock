@@ -13,14 +13,14 @@ public sealed class ImportReplCommand : IReplCommand
     public string Usage => "import <file> [label]";
     public string Category => "Library";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         Args.Require(args, 1, Usage);
         string path = args[0];
         if (!File.Exists(path))
         {
             Output.Error(context.Console, $"File not found: {path}");
-            return;
+            return ReplResult.Failure;
         }
 
         string? label = args.Length > 1 ? string.Join(' ', args[1..]) : null;
@@ -33,5 +33,6 @@ public sealed class ImportReplCommand : IReplCommand
 
         context.Workspace.Load(session, entry);
         Output.Success(context.Console, $"Imported and loaded [bold]{entry.Id}[/] [#808791]({Path.GetFileName(entry.Path)})[/]");
+        return ReplResult.Success;
     }
 }

@@ -1,5 +1,6 @@
 using System.Linq;
 using Sherlock.CLI.Rendering;
+using Sherlock.Core;
 using Sherlock.Core.Analysis;
 
 namespace Sherlock.CLI.Export;

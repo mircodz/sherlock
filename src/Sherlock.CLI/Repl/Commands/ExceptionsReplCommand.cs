@@ -13,15 +13,15 @@ public sealed class ExceptionsReplCommand : IReplCommand
     public string Summary => "List managed exceptions on threads and on the heap.";
     public string Usage => "exceptions";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         IReadOnlyList<ExceptionInfo> exceptions = context.Console.Status()
-            .Start("Scanning for exceptions…", _ => context.Snapshot.Exceptions);
+            .Start("Scanning for exceptions…", _ => context.Snapshot.GetExceptions(context.Cancellation));
 
         if (exceptions.Count == 0)
         {
             context.Console.MarkupLine("[#AFFF00]No exception objects found.[/]");
-            return;
+            return ReplResult.Success;
         }
 
         foreach (ExceptionInfo ex in exceptions)
@@ -39,5 +39,6 @@ public sealed class ExceptionsReplCommand : IReplCommand
         }
 
         context.Console.MarkupLine($"[#808791]{exceptions.Count} exception object(s).[/]");
+        return ReplResult.Success;
     }
 }

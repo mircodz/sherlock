@@ -19,7 +19,7 @@ public sealed class ExportReplCommand : IReplCommand
     public string Summary => "Export a view to a file (dominators -> Graphviz .dot, allocations -> folded flamegraph).";
     public string Usage => "export <dominators [count] | allocations [--survived]> <file>";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         Args.Require(args, 2, Usage);
 
@@ -34,6 +34,7 @@ public sealed class ExportReplCommand : IReplCommand
             default:
                 throw new DumpAnalysisException($"don't know how to export '{args[0]}'. Usage: {Usage}");
         }
+        return ReplResult.Success;
     }
 
     private static void ExportDominators(ReplContext context, string[] args)
@@ -41,7 +42,7 @@ public sealed class ExportReplCommand : IReplCommand
         int count = args.Length >= 3 && int.TryParse(args[1], out int n) && n > 0 ? n : DefaultDominatorNodes;
         string file = FileArg(args);
 
-        DominatorTree tree = context.Console.Status().Start("Building dominator tree…", _ => context.Snapshot.Dominators);
+        DominatorTree tree = context.Console.Status().Start("Building dominator tree…", _ => context.Snapshot.GetDominatorTree(context.Cancellation));
         Write(context, file, DominatorDot.Write(tree.BuildGraph(count)));
         context.Console.MarkupLineInterpolated($"[#808791]render with[/] dot -Tsvg {Markup.Escape(file)} -o out.svg[#808791].[/]");
     }

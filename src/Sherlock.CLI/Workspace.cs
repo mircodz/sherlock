@@ -5,7 +5,6 @@ using System.Linq;
 using System.Threading;
 using Sherlock.Core;
 using Sherlock.Core.Collection;
-using Sherlock.Core.Profiling;
 using Sherlock.Core.Store;
 
 namespace Sherlock.CLI;
@@ -162,105 +161,24 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
         lock (_captureGate)
         {
             RunTarget? target = _targets.FirstOrDefault(t => !t.HasExited && Owns(t, pid));
-            bool profiled = target?.AllocationPath is not null;
-            bool correlationRequested = target is { HasCorrelation: true };
-            bool coherentCapture = correlationRequested && target!.Options.UseGcBarrier;
-
-            string? provenance = null;
-            string? dumpPath = null;
-            long gcAtEmit = -1;
-            ProvenanceState state = ProvenanceState.None;
+            SnapshotCaptureResult capture = SnapshotCapture.Collect(pid, target);
             try
             {
-                if (coherentCapture)
-                {
-                    CoherentCaptureResult capture = target!.CaptureCoherentSnapshot(pid, CaptureTimeout);
-                    dumpPath = capture.DumpPath;
-                    provenance = capture.ProvenancePath;
-                    gcAtEmit = capture.GcCount;
-                    state = ProvenanceState.Exact;
-                }
-                else if (profiled)
-                {
-                    if (correlationRequested)
-                    {
-                        (provenance, gcAtEmit) = target!.CaptureCorrelation(pid, CaptureTimeout);
-                    }
-                    else
-                    {
-                        provenance = target!.CaptureAllocations(pid, CaptureTimeout);
-                    }
-
-                }
-
-                if (profiled)
-                {
-                    if (provenance is null)
-                    {
-                        throw new DumpAnalysisException($"Could not capture allocations from process {pid}; no snapshot was created.");
-                    }
-                    try
-                    {
-                        ProvenanceReader.ValidateFile(provenance);
-                    }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                    {
-                        throw new DumpAnalysisException($"The profiler produced invalid allocation data for process {pid}: {ex.Message}", ex);
-                    }
-                }
-
-                dumpPath ??= DumpCollector.Collect(pid, DumpKind.Heap);
-
-                if (correlationRequested && !coherentCapture)
-                {
-                    long gcAfterDump = target!.GcCount(pid, DriftTimeout);
-                    state = gcAtEmit < 0 || gcAfterDump < 0
-                        ? ProvenanceState.Unverified
-                        : gcAfterDump == gcAtEmit
-                            ? ProvenanceState.Exact
-                            : ProvenanceState.Drifted;
-                }
-
                 SnapshotEntry entry = SaveSnapshot(
-                    pid, dumpPath, load, provenance,
-                    correlated: state == ProvenanceState.Exact, reason);
-                dumpPath = null; // moved into the snapshot bundle
-                provenance = null; // copied into the bundle and removed by the store
-                return new CaptureResult(entry, state);
+                    pid, capture.DumpPath, load, capture.ProvenancePath,
+                    correlated: capture.Provenance == ProvenanceState.Exact, reason);
+                return new CaptureResult(entry, capture.Provenance);
             }
-            catch (DumpAnalysisException ex)
+            catch (Exception ex)
             {
-                string preserved = PreservedArtifacts(dumpPath, provenance);
-                if (preserved.Length == 0)
+                DumpAnalysisException failure = SnapshotCapture.Failure(pid, ex, capture);
+                if (ReferenceEquals(failure, ex))
                 {
                     throw;
                 }
-                throw new DumpAnalysisException($"{ex.Message}{preserved}", ex);
-            }
-            catch (Exception ex) when (ex is not DumpAnalysisException)
-            {
-                throw new DumpAnalysisException($"Could not create snapshot for process {pid}: {ex.Message}{PreservedArtifacts(dumpPath, provenance)}", ex);
+                throw failure;
             }
         }
-    }
-
-    private static readonly TimeSpan CaptureTimeout = TimeSpan.FromMinutes(5);
-    private static readonly TimeSpan DriftTimeout = TimeSpan.FromSeconds(3);
-
-    private static string PreservedArtifacts(string? dumpPath, string? provenancePath)
-    {
-        var paths = new List<string>(2);
-        if (dumpPath is not null && File.Exists(dumpPath))
-        {
-            paths.Add($"heap dump '{dumpPath}'");
-        }
-        if (provenancePath is not null && File.Exists(provenancePath))
-        {
-            paths.Add($"allocation data '{provenancePath}'");
-        }
-        return paths.Count == 0
-            ? string.Empty
-            : $" Preserved {string.Join(" and ", paths)}.";
     }
 
     private static bool Owns(RunTarget target, int pid) =>
@@ -271,17 +189,7 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
             ? Store.GetSession(id)
             : null;
 
-    private static string? NameOf(int pid)
-    {
-        try
-        {
-            return System.Diagnostics.Process.GetProcessById(pid).ProcessName;
-        }
-        catch
-        {
-            return null;
-        }
-    }
+    private static string? NameOf(int pid) => ProcessLocator.NameOf(pid);
 
     /// <summary>Closes the current snapshot, leaving nothing loaded.</summary>
     public void Unload()
@@ -310,15 +218,6 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
             target.Dispose(); // leaves processes running; just releases handles
         }
     }
-}
-
-/// <summary>Whether a snapshot carries allocation provenance, and if the address join is trustworthy.</summary>
-public enum ProvenanceState
-{
-    None,
-    Exact,
-    Drifted,
-    Unverified,
 }
 
 /// <summary>The outcome of <see cref="Workspace.Capture"/>: the new snapshot and its provenance state.</summary>

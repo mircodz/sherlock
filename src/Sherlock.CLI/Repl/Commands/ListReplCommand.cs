@@ -15,13 +15,13 @@ public sealed class ListReplCommand : IReplCommand
     public string Usage => "ls";
     public string Category => "Library";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         IReadOnlyList<Session> sessions = context.Workspace.Store.Sessions;
         if (sessions.Count == 0)
         {
             Output.Info(context.Console, $"Nothing captured yet. Use [bold]run[/], [bold]collect[/], or [bold]import <file>[/].");
-            return;
+            return ReplResult.Success;
         }
 
         string? currentSnap = context.Workspace.CurrentEntry?.Id;
@@ -90,6 +90,7 @@ public sealed class ListReplCommand : IReplCommand
 
         context.Console.WriteLine();
         context.Console.MarkupLine("[#808791]load <id> · label <id> <name> · rm <id|workspace>[/]");
+        return ReplResult.Success;
     }
 
     private static string Contents(SnapshotEntry snapshot)

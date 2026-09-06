@@ -14,7 +14,7 @@ public sealed class WhoAllocReplCommand : IReplCommand
     public string Category => "Allocation profiling";
     public string Usage => "whoalloc <address>";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         ulong address = Args.Address(args, 0, Usage);
 
@@ -23,7 +23,7 @@ public sealed class WhoAllocReplCommand : IReplCommand
             context.Console.MarkupLine(
                 "[#FFAF00]This snapshot has no allocation provenance.[/] Capture one with " +
                 "[bold]run --correlate -- <app>[/] then [bold]snapshot[/].");
-            return;
+            return ReplResult.Failure;
         }
 
         // Heap type + size, if the address resolves to a live object.
@@ -39,7 +39,7 @@ public sealed class WhoAllocReplCommand : IReplCommand
             context.Console.MarkupLine(
                 "[#FFAF00]No allocation record.[/] [#808791]Untracked — allocated before profiling started, " +
                 "sampled out, or freed & the slot reused since capture.[/]");
-            return;
+            return ReplResult.Success;
         }
 
         // Folded stack is root->leaf; show backtrace-style, allocation site first.
@@ -50,5 +50,6 @@ public sealed class WhoAllocReplCommand : IReplCommand
             string frame = frames[frames.Length - 1 - i]; // leaf->root
             context.Console.MarkupLineInterpolated($"  [#00D7FF]#{i}[/] {frame}");
         }
+        return ReplResult.Success;
     }
 }

@@ -16,7 +16,7 @@ public sealed class DumpHeapReplCommand : IReplCommand
     public string Summary => "Show heap object statistics by type, largest first.";
     public string Usage => "dumpheap [type-filter]";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         string? filter = args.Length > 0 ? args[0] : null;
 
@@ -32,7 +32,7 @@ public sealed class DumpHeapReplCommand : IReplCommand
             context.Console.MarkupLine(filter is null
                 ? "[#FFAF00]No objects found on the heap.[/]"
                 : $"[#FFAF00]No types matched[/] '{Markup.Escape(filter)}'.");
-            return;
+            return ReplResult.Success;
         }
 
         var table = Theme.Table(expand: true);
@@ -67,5 +67,6 @@ public sealed class DumpHeapReplCommand : IReplCommand
 
         context.Console.MarkupLine(
             $"[bold]{Counts.Format(stats.Count)}[/] types, [bold]{Counts.Format(totalCount)}[/] objects, [bold #AFFF00]{ByteSize.Format((long)totalSize)}[/] total.");
+        return ReplResult.Success;
     }
 }

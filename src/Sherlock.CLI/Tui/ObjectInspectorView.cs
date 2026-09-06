@@ -143,13 +143,16 @@ internal sealed class ObjectInspectorView : Widget
 
     private void Follow(object target)
     {
-        if (target is ulong address)
+        switch (NavigationTarget.FromLink(target))
         {
-            _openObject(address);
-        }
-        else if (target is string type)
-        {
-            _openType(type);
+            case ObjTarget obj:
+                _openObject(obj.Address);
+                break;
+            case TypeTarget type:
+                _openType(type.Type);
+                break;
+            default:
+                throw new ArgumentException("Unsupported object-inspector navigation target.", nameof(target));
         }
     }
 
@@ -194,12 +197,12 @@ internal sealed class ObjectInspectorView : Widget
         if (value.TypeName.Length > 0)
         {
             text.Append(" : ").Fg(theme.Muted)
-                .Append(TypeNames.Short(value.TypeName)).Fg(Color.Hex(Palette.Identity)).Underline().Link(value.TypeName);
+                .Append(TypeNames.Short(value.TypeName)).Fg(Color.Hex(Palette.Identity)).Underline().Link(new TypeTarget(value.TypeName));
         }
         if (ObjectAddress(value) is { } address)
         {
             text.Append("  @").Fg(theme.Muted)
-                .Append($"0x{address:x}").Fg(Color.Hex(Palette.Address)).Underline().Link(address);
+                .Append($"0x{address:x}").Fg(Color.Hex(Palette.Address)).Underline().Link(new ObjTarget(address));
         }
         if (value.Kind is not (ObjectValueKind.Reference or ObjectValueKind.Struct))
         {

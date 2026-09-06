@@ -12,7 +12,7 @@ public sealed class InfoReplCommand : IReplCommand
     public string Summary => "Show a summary of the dump, runtime and heap.";
     public string Usage => "info";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         DumpInfo info = context.Snapshot.Info;
 
@@ -31,5 +31,6 @@ public sealed class InfoReplCommand : IReplCommand
 
         context.Console.MarkupLine("[bold]dump info[/]");
         context.Console.Write(grid);
+        return ReplResult.Success;
     }
 }

@@ -19,7 +19,7 @@ public sealed class DiffReplCommand : IReplCommand
     public string Category => "Analysis";
     public string Usage => "diff <base> <target> [count]";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         Args.Require(args, 2, Usage);
         int limit = Args.Limit(args, 2, DefaultLimit);
@@ -29,7 +29,7 @@ public sealed class DiffReplCommand : IReplCommand
         if (baseSnap.Path == targetSnap.Path)
         {
             context.Console.MarkupLine("[#FFAF00]Base and target are the same snapshot.[/]");
-            return;
+            return ReplResult.Success;
         }
 
         (Dictionary<string, HeapTypeStat> baseline, Dictionary<string, HeapTypeStat> target) =
@@ -58,7 +58,7 @@ public sealed class DiffReplCommand : IReplCommand
         if (rows.Count == 0)
         {
             context.Console.MarkupLineInterpolated($"[#AFFF00]No differences[/] between {baseSnap.Id} and {targetSnap.Id}.");
-            return;
+            return ReplResult.Success;
         }
 
         List<(string Type, long DCount, long DBytes, bool IsNew)> grew =
@@ -87,6 +87,7 @@ public sealed class DiffReplCommand : IReplCommand
         int shrank = rows.Count(r => r.DBytes < 0);
         context.Console.MarkupLineInterpolated(
             $"[#808791]{grew.Count} types grew ([/][#AFFF00]+{ByteSize.Format(grewBytes)}[/][#808791]), {shrank} shrank. Net {(netBytes >= 0 ? "+" : "-")}[/][bold]{ByteSize.Format(Math.Abs(netBytes))}[/][#808791].[/]");
+        return ReplResult.Success;
     }
 
     private static Dictionary<string, HeapTypeStat> Index(IReadOnlyList<HeapTypeStat> stats) =>

@@ -16,13 +16,13 @@ public sealed class LogsReplCommand : IReplCommand
     public string Usage => "logs [pid] [lines]";
     public string Category => "Live";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         IReadOnlyList<RunTarget> targets = context.Workspace.Targets;
         if (targets.Count == 0)
         {
             context.Console.MarkupLine("[#808791]No run targets. Launch one with[/] run <path>[#808791].[/]");
-            return;
+            return ReplResult.Failure;
         }
 
         int? pid = null;
@@ -50,14 +50,14 @@ public sealed class LogsReplCommand : IReplCommand
         if (target is null)
         {
             Output.Error(context.Console, $"No run target with pid {pid}.");
-            return;
+            return ReplResult.Failure;
         }
 
         IReadOnlyList<string> lines = target.ReadLog(tail);
         if (lines.Count == 0)
         {
             context.Console.MarkupLine("[#808791]<no output captured yet>[/]");
-            return;
+            return ReplResult.Success;
         }
 
         context.Console.MarkupLineInterpolated($"[#808791]── {target.Name} (pid {target.Pid}), last {lines.Count} lines ──[/]");
@@ -65,5 +65,6 @@ public sealed class LogsReplCommand : IReplCommand
         {
             context.Console.WriteLine(line);
         }
+        return ReplResult.Success;
     }
 }

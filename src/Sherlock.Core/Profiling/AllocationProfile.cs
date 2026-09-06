@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Sherlock.Core.Storage;
@@ -27,6 +28,9 @@ public sealed record AllocationSite(
 public sealed record AllocationTypeStat(
     string TypeName, long AllocBytes, long AllocCount, long SurvivedBytes, int SiteCount);
 
+/// <summary>A leaf method's direct allocations and bytes allocated through its call stacks.</summary>
+public sealed record AllocationMethodStat(string Method, long SelfBytes, long InclusiveBytes, long AllocCount);
+
 /// <summary>A parsed allocation profile produced by the native profiler.</summary>
 public sealed record AllocationProfile(IReadOnlyList<AllocationSite> Sites)
 {
@@ -35,6 +39,40 @@ public sealed record AllocationProfile(IReadOnlyList<AllocationSite> Sites)
 
     /// <summary>True when the profile carries per-site allocated types (v2+ slabs).</summary>
     public bool HasTypes => Sites.Any(s => s.TypeName is not null);
+
+    /// <summary>Allocating methods, largest self bytes first. Recursive frames count once per site
+    /// toward inclusive bytes; sites without managed frames are excluded.</summary>
+    public IReadOnlyList<AllocationMethodStat> HotMethods(int limit = int.MaxValue)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(limit);
+        if (limit == 0)
+        {
+            return [];
+        }
+
+        var self = new Dictionary<string, (long Bytes, long Count)>(StringComparer.Ordinal);
+        var inclusive = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (AllocationSite site in Sites)
+        {
+            if (site.Frames.Count == 0)
+            {
+                continue;
+            }
+
+            string leaf = site.Frames[^1];
+            (long Bytes, long Count) current = self.GetValueOrDefault(leaf);
+            self[leaf] = (current.Bytes + site.AllocBytes, current.Count + site.AllocCount);
+            foreach (string frame in site.Frames.Distinct(StringComparer.Ordinal))
+            {
+                inclusive[frame] = inclusive.GetValueOrDefault(frame) + site.AllocBytes;
+            }
+        }
+
+        return self.OrderByDescending(pair => pair.Value.Bytes)
+            .Take(limit)
+            .Select(pair => new AllocationMethodStat(pair.Key, pair.Value.Bytes, inclusive[pair.Key], pair.Value.Count))
+            .ToList();
+    }
 
     /// <summary>Allocation totals grouped by allocated type, largest churn first. Empty for v1 slabs.</summary>
     public IReadOnlyList<AllocationTypeStat> ByType() =>

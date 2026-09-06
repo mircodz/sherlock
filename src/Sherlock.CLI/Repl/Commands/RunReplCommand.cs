@@ -13,24 +13,24 @@ public sealed class RunReplCommand : IReplCommand
     public string Usage => RunLauncher.Usage;
     public string Category => "Live";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         RunOptions? options = RunLauncher.Parse(args, context.Console);
         if (options is null)
         {
-            return;
+            return ReplResult.Failure;
         }
         if (options.SnapshotOnExit)
         {
             Output.Error(
                 context.Console,
                 $"[bold]--snapshot-on exit[/] is available only with the top-level [bold]sl run[/] command.");
-            return;
+            return ReplResult.Failure;
         }
 
         if (RunLauncher.Launch(context.Workspace, context.Console, options) is not { } launched)
         {
-            return;
+            return ReplResult.Failure;
         }
 
         Session session = launched.Session;
@@ -50,5 +50,6 @@ public sealed class RunReplCommand : IReplCommand
         {
             Output.Info(context.Console, $"Use [bold]ps[/], [bold]logs[/], or [bold]snapshot[/].");
         }
+        return ReplResult.Success;
     }
 }

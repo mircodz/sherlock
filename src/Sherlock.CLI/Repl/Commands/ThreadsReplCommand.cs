@@ -14,14 +14,14 @@ public sealed class ThreadsReplCommand : IReplCommand
     public string Summary => "List managed threads, or show one thread's stack with `threads <id>`.";
     public string Usage => "threads [managed-thread-id]";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         if (args.Length > 0)
         {
             if (!int.TryParse(args[0], out int id))
             {
                 Output.Error(context.Console, $"'{args[0]}' is not a managed thread id.");
-                return;
+                return ReplResult.Failure;
             }
 
             ThreadInfo? thread = context.Snapshot.Threads.FirstOrDefault(t => t.ManagedThreadId == id);
@@ -29,11 +29,11 @@ public sealed class ThreadsReplCommand : IReplCommand
             if (thread is null)
             {
                 context.Console.MarkupLineInterpolated($"[#FFAF00]No managed thread with id {id}.[/]");
-                return;
+                return ReplResult.Failure;
             }
 
             PrintStack(context.Console, thread);
-            return;
+            return ReplResult.Success;
         }
 
         IReadOnlyList<ThreadInfo> threads = context.Snapshot.Threads;
@@ -55,6 +55,7 @@ public sealed class ThreadsReplCommand : IReplCommand
 
         context.Console.Write(table);
         context.Console.MarkupLine($"[#808791]{threads.Count} managed threads. Use[/] threads <id> [#808791]for a stack.[/]");
+        return ReplResult.Success;
     }
 
     private static string Flags(ThreadInfo thread)

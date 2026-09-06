@@ -19,19 +19,25 @@ public static class RunLauncher
         string? snapshotOn = null;
         ProfilerLogLevel logLevel = ProfilerLogLevel.Warning;
         var command = new List<string>();
+        bool forwarding = false;
 
         for (int i = 0; i < args.Count; i++)
         {
             string arg = args[i];
-            if (command.Count > 0) { command.Add(arg); continue; }
+            if (forwarding || command.Count > 0) { command.Add(arg); continue; }
             switch (arg)
             {
                 case "--profile": profile = true; break;
                 case "--correlate": correlate = true; break;
                 case "--children": children = true; break;
                 case "--experimental-gc-barrier": experimentalGcBarrier = true; break;
-                case "--snapshot-on" when i + 1 < args.Count: snapshotOn = args[++i]; break;
-                case "--profiler-log" when i + 1 < args.Count:
+                case "--snapshot-on" when i + 1 < args.Count && !args[i + 1].StartsWith("--", StringComparison.Ordinal):
+                    snapshotOn = args[++i];
+                    break;
+                case "--snapshot-on":
+                    Output.Error(console, $"[bold]--snapshot-on[/] requires an event.");
+                    return null;
+                case "--profiler-log" when i + 1 < args.Count && !args[i + 1].StartsWith("--", StringComparison.Ordinal):
                     if (!Enum.TryParse(args[++i], true, out logLevel) || !Enum.IsDefined(logLevel))
                     {
                         Output.Error(console, $"Profiler log level must be trace, info, warning, error, or off.");
@@ -41,26 +47,37 @@ public static class RunLauncher
                 case "--profiler-log":
                     Output.Error(console, $"[bold]--profiler-log[/] requires a level.");
                     return null;
-                case "--": break;
-                default: command.Add(arg); break;
+                case "--live":
+                    Output.Error(console, $"[bold]--live[/] is available only with the top-level [bold]sl run[/] command.");
+                    return null;
+                case "--": forwarding = true; break;
+                default:
+                    if (arg.StartsWith("--", StringComparison.Ordinal))
+                    {
+                        Output.Error(console, $"Unknown run option: {arg}");
+                        return null;
+                    }
+                    command.Add(arg);
+                    break;
             }
         }
 
-        if (command.Count == 0)
+        var options = new RunOptions { Command = command, Profile = profile, Correlate = correlate, CollectChildren = children, ExperimentalGcBarrier = experimentalGcBarrier, SnapshotOn = snapshotOn, ProfilerLogLevel = logLevel };
+        try
         {
-            Output.Error(console, $"Usage: [bold]{Usage}[/]");
+            options.Validate();
+            return options;
+        }
+        catch (ArgumentException ex)
+        {
+            Output.Error(console, $"{ex.Message} Usage: [bold]{Usage}[/]");
             return null;
         }
-        if (experimentalGcBarrier && !correlate)
-        {
-            Output.Error(console, $"[bold]--experimental-gc-barrier[/] requires [bold]--correlate[/].");
-            return null;
-        }
-        return new RunOptions { Command = command, Profile = profile, Correlate = correlate, CollectChildren = children, ExperimentalGcBarrier = experimentalGcBarrier, SnapshotOn = snapshotOn, ProfilerLogLevel = logLevel };
     }
 
     public static (RunTarget Target, Session Session)? Launch(Workspace workspace, IAnsiConsole console, RunOptions options)
     {
+        options.Validate();
         Session session = workspace.Store.BeginSession(SessionKind.Run, string.Join(' ', options.Command), withLog: true);
         RunTarget? target = null;
         try
@@ -78,6 +95,10 @@ public static class RunLauncher
             target?.Kill();
             target?.Dispose();
             workspace.Store.Remove(session.Id);
+            if (ex is OperationCanceledException)
+            {
+                throw;
+            }
             Output.Error(console, $"{ex.Message}");
             return null;
         }

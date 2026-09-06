@@ -14,7 +14,7 @@ public sealed class HistoryReplCommand(ReplHistory history) : IReplCommand
     public string Usage => "history [count]";
     public string Category => "Session";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         int count = DefaultCount;
         if (args.Length > 0 && int.TryParse(args[0], out int parsed))
@@ -28,5 +28,6 @@ public sealed class HistoryReplCommand(ReplHistory history) : IReplCommand
         {
             context.Console.MarkupLineInterpolated($"  [#808791]{i + 1,4}[/]  {entries[i]}");
         }
+        return ReplResult.Success;
     }
 }

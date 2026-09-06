@@ -16,14 +16,14 @@ public sealed class SnapshotReplCommand : IReplCommand
     public string Usage => "snapshot [pid | --pid N | --name X]";
     public string Category => "Live";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         int pid;
         if (args.Length > 0)
         {
             if (!TryResolvePid(context.Console, args, out pid))
             {
-                return;
+                return ReplResult.Failure;
             }
         }
         else
@@ -55,12 +55,12 @@ public sealed class SnapshotReplCommand : IReplCommand
                         context.Console.MarkupLineInterpolated($"    [#FFD75F]{p.Pid}[/]  [#00D7FF]{p.Name}[/]  [#808791]{(p.IsRoot ? "root" : "child")}[/]");
                     }
                 }
-                return;
+                return ReplResult.Failure;
             }
             pid = pick.Pid;
         }
 
-        Capture(context, pid);
+        return Capture(context, pid);
     }
 
     private static bool TryResolvePid(IAnsiConsole console, string[] args, out int pid)
@@ -97,7 +97,7 @@ public sealed class SnapshotReplCommand : IReplCommand
         return false;
     }
 
-    private static void Capture(ReplContext context, int pid)
+    private static ReplResult Capture(ReplContext context, int pid)
     {
         CaptureResult result;
         try
@@ -107,7 +107,7 @@ public sealed class SnapshotReplCommand : IReplCommand
         catch (DumpAnalysisException ex)
         {
             Output.Error(context.Console, $"{ex.Message}");
-            return;
+            return ReplResult.Failure;
         }
 
         string contents = result.Entry.HasAllocations
@@ -130,5 +130,6 @@ public sealed class SnapshotReplCommand : IReplCommand
                 Output.Warning(context.Console, $"Correlation could not be verified; allocation totals remain available, but object correlation was disabled.");
                 break;
         }
+        return ReplResult.Success;
     }
 }

@@ -12,7 +12,7 @@ public sealed class PsReplCommand : IReplCommand
     public string Usage => "ps";
     public string Category => "Live";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         var rows = new List<RunProcess>();
         foreach (RunTarget target in context.Workspace.Targets)
@@ -23,7 +23,7 @@ public sealed class PsReplCommand : IReplCommand
         if (rows.Count == 0)
         {
             context.Console.MarkupLine("[#808791]No live targets. Launch one with[/] run <path>[#808791].[/]");
-            return;
+            return ReplResult.Success;
         }
 
         foreach (RunProcess process in rows)
@@ -34,5 +34,6 @@ public sealed class PsReplCommand : IReplCommand
         }
 
         context.Console.MarkupLine("[#808791]snapshot <pid> to dump one into the library[/]");
+        return ReplResult.Success;
     }
 }

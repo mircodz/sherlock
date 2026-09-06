@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using Sherlock.Core;
 using Sherlock.Core.Store;
 using Spectre.Console;
@@ -7,8 +8,14 @@ using Spectre.Console;
 namespace Sherlock.CLI.Repl;
 
 /// <summary>The workspace and console a command operates against.</summary>
-public sealed record ReplContext(Workspace Workspace, IAnsiConsole Console, Func<string, bool> RunLine)
+public sealed record ReplContext(
+    Workspace Workspace,
+    IAnsiConsole Console,
+    Func<string, ReplResult> RunLine,
+    CancellationToken Cancellation = default)
 {
+    internal HashSet<string> ActiveScripts { get; } = new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+
     /// <summary>The loaded snapshot, or a friendly error if nothing is loaded.</summary>
     public Snapshot Snapshot => Workspace.Current
         ?? throw new DumpAnalysisException("No snapshot loaded. Use `load <id>`, `collect`, or `import <file>` first.");
@@ -26,6 +33,16 @@ public sealed record ReplContext(Workspace Workspace, IAnsiConsole Console, Func
         }
         return snap;
     }
+}
+
+/// <summary>Batch results retain failures even when a later command quits or is cancelled.</summary>
+[Flags]
+public enum ReplResult
+{
+    Success = 0,
+    Failure = 1,
+    Quit = 2,
+    Cancelled = 4,
 }
 
 /// <summary>An analysis command, shared by both the interactive REPL and <c>--exec</c>.</summary>
@@ -47,5 +64,5 @@ public interface IReplCommand
     string Usage { get; }
 
     /// <summary>Runs the command. <paramref name="args"/> excludes the command name itself.</summary>
-    void Execute(ReplContext context, string[] args);
+    ReplResult Execute(ReplContext context, string[] args);
 }

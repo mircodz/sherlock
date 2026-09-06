@@ -15,7 +15,7 @@ public sealed class ObjectsReplCommand : IReplCommand
     public string Summary => "List instances of a type, largest first. e.g. objects System.String";
     public string Usage => "objects <type-filter> [count]";
 
-    public void Execute(ReplContext context, string[] args)
+    public ReplResult Execute(ReplContext context, string[] args)
     {
         Args.Require(args, 1, Usage);
         string filter = args[0];
@@ -23,12 +23,12 @@ public sealed class ObjectsReplCommand : IReplCommand
 
         InstanceListing listing = context.Console.Status()
             .Start($"Scanning heap for '{filter}'…", _ =>
-                context.Snapshot.Instances(filter, limit));
+                context.Snapshot.Instances(filter, limit, context.Cancellation));
 
         if (listing.TotalMatched == 0)
         {
             context.Console.MarkupLineInterpolated($"[#FFAF00]No instances matched[/] '{filter}'.");
-            return;
+            return ReplResult.Success;
         }
 
         var table = Theme.Table(expand: true);
@@ -51,5 +51,6 @@ public sealed class ObjectsReplCommand : IReplCommand
             $"Showing top [bold]{listing.Instances.Count}[/] of [bold]{Counts.Format(listing.TotalMatched)}[/] matches, " +
             $"[bold #F2F2F2]{ByteSize.Format((long)listing.TotalMatchedSize)}[/] total. " +
             $"[#808791]Copy an address into[/] gcroot <address>.");
+        return ReplResult.Success;
     }
 }

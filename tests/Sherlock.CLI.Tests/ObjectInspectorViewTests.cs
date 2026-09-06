@@ -83,7 +83,7 @@ public sealed class ObjectInspectorViewTests
         Assert.False(cycle.HasChildren);
         Assert.Equal("$", cycle.Value.CyclePath);
         Assert.Contains("cycle to $", ObjectInspectorView.RenderRow(cycle).PlainText);
-        Assert.Contains(ObjectInspectorView.RenderRow(cycle).Spans, span => span.Link is ulong address && address == 0x1000);
+        Assert.Contains(ObjectInspectorView.RenderRow(cycle).Spans, span => span.Link is ObjTarget { Address: 0x1000 });
         Press(view, Key.Down);
         Press(view, Key.Right);
         Assert.Equal(1, reads);
@@ -190,7 +190,7 @@ public sealed class ObjectInspectorViewTests
                 : new InspectionPage([structure], 1, start), address => opened = address, _ => { }) { HasFocus = true };
         TreeNode<ObjectInspectorView.Row> child = Assert.Single(view.Tree.Roots[0].Children);
 
-        Assert.DoesNotContain(ObjectInspectorView.RenderRow(child).Spans, span => span.Link is ulong);
+        Assert.DoesNotContain(ObjectInspectorView.RenderRow(child).Spans, span => span.Link is ObjTarget);
         Press(view, Key.Down);
         Press(view, Key.Enter);
         Assert.Null(opened);
@@ -208,7 +208,7 @@ public sealed class ObjectInspectorViewTests
         var value = new ObjectValue("field", "System.IntPtr", "0x1234 (App.Node)", kind);
         var node = new TreeNode<ObjectInspectorView.Row>(new ObjectInspectorView.Row(value));
 
-        Assert.DoesNotContain(ObjectInspectorView.RenderRow(node).Spans, span => span.Link is ulong);
+        Assert.DoesNotContain(ObjectInspectorView.RenderRow(node).Spans, span => span.Link is ObjTarget);
         Assert.False(node.Value.CanExpand);
     }
 
@@ -226,10 +226,10 @@ public sealed class ObjectInspectorViewTests
 
         Assert.Contains("\"hello\\nworld\"", label.PlainText);
         Assert.DoesNotContain('\n', label.PlainText);
-        Assert.Contains(label.Spans, span => span.Link is ulong address && address == 0x2000);
-        Assert.Contains(label.Spans, span => span.Link is string type && type == "System.String");
+        Assert.Contains(label.Spans, span => span.Link is ObjTarget { Address: 0x2000 });
+        Assert.Contains(label.Spans, span => span.Link is TypeTarget { Type: "System.String" });
         Assert.False(node.HasChildren);
-        view.Tree.OnLinkClick!(0x2000UL);
+        view.Tree.OnLinkClick!(new ObjTarget(0x2000));
         Assert.Equal(0x2000UL, openedObject);
 
         Press(view, Key.Down);
