@@ -139,6 +139,7 @@ private:
     std::atomic<std::uint64_t> snapshotSequence{1};
     std::uint64_t sampleInterval = 0; // bytes between samples; 0 = sample every allocation
     std::unique_ptr<Logger> logger;
+    std::unique_ptr<MethodRegistry> methods;
     std::unique_ptr<Aggregator> aggregator;
 
     std::unique_ptr<ProbeManager> probes;      // call: triggers via ReJIT

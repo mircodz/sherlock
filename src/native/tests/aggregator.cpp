@@ -1,7 +1,6 @@
 // Full-lifecycle tests for the correlation live-set tracking in Aggregator: driving record() +
 // the GC callbacks (beginGc / noteCondemnedRange / noteSurvivorRange / noteMove / endGc) and asserting
-// the resulting live set. Aggregator takes ICorProfilerInfo10* only for name resolution (deferred to
-// dump time), so record()/endGc()/the live-set math run fine with a null info pointer.
+// the resulting live set. The live-set math does not require CLR metadata.
 //
 // These cover the cases that were historically buggy: generational eviction (gen-2 objects dropped by
 // a gen-0 GC), LOH admission (large objects never survivor-reported by an ephemeral GC), Server-GC
@@ -32,14 +31,19 @@ namespace {
 
 // A single dummy stack frame + class id — the correlation live-set logic doesn't depend on their
 // values (only the address bookkeeping matters), and name resolution is null-safe.
-constexpr FunctionID kFrame = 0x1000;
+constexpr FrameId kFrame = 0x1000;
 constexpr ClassID kClass = 0x2000;
+
+MethodRegistry& testMethods() {
+    static MethodRegistry methods(nullptr, nullptr);
+    return methods;
+}
 
 // Record one object at `addr` (bytes default 24). Each distinct call site would key a Site; here one
 // site is fine since we assert on addresses/ids, not per-site stats.
 void alloc(Aggregator& a, std::uint64_t addr, std::uint64_t bytes = 24) {
-    FunctionID frames[1] = {kFrame};
-    a.record(std::span<const FunctionID>(frames, 1), bytes, static_cast<ObjectID>(addr), kClass);
+    FrameId frames[1] = {kFrame};
+    a.record(std::span<const FrameId>(frames, 1), bytes, static_cast<ObjectID>(addr), kClass);
 }
 
 std::vector<std::uint64_t> liveAddrs(const Aggregator& a) {
@@ -53,7 +57,7 @@ std::vector<std::uint64_t> liveAddrs(const Aggregator& a) {
 // A correlation-enabled aggregator. Aggregator holds atomics (non-copyable/non-movable), so tests
 // construct it in place; inheriting exposes all its methods directly (a.beginGc(), a.record(), ...).
 struct Agg : Aggregator {
-    Agg() : Aggregator(nullptr, nullptr) { enableCorrelation(); }
+    Agg() : Aggregator(nullptr, nullptr, testMethods()) { enableCorrelation(); }
 };
 
 std::filesystem::path tempSlab(std::string_view name) {
@@ -287,7 +291,7 @@ TEST(AggregatorLifecycle, ManyGCsKeepLiveSetSortedAndConsistent) {
 }
 
 TEST(AggregatorSnapshot, RepeatedProfilesAreIndependentAndParseable) {
-    Aggregator aggregator(nullptr, nullptr);
+    Aggregator aggregator(nullptr, nullptr, testMethods());
     const std::filesystem::path first = tempSlab("profile-first");
     const std::filesystem::path second = tempSlab("profile-second");
 
@@ -315,7 +319,7 @@ TEST(AggregatorSnapshot, RepeatedProfilesAreIndependentAndParseable) {
 }
 
 TEST(AggregatorSnapshot, DumpIsSafeWhileAnotherThreadRecords) {
-    Aggregator aggregator(nullptr, nullptr);
+    Aggregator aggregator(nullptr, nullptr, testMethods());
     std::atomic<std::uint64_t> recorded{0};
     std::atomic<bool> stop{false};
     std::thread writer([&] {
@@ -353,7 +357,7 @@ TEST(AggregatorSnapshot, DumpIsSafeWhileAnotherThreadRecords) {
 }
 
 TEST(AggregatorSnapshot, WriteFailureIsReportedAndLeavesNoTemporaryFile) {
-    Aggregator aggregator(nullptr, nullptr);
+    Aggregator aggregator(nullptr, nullptr, testMethods());
     alloc(aggregator, 0x1000);
     const std::filesystem::path missing =
         std::filesystem::path(tempSlab("missing-parent").string() + ".missing") /
@@ -361,4 +365,40 @@ TEST(AggregatorSnapshot, WriteFailureIsReportedAndLeavesNoTemporaryFile) {
 
     EXPECT_FALSE(aggregator.dump(missing.string()));
     EXPECT_FALSE(std::filesystem::exists(missing));
+}
+
+TEST(AggregatorSnapshot, DistinctMethodCookiesRemainDistinctInTheSlab) {
+    MethodRegistry methods([](ModuleID, mdMethodDef) {
+        return MethodRegistry::Resolution{"Example.Generic<T>.Allocate", S_OK, {}};
+    });
+    methods.moduleLoaded(0x1000);
+    FrameId first = methods.intern(0x1000, 0x06000001);
+    FrameId overload = methods.intern(0x1000, 0x06000002);
+    const std::string firstName = methods.name(first);
+    const std::string overloadName = methods.name(overload);
+    Aggregator aggregator(nullptr, nullptr, methods);
+    aggregator.record(std::span<const FrameId>(&first, 1), 24, 0x2000, kClass);
+    aggregator.record(std::span<const FrameId>(&overload, 1), 24, 0x3000, kClass);
+    methods.moduleUnloaded(0x1000);
+
+    const std::filesystem::path path = tempSlab("method-cookies");
+    ASSERT_TRUE(aggregator.dump(path.string()));
+    const std::string bytes = readAll(path);
+    storage::ContainerReader container(std::as_bytes(std::span(bytes)));
+    ASSERT_TRUE(container.valid());
+    storage::ProvenanceReader profile(container);
+    storage::StackTable stacks = storage::StackTable::read(container);
+    ASSERT_EQ(profile.allocations().size(), 2);
+    std::vector<std::string> names;
+    for (const storage::AllocationRecord& record : profile.allocations()) {
+        auto frames = stacks.stackFrames(record.stackId);
+        ASSERT_EQ(frames.size(), 1);
+        names.emplace_back(stacks.frame(frames[0]));
+    }
+    std::sort(names.begin(), names.end());
+    std::vector<std::string> expected = {firstName, overloadName};
+    std::sort(expected.begin(), expected.end());
+    EXPECT_EQ(names, expected);
+    EXPECT_NE(names[0], names[1]);
+    std::filesystem::remove(path);
 }

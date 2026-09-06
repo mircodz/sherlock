@@ -42,10 +42,10 @@ thread_local ThreadShard t_shard;
 std::atomic<std::uint64_t> g_nextAggregatorId{1};
 
 // FNV-1a over the frame ids.
-std::uint64_t hashFrames(std::span<const FunctionID> frames) {
+std::uint64_t hashFrames(std::span<const FrameId> frames) {
     std::uint64_t h = 1469598103934665603ull;
-    for (FunctionID f : frames) {
-        h ^= static_cast<std::uint64_t>(f);
+    for (FrameId frame : frames) {
+        h ^= frame;
         h *= 1099511628211ull;
     }
     return h;
@@ -113,8 +113,8 @@ std::string typeDefName(IMetaDataImport* md, mdTypeDef typeDef) {
 
 } // namespace
 
-Aggregator::Aggregator(ICorProfilerInfo10* info, Logger* logger)
-    : info_(info), logger_(logger),
+Aggregator::Aggregator(ICorProfilerInfo10* info, Logger* logger, MethodRegistry& methods)
+    : info_(info), logger_(logger), methods_(methods),
       instanceId_(g_nextAggregatorId.fetch_add(1, std::memory_order_relaxed)) {
 }
 
@@ -145,7 +145,7 @@ Aggregator::Shard& Aggregator::localShard() {
     return *t_shard.shard;
 }
 
-void Aggregator::record(std::span<const FunctionID> frames, std::uint64_t bytes, ObjectID addr, ClassID classId) {
+void Aggregator::record(std::span<const FrameId> frames, std::uint64_t bytes, ObjectID addr, ClassID classId) {
     // Key by (stack, type): mix classId into the stack hash so one call site allocating two types
     // lands in two sites. A key collision across distinct pairs would only merge counts.
     std::uint64_t key = hashFrames(frames);
@@ -472,11 +472,15 @@ void Aggregator::captureState(
 }
 
 std::uint32_t Aggregator::internSiteStack(storage::ProvenanceWriter& pw, const Site& site) {
-    std::vector<std::string_view> names;
+    std::vector<std::string> names;
     names.reserve(site.frames.size());
-    for (const FunctionID f : site.frames) // stored root->leaf; intern in the same order
-        names.push_back(resolveMethodName(f));
-    return pw.internStack(names);
+    for (FrameId frame : site.frames)
+        names.push_back(methods_.name(frame));
+    std::vector<std::string_view> views;
+    views.reserve(names.size());
+    for (const std::string& name : names)
+        views.push_back(name);
+    return pw.internStack(views);
 }
 
 void Aggregator::writeProfile(storage::ProvenanceWriter& pw, const std::unordered_map<std::uint64_t, Site>& sites) {
@@ -611,54 +615,16 @@ bool Aggregator::writeSlab(const std::string& path, storage::ProvenanceWriter& p
     return true;
 }
 
-const std::string& Aggregator::resolveMethodName(FunctionID method) {
-    {
-        std::lock_guard lock(nameCacheMutex_);
-        auto cached = nameCache_.find(method);
-        if (cached != nameCache_.end())
-            return cached->second;
-    }
-
-    std::string name = "<unknown>";
-    if (method != 0 && info_ != nullptr) {
-        ClassID classId = 0;
-        ModuleID moduleId = 0;
-        mdToken token = 0;
-        if (SUCCEEDED(info_->GetFunctionInfo(method, &classId, &moduleId, &token))) {
-            IMetaDataImport* md = nullptr;
-            if (SUCCEEDED(info_->GetModuleMetaData(moduleId, ofRead, IID_IMetaDataImport, (IUnknown**)&md)) && md != nullptr) {
-                WCHAR methodName[512];
-                ULONG methodLen = 0;
-                mdTypeDef typeToken = 0;
-                if (SUCCEEDED(md->GetMethodProps(token, &typeToken, methodName, 512, &methodLen,
-                                                 nullptr, nullptr, nullptr, nullptr, nullptr))) {
-                    std::string typeName = "<type>";
-                    WCHAR typeName16[512];
-                    ULONG typeLen = 0;
-                    DWORD typeFlags = 0;
-                    if (SUCCEEDED(md->GetTypeDefProps(typeToken, typeName16, 512, &typeLen, &typeFlags, nullptr)))
-                        typeName = narrow(typeName16, typeLen);
-                    name = typeName + "." + narrow(methodName, methodLen);
-                }
-                md->Release();
-            }
-        }
-    }
-
-    std::lock_guard lock(nameCacheMutex_);
-    return nameCache_.emplace(method, std::move(name)).first->second;
-}
-
 const std::string& Aggregator::resolveTypeName(ClassID classId) {
     {
-        std::lock_guard lock(nameCacheMutex_);
+        std::lock_guard lock(typeNameMutex_);
         auto cached = typeNameCache_.find(classId);
         if (cached != typeNameCache_.end())
             return cached->second;
     }
 
     std::string name = resolveTypeNameUncached(classId);
-    std::lock_guard lock(nameCacheMutex_);
+    std::lock_guard lock(typeNameMutex_);
     return typeNameCache_.emplace(classId, std::move(name)).first->second;
 }
 

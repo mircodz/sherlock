@@ -19,12 +19,17 @@ add_executable(SherlockTests
     entrypoint.cpp
     exit_capture.cpp
     intervals.cpp
+    method_registry.cpp
     probes.cpp
     profile.cpp
+    frame_ids.cpp
     symbols.cpp
     ${CMAKE_SOURCE_DIR}/src/common/logger.cpp
     ${CMAKE_SOURCE_DIR}/src/control/channel.cpp
     ${CMAKE_SOURCE_DIR}/src/profiler/aggregator.cpp
+    ${CMAKE_SOURCE_DIR}/src/profiler/method_registry.cpp
+    ${CMAKE_SOURCE_DIR}/src/profiler/shadowstack.cpp
+    ${CMAKE_SOURCE_DIR}/src/profiler/il_writer.cpp
     ${CMAKE_SOURCE_DIR}/src/profiler/entrypoint.cpp
     ${CMAKE_SOURCE_DIR}/src/profiler/probe.cpp)
 target_link_libraries(SherlockTests PRIVATE GTest::gtest GTest::gtest_main)

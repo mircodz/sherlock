@@ -24,12 +24,12 @@ ThreadStack* ensureStack() {
 }
 } // namespace shadow
 
-extern "C" void Sherlock_ShadowPush(std::int64_t funcId) {
+extern "C" void Sherlock_ShadowPush(std::int64_t frameId) {
     // Always ++ so push/pop stay balanced even past the cap; only store within bounds.
     shadow::ThreadStack* s = shadow::ensureStack();
     std::uint32_t d = s->depth;
     if (d < shadow::kMaxShadow)
-        s->frames[d] = static_cast<FunctionID>(funcId);
+        s->frames[d] = static_cast<FrameId>(frameId);
     s->depth = d + 1;
 }
 
@@ -193,8 +193,8 @@ void emitProbeCall(il::ILStream& stream, std::uintptr_t cookie, std::uintptr_t t
 
 } // namespace
 
-ShadowStackInstrumenter::ShadowStackInstrumenter(ICorProfilerInfo10* info, Logger* logger)
-    : info_(info), logger_(logger) {}
+ShadowStackInstrumenter::ShadowStackInstrumenter(ICorProfilerInfo10* info, Logger* logger, MethodRegistry& methods)
+    : info_(info), logger_(logger), methods_(methods) {}
 
 ShadowStackInstrumenter::ModuleSigs ShadowStackInstrumenter::ensureSigs(ModuleID moduleId) {
     std::lock_guard lock(sigMutex_);
@@ -229,7 +229,7 @@ ShadowStackInstrumenter::ModuleSigs ShadowStackInstrumenter::ensureSigs(ModuleID
     return sigs;
 }
 
-bool ShadowStackInstrumenter::buildIL(FunctionID functionId, ModuleID moduleId,
+bool ShadowStackInstrumenter::buildIL(FrameId frameId, ModuleID moduleId,
                                       mdMethodDef methodToken, const ProbePlan& probe,
                                       std::vector<BYTE>& out) {
     ModuleSigs sigs = ensureSigs(moduleId);
@@ -278,7 +278,7 @@ bool ShadowStackInstrumenter::buildIL(FunctionID functionId, ModuleID moduleId,
     //   [FINALLY]   optional trigger exit; shadow pop; endfinally
     //   [END]       (ldloc ret;) ret
     il::ILStream prologue;
-    prologue.ldc_i8(static_cast<std::uint64_t>(functionId));
+    prologue.ldc_i8(frameId);
     prologue.ldc_i8(reinterpret_cast<std::uint64_t>(&Sherlock_ShadowPush));
     prologue.conv_i();
     prologue.calli(sigs.push);
@@ -525,15 +525,11 @@ bool ShadowStackInstrumenter::rewrite(ModuleID moduleId, mdMethodDef methodToken
         return false;
     }
 
-    // Resolve the FunctionID so buildIL can bake it into the push. GetFunctionFromToken gives the
-    // canonical (non-generic) FunctionID; generic instantiations share this body's IL, which is fine:
-    // the shadow frame just identifies the method, resolved to a name at dump time.
-    FunctionID functionId = 0;
-    if (FAILED(info_->GetFunctionFromToken(moduleId, methodToken, &functionId)))
-        functionId = 0; // still emit; a 0 frame resolves to <unknown> but keeps depth correct
+    // A declaration has stable metadata even when shared generic IL has no concrete FunctionID.
+    const FrameId frameId = methods_.intern(moduleId, methodToken);
 
     std::vector<BYTE> out;
-    if (!buildIL(functionId, moduleId, methodToken, probe, out)) {
+    if (!buildIL(frameId, moduleId, methodToken, probe, out)) {
         skipped_.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
@@ -553,9 +549,7 @@ void ShadowStackInstrumenter::noteReJITError() {
     std::uint64_t n = rejitErrors_.fetch_add(1, std::memory_order_relaxed) + 1;
     if (n >= kMaxReJITErrors && !disabled_.exchange(true, std::memory_order_relaxed)) {
         if (logger_)
-            logger_->error(
-                "shadow-stack instrumentation disabled after {} ReJIT errors; leaving remaining methods un-instrumented",
-                n);
+            logger_->error("shadow-stack instrumentation disabled after {} ReJIT errors; leaving remaining methods un-instrumented", n);
     }
 }
 

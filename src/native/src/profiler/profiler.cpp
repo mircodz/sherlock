@@ -174,8 +174,9 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
     if (sample != nullptr && sample[0] != '\0')
         sampleInterval = std::strtoull(sample, nullptr, 10);
 
-    aggregator = std::make_unique<Aggregator>(corProfilerInfo, logger.get());
-    shadowInstr = std::make_unique<ShadowStackInstrumenter>(corProfilerInfo, logger.get());
+    methods = std::make_unique<MethodRegistry>(corProfilerInfo, logger.get());
+    aggregator = std::make_unique<Aggregator>(corProfilerInfo, logger.get(), *methods);
+    shadowInstr = std::make_unique<ShadowStackInstrumenter>(corProfilerInfo, logger.get(), *methods);
 
     const char* correlateEnv = std::getenv("SHERLOCK_CORRELATE");
     correlate = correlateEnv != nullptr && correlateEnv[0] != '\0' && correlateEnv[0] != '0';
@@ -684,8 +685,8 @@ HRESULT STDMETHODCALLTYPE Profiler::ObjectAllocated(ObjectID objectId, ClassID c
         // the leaf-most frames (innermost callers nearest the allocation), the contiguous tail.
         const std::uint32_t depth = shadow::storedDepth();
         const std::uint32_t n = depth < kMaxFrames ? depth : static_cast<std::uint32_t>(kMaxFrames);
-        const FunctionID* sf = shadow::frames();
-        std::span<const FunctionID> frames;
+        const FrameId* sf = shadow::frames();
+        std::span<const FrameId> frames;
         if (n > 0) {
             frames = {sf + (depth - n), n};
         }
@@ -711,6 +712,9 @@ HRESULT STDMETHODCALLTYPE Profiler::ModuleLoadFinished(ModuleID moduleId, HRESUL
         return S_OK;
     }
     try {
+        if (methods) {
+            methods->moduleLoaded(moduleId);
+        }
         if (snapshotOnExit_) {
             (void)armExitEntryPoint(moduleId);
         }
@@ -732,6 +736,9 @@ HRESULT STDMETHODCALLTYPE Profiler::ModuleLoadFinished(ModuleID moduleId, HRESUL
 HRESULT STDMETHODCALLTYPE Profiler::ModuleUnloadStarted(ModuleID) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ModuleUnloadFinished(ModuleID moduleId, HRESULT hrStatus) {
     if (SUCCEEDED(hrStatus)) {
+        if (methods) {
+            methods->moduleUnloaded(moduleId);
+        }
         if (probes) {
             probes->onModuleUnloaded(moduleId);
         }

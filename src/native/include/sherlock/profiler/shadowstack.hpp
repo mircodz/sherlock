@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "profilercommon.h"
+#include "sherlock/profiler/method_registry.hpp"
 
 namespace Sherlock {
 
@@ -29,7 +30,7 @@ constexpr std::size_t kMaxShadow = 1024; // frames retained; deeper is counted b
 // load ("cannot allocate memory in static TLS block"). The library is built -ftls-model=initial-exec,
 // so this pointer is read via a direct thread-pointer offset on the hot push/pop path (see CMakeLists.txt).
 struct ThreadStack {
-    FunctionID frames[kMaxShadow];
+    FrameId frames[kMaxShadow];
     std::uint32_t depth = 0; // may exceed kMaxShadow; readers clamp
 };
 
@@ -41,7 +42,7 @@ inline std::uint32_t storedDepth() {
     if (t_stack == nullptr) return 0;
     return t_stack->depth < kMaxShadow ? t_stack->depth : static_cast<std::uint32_t>(kMaxShadow);
 }
-inline const FunctionID* frames() {
+inline const FrameId* frames() {
     return t_stack ? t_stack->frames : nullptr;
 }
 
@@ -49,7 +50,7 @@ inline const FunctionID* frames() {
 
 // The two trampolines the injected IL calls (unmanaged C calling convention, via calli). Global,
 // no client data, mirroring probe.cpp's Sherlock_ProbeEnter.
-extern "C" void Sherlock_ShadowPush(std::int64_t funcId);
+extern "C" void Sherlock_ShadowPush(std::int64_t frameId);
 extern "C" void Sherlock_ShadowPop();
 
 // ---------------------------------------------------------------------------
@@ -58,7 +59,7 @@ extern "C" void Sherlock_ShadowPop();
 // ---------------------------------------------------------------------------
 class ShadowStackInstrumenter {
 public:
-    ShadowStackInstrumenter(ICorProfilerInfo10* info, Logger* logger);
+    ShadowStackInstrumenter(ICorProfilerInfo10* info, Logger* logger, MethodRegistry& methods);
 
     // --- ReJIT instrumentation (ModuleLoadFinished -> RequestReJIT -> GetReJITParameters) ---
     // Enumerate every method in a freshly loaded module and request a ReJIT for each, so the
@@ -90,7 +91,7 @@ private:
     ModuleSigs ensureSigs(ModuleID moduleId);
 
     // Builds one try/finally-wrapped body containing shadow-stack and optional probe hooks.
-    bool buildIL(FunctionID functionId, ModuleID moduleId, mdMethodDef methodToken,
+    bool buildIL(FrameId frameId, ModuleID moduleId, mdMethodDef methodToken,
                  const ProbePlan& probe, std::vector<BYTE>& out);
 
     // After this many ReJITErrors we latch the instrumenter off (see noteReJITError).
@@ -98,6 +99,7 @@ private:
 
     ICorProfilerInfo10* info_;
     Logger* logger_;
+    MethodRegistry& methods_;
     std::mutex sigMutex_;
     std::unordered_map<std::uint64_t, ModuleSigs> sigByModule_;
     std::atomic<std::uint64_t> instrumented_{0};

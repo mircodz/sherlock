@@ -12,6 +12,7 @@
 
 #include "profilercommon.h"
 #include "sherlock/profiler/intervals.hpp"
+#include "sherlock/profiler/method_registry.hpp"
 
 namespace Sherlock {
 
@@ -42,7 +43,7 @@ public:
     // A unique (allocation stack, allocated type) pair and what it has allocated. The same call site
     // can allocate more than one type, so sites are keyed by both. `frames` is stored root -> leaf.
     struct Site {
-        std::vector<FunctionID> frames;
+        std::vector<FrameId> frames;
         ClassID classId = 0;  // the allocated type; resolved to a name at dump time
         Stats alloc;      // everything sampled at this stack+type
         Stats survived;   // the subset that survived its first GC
@@ -64,13 +65,13 @@ public:
         std::vector<Pending> pending;   // sampled objects not yet judged by a GC
     };
 
-    Aggregator(ICorProfilerInfo10* info, Logger* logger);
+    Aggregator(ICorProfilerInfo10* info, Logger* logger, MethodRegistry& methods);
     ~Aggregator();
 
     /// Hot path. `frames` is the captured stack (root -> leaf), a view over the caller's shadow
     /// stack storage (no allocation); `addr` is the object's address; `classId` is its type (stored,
     /// resolved to a name only at dump time). Touches only the calling thread's shard.
-    void record(std::span<const FunctionID> frames, std::uint64_t bytes, ObjectID addr, ClassID classId);
+    void record(std::span<const FrameId> frames, std::uint64_t bytes, ObjectID addr, ClassID classId);
 
     // --- GC integration. All called on the GC thread with the world stopped. ---
     void beginGc();                                            // reset survivor + condemned ranges
@@ -88,10 +89,6 @@ public:
 
     /// Copies every thread's shard, resolves frame names, and atomically publishes a profile.
     [[nodiscard]] bool dump(const std::string& path) noexcept;
-
-    /// Resolves a FunctionID to "Type.Method" (cached). Public so the trace
-    /// collector can reuse it as a symbolizer.
-    const std::string& resolveMethodName(FunctionID method);
 
     /// Resolves a ClassID to "Ns.Type" (cached). Used by allocation/exception triggers.
     const std::string& resolveTypeName(ClassID classId);
@@ -137,6 +134,7 @@ private:
 
     ICorProfilerInfo10* info_;
     Logger* logger_;
+    MethodRegistry& methods_;
 
     // Unique per-instance id, tags the per-thread shard cache so a new Aggregator sharing a thread
     // (or a stack address) with a destroyed one never reuses its freed shard.
@@ -187,9 +185,8 @@ private:
 
     mutable std::mutex correlationMutex_;
     std::mutex snapshotMutex_;
-    std::mutex nameCacheMutex_;
+    std::mutex typeNameMutex_;
     std::atomic<std::uint64_t> writeSequence_{1};
-    std::unordered_map<FunctionID, std::string> nameCache_;
     std::unordered_map<ClassID, std::string> typeNameCache_;
 };
 
