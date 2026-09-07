@@ -23,6 +23,7 @@ add_executable(SherlockTests
     probes.cpp
     profile.cpp
     process_filter.cpp
+    rejit_policy.cpp
     frame_ids.cpp
     symbols.cpp
     ${CMAKE_SOURCE_DIR}/src/common/logger.cpp
@@ -30,6 +31,7 @@ add_executable(SherlockTests
     ${CMAKE_SOURCE_DIR}/src/profiler/aggregator.cpp
     ${CMAKE_SOURCE_DIR}/src/profiler/method_registry.cpp
     ${CMAKE_SOURCE_DIR}/src/profiler/process_filter.cpp
+    ${CMAKE_SOURCE_DIR}/src/profiler/rejit_policy.cpp
     ${CMAKE_SOURCE_DIR}/src/profiler/shadowstack.cpp
     ${CMAKE_SOURCE_DIR}/src/profiler/il_writer.cpp
     ${CMAKE_SOURCE_DIR}/src/profiler/entrypoint.cpp

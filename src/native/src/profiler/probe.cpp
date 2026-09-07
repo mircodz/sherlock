@@ -1,6 +1,7 @@
 #include "sherlock/profiler/probe.hpp"
 
 #include "sherlock/common/logger.hpp"
+#include "sherlock/profiler/rejit_policy.hpp"
 
 #include <algorithm>
 #include <utility>
@@ -134,6 +135,10 @@ ProbeManager::ProbeManager(ICorProfilerInfo10* info, Logger* logger)
     : info_(info), logger_(logger) {}
 
 void ProbeManager::configure(const std::string& spec, ProbeEvents events) {
+    configureSpecs(spec, events);
+}
+
+std::vector<ProbeManager::Spec> ProbeManager::configureSpecs(const std::string& spec, ProbeEvents events) {
     std::vector<Spec> parsed;
     std::size_t start = 0;
     while (start <= spec.size()) {
@@ -158,26 +163,29 @@ void ProbeManager::configure(const std::string& spec, ProbeEvents events) {
     }
 
     std::lock_guard lock(mutex_);
-    for (Spec& candidate : parsed) {
+    for (const Spec& candidate : parsed) {
         const bool duplicate = std::any_of(specs_.begin(), specs_.end(), [&](const Spec& existing) {
             return existing.type == candidate.type &&
                    existing.method == candidate.method &&
                    existing.events == candidate.events;
         });
         if (!duplicate) {
-            specs_.push_back(std::move(candidate));
+            specs_.push_back(candidate);
         }
     }
+    return parsed;
 }
 
 void ProbeManager::onModuleLoaded(ModuleID moduleId) {
+    std::vector<Spec> specs;
     {
         std::lock_guard lock(mutex_);
         if (std::find(loadedModules_.begin(), loadedModules_.end(), moduleId) == loadedModules_.end()) {
             loadedModules_.push_back(moduleId);
         }
+        specs = specs_;
     }
-    resolveInModule(moduleId, false);
+    resolveInModule(moduleId, false, specs);
 }
 
 void ProbeManager::onModuleUnloaded(ModuleID moduleId) {
@@ -189,7 +197,7 @@ void ProbeManager::onModuleUnloaded(ModuleID moduleId) {
 }
 
 bool ProbeManager::armLive(const std::string& spec, ProbeEvents events) {
-    configure(spec, events);
+    std::vector<Spec> requested = configureSpecs(spec, events);
 
     std::vector<ModuleID> modules;
     {
@@ -199,7 +207,7 @@ bool ProbeManager::armLive(const std::string& spec, ProbeEvents events) {
 
     std::size_t armed = 0;
     for (ModuleID module : modules) {
-        armed += resolveInModule(module, true);
+        armed += resolveInModule(module, true, requested);
     }
     return armed > 0;
 }
@@ -209,15 +217,16 @@ ProbePlan ProbeManager::registerMethod(
     mdMethodDef token,
     std::string display,
     ProbeEvents events) {
+    if (const char* reason = rejit::rejection(info_, moduleId, token)) {
+        if (logger_) {
+            logger_->warn("cannot arm {}: {}", display, reason);
+        }
+        return {};
+    }
     return registry_.registerMethod(moduleId, token, std::move(display), events).plan;
 }
 
-std::size_t ProbeManager::resolveInModule(ModuleID moduleId, bool requestRejit) {
-    std::vector<Spec> specs;
-    {
-        std::lock_guard lock(mutex_);
-        specs = specs_;
-    }
+std::size_t ProbeManager::resolveInModule(ModuleID moduleId, bool requestRejit, const std::vector<Spec>& specs) {
     if (specs.empty()) {
         return 0;
     }
@@ -252,6 +261,12 @@ std::size_t ProbeManager::resolveInModule(ModuleID moduleId, bool requestRejit) 
                 break;
             }
             for (ULONG i = 0; i < count; ++i) {
+                if (const char* reason = rejit::rejection(md, methods[i])) {
+                    if (logger_) {
+                        logger_->warn("cannot arm {}.{}: {}", s.type, s.method, reason);
+                    }
+                    continue;
+                }
                 ProbeRegistry::Registration registration = registry_.registerMethod(
                     moduleId, methods[i], s.type + "." + s.method, s.events);
                 // A live arm deliberately retries an unchanged registration: RequestReJIT

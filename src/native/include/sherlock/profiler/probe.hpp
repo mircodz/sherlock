@@ -137,8 +137,9 @@ private:
         ProbeEvents events;
     };
 
+    std::vector<Spec> configureSpecs(const std::string& spec, ProbeEvents events);
     // Module loads already request shadow-stack ReJIT; live arms need targeted requests.
-    std::size_t resolveInModule(ModuleID moduleId, bool requestRejit);
+    std::size_t resolveInModule(ModuleID moduleId, bool requestRejit, const std::vector<Spec>& specs);
 
     ICorProfilerInfo10* info_;
     Logger* logger_;

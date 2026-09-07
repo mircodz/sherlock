@@ -354,7 +354,7 @@ control::Reply Profiler::handleControl(std::string_view cmd, std::span<const std
         }
         return armTrigger(std::string(args[0]), /*live=*/true)
             ? control::Reply::success("armed")
-            : control::Reply::error("could not arm (unknown kind, or method not loaded yet)");
+            : control::Reply::error("could not arm (unknown kind, method not loaded, or method excluded from instrumentation)");
     }
     if (cmd == control::commands::kBeginCoherentCapture) {
         if (args.empty() || args[0].empty()) {
@@ -513,8 +513,11 @@ bool Profiler::armExitEntryPoint(ModuleID moduleId) {
         return false;
     }
     try {
-        probes->registerMethod(
-            moduleId, static_cast<mdMethodDef>(*token), "entrypoint", ProbeEvents::Return);
+        if (!probes->registerMethod(
+                moduleId, static_cast<mdMethodDef>(*token), "entrypoint", ProbeEvents::Return)) {
+            exitEntryPointArmed_.store(false, std::memory_order_release);
+            return false;
+        }
     } catch (...) {
         exitEntryPointArmed_.store(false, std::memory_order_release);
         throw;

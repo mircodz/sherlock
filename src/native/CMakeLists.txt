@@ -79,6 +79,7 @@ set(SOURCES
     src/profiler/aggregator.cpp
     src/profiler/method_registry.cpp
     src/profiler/process_filter.cpp
+    src/profiler/rejit_policy.cpp
     src/profiler/entrypoint.cpp
     src/profiler/shadowstack.cpp
     src/profiler/il_writer.cpp

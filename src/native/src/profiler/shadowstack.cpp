@@ -3,6 +3,7 @@
 #include "sherlock/common/logger.hpp"
 #include "sherlock/profiler/il_writer.hpp"
 #include "sherlock/profiler/probe.hpp"
+#include "sherlock/profiler/rejit_policy.hpp"
 
 #include <cstring>
 #include <limits>
@@ -445,6 +446,12 @@ void ShadowStackInstrumenter::onModuleLoaded(ModuleID moduleId) {
         ULONG n = 0;
         while (SUCCEEDED(md->EnumMethods(&hm, td, toks, 256, &n)) && n > 0) {
             for (ULONG i = 0; i < n; ++i) {
+                if (const char* reason = rejit::rejection(md, toks[i])) {
+                    if (logger_) {
+                        logger_->trace("not requesting ReJIT for token 0x{:08x}: {}", static_cast<unsigned>(toks[i]), reason);
+                    }
+                    continue;
+                }
                 reMods.push_back(moduleId);
                 reToks.push_back(toks[i]);
             }
@@ -488,6 +495,13 @@ bool ShadowStackInstrumenter::rewrite(ModuleID moduleId, mdMethodDef methodToken
     // The circuit breaker is permanent for this process.
     if (disabled_.load(std::memory_order_relaxed)) {
         skipped_.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    if (const char* reason = rejit::rejection(info_, moduleId, methodToken)) {
+        skipped_.fetch_add(1, std::memory_order_relaxed);
+        if (logger_) {
+            logger_->warn("not rewriting token 0x{:08x}: {}", static_cast<unsigned>(methodToken), reason);
+        }
         return false;
     }
 
