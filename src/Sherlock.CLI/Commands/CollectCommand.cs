@@ -41,7 +41,7 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
         public bool Analyze { get; init; }
     }
 
-    protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellation)
+    public override int Execute(CommandContext context, Settings settings, CancellationToken cancellation)
     {
         IAnsiConsole console = AnsiConsole.Console;
 

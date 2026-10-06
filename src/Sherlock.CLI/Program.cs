@@ -17,8 +17,6 @@ app.Configure(config =>
         .WithDescription("Run a process to completion, capturing snapshots and exit-time artifacts.")
         .WithExample("run", "--", "./MyApp.dll", "arg1")
         .WithExample("run", "--correlate", "--snapshot-on", "throw:My.App.FatalException", "--", "./MyApp.dll");
-    config.AddCommand<McpCommand>("mcp")
-        .WithDescription("Serve the analysis tools to AI agents over MCP (stdio).");
     config.AddCommand<TuiCommand>("tui")
         .WithDescription("Explore the snapshot library in an interactive heap-explorer TUI.");
 });

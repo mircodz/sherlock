@@ -33,7 +33,7 @@ public sealed class AnalyzeCommand : Command<AnalyzeCommand.Settings>
         public bool Interactive { get; init; }
     }
 
-    protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellation)
+    public override int Execute(CommandContext context, Settings settings, CancellationToken cancellation)
     {
         IAnsiConsole console = AnsiConsole.Console;
         try

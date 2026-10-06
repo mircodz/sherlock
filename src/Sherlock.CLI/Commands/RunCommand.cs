@@ -58,7 +58,7 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         public ProfilerLogLevel ProfilerLogLevel { get; init; } = ProfilerLogLevel.Warning;
     }
 
-    protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellation)
+    public override int Execute(CommandContext context, Settings settings, CancellationToken cancellation)
     {
         IAnsiConsole console = AnsiConsole.Console;
 
