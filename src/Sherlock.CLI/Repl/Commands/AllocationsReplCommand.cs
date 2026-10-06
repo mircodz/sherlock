@@ -203,18 +203,18 @@ public sealed class AllocationsReplCommand : IReplCommand
 
         static int PreviousDot(string value, int before)
         {
-            int genericDepth = 0;
+            int depth = 0; // skip dots inside generic arguments and parameter lists
             for (int i = before - 1; i >= 0; i--)
             {
-                if (value[i] == '>')
+                if (value[i] is '>' or ')')
                 {
-                    genericDepth++;
+                    depth++;
                 }
-                else if (value[i] == '<')
+                else if (value[i] is '<' or '(')
                 {
-                    genericDepth--;
+                    depth--;
                 }
-                else if (value[i] == '.' && genericDepth == 0)
+                else if (value[i] == '.' && depth == 0)
                 {
                     return i;
                 }

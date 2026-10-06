@@ -90,7 +90,7 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
                 string? error = null;
                 try
                 {
-                    entry = Capture(signal.Pid, load: false, reason: signal.Name).Entry;
+                    entry = Capture(signal.Pid, load: false, reason: signal.Name);
                 }
                 catch (Exception ex)
                 {
@@ -150,7 +150,7 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
     }
 
     /// <summary>Captures a heap and, when profiled, cumulative allocations.</summary>
-    public CaptureResult Capture(int pid, bool load = true, string? reason = null)
+    public SnapshotEntry Capture(int pid, bool load = true, string? reason = null)
     {
         lock (_captureGate)
         {
@@ -159,10 +159,9 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
             SnapshotCaptureResult capture = SnapshotCapture.Collect(pid, target);
             try
             {
-                SnapshotEntry entry = SaveSnapshot(
+                return SaveSnapshot(
                     pid, capture.DumpPath, load, capture.ProvenancePath,
-                    correlated: capture.Provenance == ProvenanceState.Exact, reason);
-                return new CaptureResult(entry, capture.Provenance);
+                    correlated: target is { HasCorrelation: true }, reason);
             }
             catch (Exception ex)
             {
@@ -212,8 +211,5 @@ public sealed class Workspace(SnapshotStore store) : IDisposable
         }
     }
 }
-
-/// <summary>The outcome of <see cref="Workspace.Capture"/>: the new snapshot and its provenance state.</summary>
-public sealed record CaptureResult(SnapshotEntry Entry, ProvenanceState Provenance);
 
 public sealed record TriggeredCaptureResult(string Probe, SnapshotEntry? Entry, string? Error);

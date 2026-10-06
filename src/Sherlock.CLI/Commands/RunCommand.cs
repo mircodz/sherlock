@@ -41,12 +41,8 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         [Description("Profile only matching executable/entry-DLL filenames. Repeatable; enables profiling of matching children.")]
         public string[] IncludeProcesses { get; init; } = [];
 
-        [CommandOption("--experimental-gc-barrier")]
-        [Description("Experimental: hold the capture GC while taking a correlated dump.")]
-        public bool ExperimentalGcBarrier { get; init; }
-
         [CommandOption("--live")]
-        [Description("Open a live TUI: heap usage + process tree; snapshot a process on demand.")]
+        [Description("Open a live TUI: heap usage + process tree; snapshot a process on demand. Works with or without the profiler.")]
         public bool Live { get; init; }
 
         [CommandOption("--snapshot-on <EVENT>")]
@@ -71,7 +67,7 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         command.AddRange(settings.Args);
         command.AddRange(context.Remaining.Raw);
 
-        var options = new RunOptions { Command = command, Profile = settings.Profile, Correlate = settings.Correlate, CollectChildren = settings.Children, IncludeProcesses = settings.IncludeProcesses, ExperimentalGcBarrier = settings.ExperimentalGcBarrier, SnapshotOn = settings.SnapshotOn, ProfilerLogLevel = settings.ProfilerLogLevel };
+        var options = new RunOptions { Command = command, Profile = settings.Profile, Correlate = settings.Correlate, CollectChildren = settings.Children, IncludeProcesses = settings.IncludeProcesses, SnapshotOn = settings.SnapshotOn, ProfilerLogLevel = settings.ProfilerLogLevel };
         try
         {
             options.Validate();
@@ -79,17 +75,6 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         catch (ArgumentException ex)
         {
             Output.Error(console, $"{ex.Message} Usage: [bold]{RunLauncher.Usage}[/]");
-            return 1;
-        }
-
-        if (settings.Live && options.SnapshotOnExit)
-        {
-            Output.Error(console, $"[bold]--snapshot-on exit[/] cannot be combined with [bold]--live[/].");
-            return 1;
-        }
-        if (settings.Live && !options.NeedsProfiler)
-        {
-            Output.Warning(console, $"[bold]--live[/] needs the profiler; add [bold]--profile[/] or [bold]--correlate[/].");
             return 1;
         }
 
@@ -109,7 +94,9 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         bool capturesSucceeded = true;
         if (settings.Live)
         {
-            Live.LiveDashboard.Run(workspace, target, options.Command, cancellation);
+            capturesSucceeded = Live.LiveDashboard.Run(workspace, target, options.Command, cancellation);
+            // Report anything that landed between the last live poll and quitting.
+            capturesSucceeded &= PumpCaptures(workspace, console);
         }
         else
         {

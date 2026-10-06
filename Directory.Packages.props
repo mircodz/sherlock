@@ -7,6 +7,7 @@
     <PackageVersion Include="coverlet.collector" Version="10.1.0" />
     <PackageVersion Include="Microsoft.Diagnostics.NETCore.Client" Version="0.2.745401" />
     <PackageVersion Include="Microsoft.Diagnostics.Runtime" Version="4.0.732401" />
+    <PackageVersion Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="3.2.8" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
     <PackageVersion Include="Spectre.Console" Version="0.57.3-alpha.0.14" />
     <PackageVersion Include="Spectre.Console.Cli" Version="0.57.2" />

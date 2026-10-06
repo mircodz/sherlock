@@ -86,7 +86,13 @@ public sealed record AllocationProfile(IReadOnlyList<AllocationSite> Sites)
 
     /// <summary>Sites whose call stack contains <paramref name="method"/>.</summary>
     public AllocationProfile Through(string method) =>
-        new(Sites.Where(s => s.Frames.Contains(method)).ToList());
+        new(Sites.Where(s => s.Frames.Any(frame => IsFrameOf(frame, method))).ToList());
+
+    /// <summary>Frames are named <c>Type.Method&lt;T&gt;(params)</c>; a name without parameters matches every overload.</summary>
+    public static bool IsFrameOf(string frame, string method) =>
+        frame.Length > method.Length && frame.StartsWith(method, StringComparison.Ordinal)
+            ? frame[method.Length] is '(' or '<'
+            : frame == method;
 }
 
 /// <summary>Reads an allocation profile from a <c>.slab</c> container (the Allocations section + stack table).</summary>

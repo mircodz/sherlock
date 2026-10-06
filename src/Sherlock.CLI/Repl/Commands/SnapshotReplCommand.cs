@@ -3,6 +3,7 @@ using System.Linq;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using Sherlock.Core.Collection;
+using Sherlock.Core.Store;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -97,10 +98,10 @@ public sealed class SnapshotReplCommand : IReplCommand
 
     private static ReplResult Capture(ReplContext context, int pid)
     {
-        CaptureResult result;
+        SnapshotEntry entry;
         try
         {
-            result = context.Console.Status().Start($"Snapshotting pid {pid}…", _ => context.Workspace.Capture(pid));
+            entry = context.Console.Status().Start($"Snapshotting pid {pid}…", _ => context.Workspace.Capture(pid));
         }
         catch (DumpAnalysisException ex)
         {
@@ -108,25 +109,16 @@ public sealed class SnapshotReplCommand : IReplCommand
             return ReplResult.Failure;
         }
 
-        string contents = result.Entry.HasAllocations
-            ? result.Entry.HasCorrelation ? "heap + allocations + correlation" : "heap + allocations"
+        string contents = entry.HasAllocations
+            ? entry.HasCorrelation ? "heap + allocations + correlation" : "heap + allocations"
             : "heap only";
-        string sizes = result.Entry.HasAllocations
-            ? $"{ByteSize.Format(result.Entry.SizeBytes)} heap + {ByteSize.Format(result.Entry.ProvenanceSizeBytes)} allocations"
-            : ByteSize.Format(result.Entry.SizeBytes);
-        Output.Success(context.Console, $"Saved and loaded [bold]{result.Entry.Id}[/] [#808791]({contents} · {sizes})[/]");
-
-        switch (result.Provenance)
+        string sizes = entry.HasAllocations
+            ? $"{ByteSize.Format(entry.SizeBytes)} heap + {ByteSize.Format(entry.ProvenanceSizeBytes)} allocations"
+            : ByteSize.Format(entry.SizeBytes);
+        Output.Success(context.Console, $"Saved and loaded [bold]{entry.Id}[/] [#808791]({contents} · {sizes})[/]");
+        if (entry.HasCorrelation)
         {
-            case ProvenanceState.Drifted:
-                Output.Warning(context.Console, $"A GC ran during capture; allocation totals remain available, but object correlation was disabled.");
-                break;
-            case ProvenanceState.Exact:
-                Output.Info(context.Console, $"Allocation correlation is exact · use [bold]whoalloc <address>[/].");
-                break;
-            case ProvenanceState.Unverified:
-                Output.Warning(context.Console, $"Correlation could not be verified; allocation totals remain available, but object correlation was disabled.");
-                break;
+            Output.Info(context.Console, $"Use [bold]whoalloc <address>[/] to see where an object was allocated.");
         }
         return ReplResult.Success;
     }

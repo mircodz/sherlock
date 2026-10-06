@@ -331,9 +331,10 @@ TEST(AggregatorSnapshot, WriteFailureIsReportedAndLeavesNoTemporaryFile) {
     EXPECT_FALSE(std::filesystem::exists(missing));
 }
 
-TEST(AggregatorSnapshot, DistinctMethodCookiesRemainDistinctInTheSlab) {
-    MethodRegistry methods([](ModuleID, mdMethodDef) {
-        return MethodRegistry::Resolution{"Example.Generic<T>.Allocate", S_OK, {}};
+TEST(AggregatorSnapshot, OverloadsRemainDistinctInTheSlab) {
+    MethodRegistry methods([](ModuleID, mdMethodDef token) {
+        return MethodRegistry::Resolution{
+            token == 0x06000001 ? "Example.Generic<T>.Allocate(int)" : "Example.Generic<T>.Allocate(string)", S_OK, {}};
     });
     methods.moduleLoaded(0x1000);
     FrameId first = methods.intern(0x1000, 0x06000001);

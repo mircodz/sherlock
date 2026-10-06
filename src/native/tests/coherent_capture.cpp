@@ -34,15 +34,15 @@ TEST(CoherentCaptureBarrier, BeginArmsAndOnlyOneBarrierAtATime) {
 TEST(CoherentCaptureBarrier, MarkReadyRejectsAnythingOtherThanArming) {
     CoherentCaptureBarrier barrier;
     // Unarmed GCs must not change state.
-    EXPECT_FALSE(barrier.markReady(7));
+    EXPECT_FALSE(barrier.markReady());
     EXPECT_EQ(barrier.state(), CoherentCaptureBarrier::State::Idle);
 
     ASSERT_TRUE(barrier.begin("tok"));
-    EXPECT_TRUE(barrier.markReady(7));
+    EXPECT_TRUE(barrier.markReady());
     EXPECT_EQ(barrier.state(), CoherentCaptureBarrier::State::Parked);
 
     // Another GC must not claim an already-parked capture.
-    EXPECT_FALSE(barrier.markReady(8));
+    EXPECT_FALSE(barrier.markReady());
 }
 
 TEST(CoherentCaptureBarrier, AbortResetsAnArmingBarrierWithoutAGc) {
@@ -64,7 +64,7 @@ TEST(CoherentCaptureBarrier, AbortResetsAnArmingBarrierWithoutAGc) {
 TEST(CoherentCaptureBarrier, AbortWakesAParkedBarrier) {
     CoherentCaptureBarrier barrier;
     ASSERT_TRUE(barrier.begin("tok"));
-    ASSERT_TRUE(barrier.markReady(3));
+    ASSERT_TRUE(barrier.markReady());
 
     std::thread parked([&] {
         EXPECT_EQ(barrier.park(10s), CoherentCaptureBarrier::ParkResult::Released);
@@ -79,7 +79,7 @@ TEST(CoherentCaptureBarrier, IsParkedForOnlyMatchesTheArmedToken) {
     CoherentCaptureBarrier barrier;
     ASSERT_TRUE(barrier.begin("tok"));
     EXPECT_FALSE(barrier.isParkedFor("tok")); // still Arming, not Parked yet
-    ASSERT_TRUE(barrier.markReady(3));
+    ASSERT_TRUE(barrier.markReady());
     EXPECT_TRUE(barrier.isParkedFor("tok"));
     EXPECT_FALSE(barrier.isParkedFor("wrong-token"));
 }
@@ -87,25 +87,22 @@ TEST(CoherentCaptureBarrier, IsParkedForOnlyMatchesTheArmedToken) {
 TEST(CoherentCaptureBarrier, ReleaseValidatesTokenAndReportsTheRecordedGcCount) {
     CoherentCaptureBarrier barrier;
     ASSERT_TRUE(barrier.begin("tok"));
-    ASSERT_TRUE(barrier.markReady(42));
+    ASSERT_TRUE(barrier.markReady());
 
-    std::uint64_t gcCount = 0;
-    EXPECT_FALSE(barrier.release("wrong-token", gcCount)); // must not release on a token mismatch
+    EXPECT_FALSE(barrier.release("wrong-token")); // must not release on a token mismatch
     EXPECT_EQ(barrier.state(), CoherentCaptureBarrier::State::Parked);
 
-    EXPECT_TRUE(barrier.release("tok", gcCount));
-    EXPECT_EQ(gcCount, 42u);
+    EXPECT_TRUE(barrier.release("tok"));
 
     // Release is one-shot even before park() consumes it.
-    EXPECT_FALSE(barrier.release("tok", gcCount));
+    EXPECT_FALSE(barrier.release("tok"));
 }
 
 TEST(CoherentCaptureBarrier, ReleaseFailsWhenNothingIsParked) {
     CoherentCaptureBarrier barrier;
-    std::uint64_t gcCount = 0;
-    EXPECT_FALSE(barrier.release("tok", gcCount)); // Idle
+    EXPECT_FALSE(barrier.release("tok")); // Idle
     ASSERT_TRUE(barrier.begin("tok"));
-    EXPECT_FALSE(barrier.release("tok", gcCount)); // Arming, not yet Parked
+    EXPECT_FALSE(barrier.release("tok")); // Arming, not yet Parked
 }
 
 TEST(CoherentCaptureBarrier, ForceReleaseIsANoOpWhenIdle) {
@@ -117,7 +114,7 @@ TEST(CoherentCaptureBarrier, ForceReleaseIsANoOpWhenIdle) {
 TEST(CoherentCaptureBarrier, ParkBlocksUntilReleaseWakesIt) {
     CoherentCaptureBarrier barrier;
     ASSERT_TRUE(barrier.begin("tok"));
-    ASSERT_TRUE(barrier.markReady(5));
+    ASSERT_TRUE(barrier.markReady());
 
     std::atomic<bool> parkReturned{false};
     std::thread parked([&] {
@@ -130,9 +127,7 @@ TEST(CoherentCaptureBarrier, ParkBlocksUntilReleaseWakesIt) {
     std::this_thread::sleep_for(20ms);
     EXPECT_FALSE(parkReturned.load());
 
-    std::uint64_t gcCount = 0;
-    EXPECT_TRUE(barrier.release("tok", gcCount));
-    EXPECT_EQ(gcCount, 5u);
+    EXPECT_TRUE(barrier.release("tok"));
     parked.join();
     EXPECT_TRUE(parkReturned.load());
     EXPECT_EQ(barrier.state(), CoherentCaptureBarrier::State::Idle); // park() always resets to Idle
@@ -141,7 +136,7 @@ TEST(CoherentCaptureBarrier, ParkBlocksUntilReleaseWakesIt) {
 TEST(CoherentCaptureBarrier, ParkTimesOutAndAlwaysReleases) {
     CoherentCaptureBarrier barrier;
     ASSERT_TRUE(barrier.begin("tok"));
-    ASSERT_TRUE(barrier.markReady(9));
+    ASSERT_TRUE(barrier.markReady());
 
     auto start = std::chrono::steady_clock::now();
     auto result = barrier.park(30ms); // nobody ever calls release() - must time out, not hang
@@ -156,7 +151,7 @@ TEST(CoherentCaptureBarrier, ParkTimesOutAndAlwaysReleases) {
 TEST(CoherentCaptureBarrier, ForceReleaseWakesAParkedWaiterLikeShutdown) {
     CoherentCaptureBarrier barrier;
     ASSERT_TRUE(barrier.begin("tok"));
-    ASSERT_TRUE(barrier.markReady(1));
+    ASSERT_TRUE(barrier.markReady());
 
     std::thread parked([&] {
         auto result = barrier.park(10s);
@@ -175,7 +170,7 @@ TEST(CoherentCaptureBarrier, ForceReleaseDuringArmingIsPickedUpByTheUpcomingPark
     ASSERT_TRUE(barrier.begin("tok"));
     barrier.forceRelease(); // still Arming: no one is parked yet
 
-    ASSERT_TRUE(barrier.markReady(2));
+    ASSERT_TRUE(barrier.markReady());
 
     auto start = std::chrono::steady_clock::now();
     auto result = barrier.park(10s); // must return immediately, not block for 10s
@@ -189,12 +184,11 @@ TEST(CoherentCaptureBarrier, CompleteAbortRaceOnlyOneReleaseWins) {
     // Concurrent releases for one token must have a single winner.
     CoherentCaptureBarrier barrier;
     ASSERT_TRUE(barrier.begin("tok"));
-    ASSERT_TRUE(barrier.markReady(11));
+    ASSERT_TRUE(barrier.markReady());
 
     std::atomic<int> successes{0};
     auto tryRelease = [&] {
-        std::uint64_t gcCount = 0;
-        if (barrier.release("tok", gcCount)) {
+        if (barrier.release("tok")) {
             successes.fetch_add(1);
         }
     };

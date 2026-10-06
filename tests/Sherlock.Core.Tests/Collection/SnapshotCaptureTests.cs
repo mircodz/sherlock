@@ -15,20 +15,6 @@ public sealed class SnapshotCaptureTests : IDisposable
 
     public void Dispose() => _tmp.Dispose();
 
-    [Theory]
-    [InlineData(0, 0, ProvenanceState.Exact)]
-    [InlineData(10, 10, ProvenanceState.Exact)]
-    [InlineData(10, 11, ProvenanceState.Drifted)]
-    [InlineData(10, 9, ProvenanceState.Drifted)]
-    [InlineData(-1, 10, ProvenanceState.Unverified)]
-    [InlineData(10, -1, ProvenanceState.Unverified)]
-    [InlineData(-1, -1, ProvenanceState.Unverified)]
-    public void BestEffortCorrelationRequiresKnownMatchingGcCounts(
-        long gcAtEmit, long gcAfterDump, ProvenanceState expected)
-    {
-        Assert.Equal(expected, SnapshotCapture.CorrelationState(gcAtEmit, gcAfterDump));
-    }
-
     [Fact]
     public void CataloguingFailureRetainsTheBundleAndSourceProvenance()
     {
@@ -43,7 +29,7 @@ public sealed class SnapshotCaptureTests : IDisposable
         var container = new ContainerWriter();
         writer.WriteTo(container);
         container.Save(provenance);
-        var capture = new SnapshotCaptureResult(dump, provenance, ProvenanceState.Exact);
+        var capture = new SnapshotCaptureResult(dump, provenance);
 
         string metadata = Path.Combine(session.Dir, "metadata.json");
         File.Delete(metadata);

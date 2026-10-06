@@ -20,19 +20,17 @@ public sealed record RunOptions
     public bool Correlate { get; init; }
     public bool CollectChildren { get; init; }
     public IReadOnlyList<string> IncludeProcesses { get; init; } = [];
-    public bool ExperimentalGcBarrier { get; init; }
     public string? SnapshotOn { get; init; }
     public string? OutputDirectory { get; init; }
     public string? ProfilerPath { get; init; }
     public ProfilerLogLevel ProfilerLogLevel { get; init; } = ProfilerLogLevel.Warning;
     public bool HasProcessFilter => IncludeProcesses.Count > 0;
-    public bool NeedsProfiler => Profile || Correlate || CollectChildren || HasProcessFilter || ExperimentalGcBarrier || SnapshotOn is not null || ProfilerPath is not null;
+    public bool NeedsProfiler => Profile || Correlate || CollectChildren || HasProcessFilter || SnapshotOn is not null || ProfilerPath is not null;
     public bool SnapshotOnExit =>
         SnapshotOn?.Split(
             [';', ','],
             StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
         .Any(value => value.Equals("exit", StringComparison.OrdinalIgnoreCase)) == true;
-    public bool UseGcBarrier => Correlate && (ExperimentalGcBarrier || SnapshotOnExit);
 
     public void Validate()
     {
@@ -43,10 +41,6 @@ public sealed record RunOptions
         if (!Enum.IsDefined(ProfilerLogLevel))
         {
             throw new ArgumentException("Profiler log level must be trace, info, warning, error, or off.", nameof(ProfilerLogLevel));
-        }
-        if (ExperimentalGcBarrier && !Correlate)
-        {
-            throw new ArgumentException("--experimental-gc-barrier requires --correlate.", nameof(ExperimentalGcBarrier));
         }
         ArgumentNullException.ThrowIfNull(IncludeProcesses);
         foreach (string pattern in IncludeProcesses)

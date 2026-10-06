@@ -66,7 +66,7 @@ public sealed class ReplCommandTests : IDisposable
     [InlineData("run")]
     [InlineData("run --snapshot-on")]
     [InlineData("run --snapshot-on exit app")]
-    [InlineData("run --experimental-gc-barrier app")]
+    [InlineData("run --include-process bin/app app")]
     [InlineData("run --live app")]
     [InlineData("snapshot")]
     [InlineData("snapshot --pid")]
@@ -124,7 +124,7 @@ public sealed class ReplCommandTests : IDisposable
     [Fact]
     public void InvalidRunOptionsAreRejectedBeforeCreatingASession()
     {
-        var options = new RunOptions { Command = ["app"], ExperimentalGcBarrier = true };
+        var options = new RunOptions { Command = ["app"], IncludeProcesses = ["bin/app"] };
         Assert.Throws<ArgumentException>(() => RunLauncher.Launch(_workspace, _console, options));
         Assert.Empty(_workspace.Store.Sessions);
         Assert.Empty(Directory.EnumerateFileSystemEntries(_workspace.Store.Root));

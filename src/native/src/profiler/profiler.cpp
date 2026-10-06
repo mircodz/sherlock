@@ -29,7 +29,6 @@ namespace {
 
 // Cap stack depth so pathological recursion can't blow up the hot path or the aggregation key.
 constexpr std::size_t kMaxFrames = 64;
-constexpr std::chrono::seconds kExitCaptureTimeout{90};
 
 // Insert PID before the extension so children inheriting the environment write distinct files.
 std::string withPid(const std::string& path) {
@@ -195,6 +194,13 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
     if (sample != nullptr && sample[0] != '\0')
         sampleInterval = std::strtoull(sample, nullptr, 10);
 
+    const char* captureTimeout = std::getenv("SHERLOCK_CAPTURE_TIMEOUT_MS");
+    if (captureTimeout != nullptr && captureTimeout[0] != '\0') {
+        const unsigned long long ms = std::strtoull(captureTimeout, nullptr, 10);
+        if (ms > 0)
+            captureTimeout_ = std::chrono::milliseconds(ms);
+    }
+
     methods = std::make_unique<MethodRegistry>(corProfilerInfo, logger.get());
     aggregator = std::make_unique<Aggregator>(corProfilerInfo, logger.get(), *methods);
     shadowInstr = std::make_unique<ShadowStackInstrumenter>(corProfilerInfo, logger.get(), *methods);
@@ -289,55 +295,6 @@ control::Reply Profiler::handleControl(std::string_view cmd, std::span<const std
     if (cmd == control::commands::kPing) {
         return control::Reply::success("pong");
     }
-    if (cmd == control::commands::kEmitCorrelation) {
-        if (!correlate || !aggregator) {
-            return control::Reply::error("correlation not enabled for this run");
-        }
-        if (corProfilerInfo == nullptr) {
-            return control::Reply::error("no profiler info");
-        }
-        HRESULT gc = corProfilerInfo->ForceGC(); // settle addresses before emitting
-        if (FAILED(gc)) {
-            return control::Reply::error(std::format("ForceGC failed: 0x{:08x}", static_cast<unsigned>(gc)));
-        }
-        const std::string path = withCaptureId(
-            correlationPath, snapshotSequence.fetch_add(1, std::memory_order_relaxed));
-        if (!aggregator->emitCorrelation(path)) {
-            return control::Reply::error("could not write correlation snapshot");
-        }
-        // sl rechecks this count after the dump: an intervening GC invalidates the address join.
-        return control::Reply::success(path + "\t" + std::to_string(gcCount.load()));
-    }
-    if (cmd == control::commands::kGcCount) {
-        return control::Reply::success(std::to_string(gcCount.load()));
-    }
-    if (cmd == control::commands::kHeapSize) {
-        // Reply: total \t gen0 \t gen1 \t gen2 \t loh \t poh, in bytes.
-        if (corProfilerInfo == nullptr) {
-            return control::Reply::error("no profiler info");
-        }
-        ULONG count = 0;
-        if (FAILED(corProfilerInfo->GetGenerationBounds(0, &count, nullptr)) || count == 0) {
-            return control::Reply::error("generation bounds unavailable");
-        }
-        std::vector<COR_PRF_GC_GENERATION_RANGE> ranges(count);
-        if (FAILED(corProfilerInfo->GetGenerationBounds(count, &count, ranges.data()))) {
-            return control::Reply::error("generation bounds query failed");
-        }
-        std::uint64_t gen[5] = {0, 0, 0, 0, 0};
-        std::uint64_t total = 0;
-        for (ULONG i = 0; i < count; ++i) {
-            const auto len = static_cast<std::uint64_t>(ranges[i].rangeLength);
-            const int g = static_cast<int>(ranges[i].generation);
-            if (g >= 0 && g <= 4) {
-                gen[g] += len;
-            }
-            total += len;
-        }
-        return control::Reply::success(
-            std::to_string(total) + "\t" + std::to_string(gen[0]) + "\t" + std::to_string(gen[1]) + "\t" +
-            std::to_string(gen[2]) + "\t" + std::to_string(gen[3]) + "\t" + std::to_string(gen[4]));
-    }
     if (cmd == control::commands::kFlushAllocations) {
         if (!aggregator) {
             return control::Reply::error("no aggregator");
@@ -418,8 +375,7 @@ control::Reply Profiler::handleControl(std::string_view cmd, std::span<const std
             return control::Reply::error("could not write coherent capture snapshot");
         }
 
-        std::uint64_t gcCountAtReady = 0;
-        if (!coherentCapture_.release(token, gcCountAtReady)) {
+        if (!coherentCapture_.release(token)) {
             std::remove(path.c_str());
             if (coherentForceGcThread_.joinable()) {
                 coherentForceGcThread_.join();
@@ -429,7 +385,7 @@ control::Reply Profiler::handleControl(std::string_view cmd, std::span<const std
         if (coherentForceGcThread_.joinable()) {
             coherentForceGcThread_.join();
         }
-        return control::Reply::success(path + "\t" + std::to_string(gcCountAtReady));
+        return control::Reply::success(path);
     }
     if (cmd == control::commands::kReleaseExitCapture) {
         if (args.empty() || args[0].empty()) {
@@ -548,9 +504,10 @@ void Profiler::handleEntryPointReturn() noexcept {
         exitCapture_.forceRelease();
     }
 
-    if (exitCapture_.wait(kExitCaptureTimeout) ==
+    if (exitCapture_.wait(captureTimeout_) ==
         control::ExitCaptureLatch::WaitResult::TimedOut) {
-        logger->error("snapshot-on exit: timed out after 90s; allowing Main to return");
+        logger->error("snapshot-on exit: no release within {}s; allowing Main to return",
+                      std::chrono::duration_cast<std::chrono::seconds>(captureTimeout_).count());
     }
 }
 
@@ -579,8 +536,7 @@ void Profiler::runCoherentForceGc(std::string token) noexcept {
 // Park only after endGc() remaps the live set. Exceptions must not cross the CLR callback boundary.
 void Profiler::handleCoherentCaptureGc() noexcept {
     try {
-        const std::uint64_t gc = gcCount.load(std::memory_order_relaxed);
-        if (!coherentCapture_.markReady(gc)) {
+        if (!coherentCapture_.markReady()) {
             return; // not the armed GC (barrier idle, or a foreign GC raced in)
         }
         const std::string armedToken = coherentCapture_.token(); // still set: park() clears it on exit
@@ -588,8 +544,7 @@ void Profiler::handleCoherentCaptureGc() noexcept {
         try {
             readySent = control && control->sendEvent({
                 std::string(control::events::kCoherentCaptureReady),
-                armedToken,
-                std::to_string(gc)});
+                armedToken});
         } catch (const std::exception& ex) {
             logger->error("coherent capture: could not send ready event: {}", ex.what());
         } catch (...) {
@@ -600,10 +555,10 @@ void Profiler::handleCoherentCaptureGc() noexcept {
             coherentCapture_.forceRelease();
         }
         // Keep the CLR GC-stalled until complete/abort. The timeout releases a stranded target.
-        control::CoherentCaptureBarrier::ParkResult result =
-            coherentCapture_.park(std::chrono::seconds(60));
+        control::CoherentCaptureBarrier::ParkResult result = coherentCapture_.park(captureTimeout_);
         if (result == control::CoherentCaptureBarrier::ParkResult::TimedOut) {
-            logger->error("coherent capture: 60s timeout waiting for complete/abort; releasing GC barrier (token {})", armedToken);
+            logger->error("coherent capture: no complete/abort within {}s; releasing GC barrier (token {})",
+                          std::chrono::duration_cast<std::chrono::seconds>(captureTimeout_).count(), armedToken);
         }
     } catch (const std::exception& ex) {
         logger->error("coherent capture: GC callback failed: {}", ex.what());
@@ -817,7 +772,6 @@ HRESULT STDMETHODCALLTYPE Profiler::ExceptionCLRCatcherFound() { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ExceptionCLRCatcherExecute() { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ThreadNameChanged(ThreadID, ULONG, WCHAR[]) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::GarbageCollectionStarted(int cGenerations, BOOL generationCollected[], COR_PRF_GC_REASON) {
-    gcCount.fetch_add(1, std::memory_order_relaxed); // for snapshot drift detection
     if (aggregator) aggregator->beginGc();
     int maxGen = 0;
     for (int g = 0; g < cGenerations; ++g)

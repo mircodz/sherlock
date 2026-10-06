@@ -38,7 +38,7 @@ public sealed class RunTargetTests : IDisposable
     }
 
     [Fact]
-    public void ExitSnapshotUsesTheGcBarrierWhenCorrelated()
+    public void SnapshotOnExitIsDetectedAmongOtherEvents()
     {
         var options = new RunOptions
         {
@@ -48,7 +48,6 @@ public sealed class RunTargetTests : IDisposable
         };
 
         Assert.True(options.SnapshotOnExit);
-        Assert.True(options.UseGcBarrier);
         Assert.False((options with { SnapshotOn = "throw:Marker" }).SnapshotOnExit);
     }
 

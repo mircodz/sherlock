@@ -38,7 +38,7 @@ public sealed class AllocationTreeNode(string frame)
             int at = -1;
             for (int i = site.Frames.Count - 1; i >= 0; i--) // deepest occurrence first
             {
-                if (site.Frames[i] == method) { at = i; break; }
+                if (AllocationProfile.IsFrameOf(site.Frames[i], method)) { at = i; break; }
             }
             if (at < 0)
             {

@@ -4,12 +4,14 @@
 #include <format>
 #include <map>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include "sherlock/common/logger.hpp"
+#include "sherlock/profiler/signature.hpp"
 
 namespace Sherlock {
 namespace {
@@ -108,7 +110,7 @@ std::string metadataName(std::string_view stage, Read read, bool allowEmpty = fa
     throw MetadataFailure{E_FAIL, std::string(stage) + "/name-changed"};
 }
 
-std::string genericParameters(IMetaDataImport2* metadata, mdToken owner, ULONG ownArity = kMaxGenericParameters) {
+std::vector<std::string> genericParameterNames(IMetaDataImport2* metadata, mdToken owner) {
     struct Enumeration {
         IMetaDataImport2* metadata;
         HCORENUM handle = nullptr;
@@ -148,30 +150,33 @@ std::string genericParameters(IMetaDataImport2* metadata, mdToken owner, ULONG o
         }
     }
 
-    if (ownArity == kMaxGenericParameters) {
-        ownArity = static_cast<ULONG>(parameters.size());
-    } else if (ownArity > parameters.size()) {
-        throw MetadataFailure{E_INVALIDARG, "GetTypeDefProps/generic-arity"};
-    }
-    std::size_t firstOwn = parameters.size() - ownArity;
-    std::string result = "<";
-    ULONG expected = 0;
-    for (const auto& [sequence, parameter] : parameters) {
-        if (sequence != expected++) {
+    std::vector<std::string> names;
+    names.reserve(parameters.size());
+    for (auto& [sequence, parameter] : parameters) {
+        if (sequence != names.size()) {
             throw MetadataFailure{E_INVALIDARG, "GetGenericParamProps/sequence"};
         }
-        if (sequence < firstOwn) {
-            continue;
-        }
-        if (sequence != firstOwn) {
-            result += ", ";
-        }
-        result += parameter;
+        names.push_back(std::move(parameter));
     }
-    return ownArity == 0 ? std::string{} : result + ">";
+    return names;
 }
 
-std::string declaringType(IMetaDataImport2* metadata, mdTypeDef type) {
+std::string genericSuffix(std::span<const std::string> names) {
+    if (names.empty()) {
+        return {};
+    }
+    std::string result = "<";
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        if (i > 0) {
+            result += ", ";
+        }
+        result += names[i];
+    }
+    return result + ">";
+}
+
+// typeParameters receives the innermost type's full generic parameter list, which VAR indices address.
+std::string declaringType(IMetaDataImport2* metadata, mdTypeDef type, std::vector<std::string>& typeParameters) {
     std::string result;
     for (unsigned depth = 0; depth < kMaxNesting; ++depth) {
         if (TypeFromToken(type) != mdtTypeDef || IsNilToken(type)) {
@@ -181,14 +186,15 @@ std::string declaringType(IMetaDataImport2* metadata, mdTypeDef type) {
         std::string part = metadataName("GetTypeDefProps", [&](WCHAR* buffer, ULONG capacity, ULONG* length) {
             return metadata->GetTypeDefProps(type, buffer, capacity, length, &flags, nullptr);
         });
-        ULONG ownArity = IsTdNested(flags) ? 0 : kMaxGenericParameters;
+        std::vector<std::string> parameters = genericParameterNames(metadata, type);
+        std::size_t ownArity = IsTdNested(flags) ? 0 : parameters.size();
         std::size_t marker = part.rfind('`');
         if (marker != std::string::npos && marker + 1 < part.size()) {
             ULONG arity = 0;
             const char* end = part.data() + part.size();
             auto parsed = std::from_chars(part.data() + marker + 1, end, arity);
             if (parsed.ec == std::errc{} && parsed.ptr == end) {
-                if (arity >= kMaxGenericParameters) {
+                if (arity > parameters.size()) {
                     throw MetadataFailure{E_INVALIDARG, "GetTypeDefProps/generic-arity"};
                 }
                 ownArity = arity;
@@ -197,7 +203,10 @@ std::string declaringType(IMetaDataImport2* metadata, mdTypeDef type) {
         }
         // Nested metadata repeats the enclosing type's parameters; the name's arity
         // counts only the trailing parameters introduced by this declaration.
-        part += genericParameters(metadata, type, ownArity);
+        part += genericSuffix(std::span<const std::string>(parameters).last(ownArity));
+        if (depth == 0) {
+            typeParameters = std::move(parameters);
+        }
         result = result.empty() ? std::move(part) : part + "+" + result;
         if (result.size() > kMaxNameUnits) {
             throw MetadataFailure{E_INVALIDARG, "GetTypeDefProps/symbol-size"};
@@ -210,6 +219,38 @@ std::string declaringType(IMetaDataImport2* metadata, mdTypeDef type) {
         type = enclosing;
     }
     throw MetadataFailure{E_INVALIDARG, "GetNestedClassProps/nesting-limit"};
+}
+
+std::string typeName(IMetaDataImport2* metadata, mdToken type) {
+    if (TypeFromToken(type) == mdtTypeDef) {
+        return metadataName("GetTypeDefProps", [&](WCHAR* buffer, ULONG capacity, ULONG* length) {
+            return metadata->GetTypeDefProps(type, buffer, capacity, length, nullptr, nullptr);
+        });
+    }
+    return metadataName("GetTypeRefProps", [&](WCHAR* buffer, ULONG capacity, ULONG* length) {
+        return metadata->GetTypeRefProps(type, nullptr, buffer, capacity, length);
+    });
+}
+
+// "(int, List<string>)": names stay unique across overloads, which share a frame otherwise.
+std::string parameterList(IMetaDataImport2* metadata, std::span<const BYTE> blob, std::span<const std::string> typeParameters,
+                          std::span<const std::string> methodParameters, bool includeReturnType) {
+    signature::Context context{
+        [metadata](mdToken type) { return typeName(metadata, type); },
+        [metadata](mdTypeSpec spec) {
+            PCCOR_SIGNATURE data = nullptr;
+            ULONG length = 0;
+            check(metadata->GetTypeSpecFromToken(spec, &data, &length), "GetTypeSpecFromToken");
+            return std::span<const BYTE>(data, length);
+        },
+        typeParameters,
+        methodParameters,
+    };
+    try {
+        return signature::format(blob, context, includeReturnType).value_or("(?)");
+    } catch (const MetadataFailure&) {
+        return "(?)";
+    }
 }
 
 MethodRegistry::Resolution resolveDefinition(ICorProfilerInfo10* info, ModuleID module, mdMethodDef token) {
@@ -226,12 +267,17 @@ MethodRegistry::Resolution resolveDefinition(ICorProfilerInfo10* info, ModuleID 
 
     try {
         mdTypeDef type = mdTypeDefNil;
+        PCCOR_SIGNATURE blob = nullptr;
+        ULONG blobLength = 0;
         std::string method = metadataName("GetMethodProps", [&](WCHAR* buffer, ULONG capacity, ULONG* length) {
-            return metadata->GetMethodProps(token, &type, buffer, capacity, length, nullptr, nullptr, nullptr, nullptr, nullptr);
+            return metadata->GetMethodProps(token, &type, buffer, capacity, length, nullptr, &blob, &blobLength, nullptr, nullptr);
         });
-        method += genericParameters(metadata.get(), token);
-        // Lifetime + MethodDef token disambiguate overloads without parsing signature blobs.
-        return {declaringType(metadata.get(), type) + "." + method, S_OK, {}};
+        // Conversion operators overload on their return type alone.
+        const bool conversion = method == "op_Implicit" || method == "op_Explicit";
+        std::vector<std::string> methodParameters = genericParameterNames(metadata.get(), token);
+        std::vector<std::string> typeParameters;
+        std::string symbol = declaringType(metadata.get(), type, typeParameters) + "." + method + genericSuffix(methodParameters);
+        return {symbol + parameterList(metadata.get(), {blob, blobLength}, typeParameters, methodParameters, conversion), S_OK, {}};
     } catch (const MetadataFailure& failure) {
         return {{}, failure.status, failure.stage};
     }
@@ -340,7 +386,7 @@ FrameId MethodRegistry::intern(ModuleID module, mdMethodDef token) {
             return frame;
         }
         if (SUCCEEDED(resolution.status)) {
-            entry.name = std::format("{} [m{}:{:08x}]", safeLabel(resolution.symbol), generation, static_cast<std::uint32_t>(token));
+            entry.name = safeLabel(resolution.symbol);
             entry.resolved = true;
         } else {
             std::string failed = unresolved(frame, entry, resolution.status, resolution.stage);

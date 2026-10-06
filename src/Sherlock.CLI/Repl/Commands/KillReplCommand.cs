@@ -56,7 +56,7 @@ public sealed class KillReplCommand : IReplCommand
             {
                 SnapshotEntry entry = context.Console.Status().Start(
                     $"Snapshotting pid {target.Pid} before kill…",
-                    _ => context.Workspace.Capture(target.Pid, load: false).Entry);
+                    _ => context.Workspace.Capture(target.Pid, load: false));
                 string contents = entry.HasAllocations ? "heap + allocations" : "heap only";
                 Output.Success(context.Console, $"Saved [bold]{entry.Id}[/] [#808791]({contents} · {ByteSize.Format(entry.TotalSizeBytes)})[/]");
             }

@@ -82,6 +82,7 @@ set(SOURCES
     src/profiler/rejit_policy.cpp
     src/profiler/entrypoint.cpp
     src/profiler/shadowstack.cpp
+    src/profiler/signature.cpp
     src/profiler/il_writer.cpp
     src/profiler/probe.cpp
     src/profiler/triggers.cpp

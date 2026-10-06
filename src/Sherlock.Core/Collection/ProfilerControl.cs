@@ -15,11 +15,8 @@ internal sealed class ProfilerControl : IDisposable
 {
     private const int MaxFrameBytes = 16 * 1024 * 1024;
     private static readonly TimeSpan MaxClientWait = TimeSpan.FromSeconds(10);
-    internal const string EmitCorrelation = "emit-correlation";
     internal const string FlushAllocations = "flush-allocations";
     internal const string ArmTrigger = "arm-trigger";
-    internal const string GcCount = "gc-count";
-    internal const string HeapSize = "heap-size";
     internal const string BeginCoherentCapture = "begin-coherent-capture";
     internal const string CompleteCoherentCapture = "complete-coherent-capture";
     internal const string AbortCoherentCapture = "abort-coherent-capture";

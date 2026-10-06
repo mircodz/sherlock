@@ -41,6 +41,25 @@ public sealed class AllocationProfileTests
     }
 
     [Fact]
+    public void MethodNamesWithoutParametersMatchEveryOverload()
+    {
+        var profile = new AllocationProfile([
+            new(["App.Main()", "App.Fill(int)"], 100, 1, 0, 0, "A"),
+            new(["App.Main()", "App.Fill(string)"], 200, 1, 0, 0, "A"),
+            new(["App.Main()", "App.Fill<T>(T)"], 400, 1, 0, 0, "A"),
+            new(["App.Main()", "App.Filler()"], 800, 1, 0, 0, "A"),
+        ]);
+
+        Assert.Equal(700, profile.Through("App.Fill").TotalAllocBytes);
+        Assert.Equal(200, profile.Through("App.Fill(string)").TotalAllocBytes);
+        Assert.Equal(0, profile.Through("App.Fil").TotalAllocBytes);
+
+        AllocationTreeNode callers = AllocationTreeNode.BuildCallers(profile, "App.Fill");
+        Assert.Equal(700, callers.AllocBytes);
+        Assert.Equal("App.Main()", Assert.Single(callers.Children).Frame);
+    }
+
+    [Fact]
     public void HotMethods_UsesOnlySitesInTheTypeProjection()
     {
         AllocationProfile profile = Profile();
