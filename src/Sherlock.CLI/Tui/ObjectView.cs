@@ -8,6 +8,7 @@ using Cellar.Widgets;
 using Cellar.Widgets.Charts.Trees;
 using Sherlock.Core;
 using Sherlock.Core.Analysis;
+using Sherlock.Core.Profiling;
 using static Sherlock.CLI.Tui.ViewFormatting;
 
 namespace Sherlock.CLI.Tui;
@@ -72,8 +73,8 @@ internal static class ObjectView
         Table table = Table(("Method", Constraint.Fill(2), false), ("Namespace", Constraint.Fill(3), false));
         SetRows(table, frames, frame =>
         {
-            int dot = frame.LastIndexOf('.');
-            return [dot >= 0 ? frame[(dot + 1)..] : frame, dot >= 0 ? frame[..dot] : ""];
+            (string type, string method) = FrameNames.Split(frame);
+            return [method, type];
         }, frame => navigate(new MethodTarget(frame)));
         table.Sortable = false;
         return Hinted(new Panel(table, " Allocation stack \u2014 Enter a frame for its callers ") { BorderStyle = BorderStyle.Rounded },

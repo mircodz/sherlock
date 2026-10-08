@@ -51,6 +51,81 @@ public sealed class RunTargetTests : IDisposable
         Assert.False((options with { SnapshotOn = "throw:Marker" }).SnapshotOnExit);
     }
 
+    // Metrics take any pid, so the tests read this test process; the launched command only provides a target.
+    private RunTarget StartIdleTarget() =>
+        RunTarget.Start(new RunOptions { Command = ["dotnet", "--version"], OutputDirectory = _tmp.Path });
+
+    private static bool HasDiagnosticsPort(int pid) =>
+        OperatingSystem.IsWindows() ||
+        Directory.GetFiles(Path.GetTempPath(), $"dotnet-diagnostic-{pid}-*-socket").Length > 0;
+
+    [Fact]
+    public async Task MetricsStreamHeapStatsFromOneSessionPerProcess()
+    {
+        int pid = Environment.ProcessId;
+        if (!HasDiagnosticsPort(pid))
+        {
+            Assert.Skip("The runtime could not open its diagnostics socket (TMPDIR may be too long).");
+        }
+        using RunTarget target = StartIdleTarget();
+
+        Assert.Equal(new RuntimeMetrics(null, null), target.Metrics(pid)); // the session has just started
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        RuntimeMetrics metrics = target.Metrics(pid);
+        while (metrics.Heap is null && elapsed.Elapsed < TimeSpan.FromSeconds(20))
+        {
+            await Task.Delay(100, TestContext.Current.CancellationToken);
+            metrics = target.Metrics(pid);
+        }
+
+        Assert.Null(metrics.Error);
+        Assert.True(metrics.Heap?.Total > 0);
+    }
+
+    [Fact]
+    public void MetricsReportUnreachableProcessesWithoutThrowing()
+    {
+        using RunTarget target = StartIdleTarget();
+
+        RuntimeMetrics metrics = target.Metrics(int.MaxValue);
+
+        Assert.Null(metrics.Heap);
+        Assert.False(string.IsNullOrWhiteSpace(metrics.Error));
+        Assert.Equal(metrics, target.Metrics(int.MaxValue)); // remembered instead of retried on every read
+    }
+
+    [Fact]
+    public async Task MetricsNeverStartASessionWhileACaptureHoldsTheTarget()
+    {
+        int pid = Environment.ProcessId;
+        if (!HasDiagnosticsPort(pid))
+        {
+            Assert.Skip("The runtime could not open its diagnostics socket (TMPDIR may be too long).");
+        }
+        using RunTarget target = StartIdleTarget();
+
+        target.DiagnosticsGate.Wait(TestContext.Current.CancellationToken);
+        try
+        {
+            for (int i = 0; i < 15; i++)
+            {
+                Assert.Equal(new RuntimeMetrics(null, null), target.Metrics(pid));
+                await Task.Delay(100, TestContext.Current.CancellationToken);
+            }
+        }
+        finally
+        {
+            target.DiagnosticsGate.Release();
+        }
+
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        while (target.Metrics(pid).Heap is null && elapsed.Elapsed < TimeSpan.FromSeconds(20))
+        {
+            await Task.Delay(100, TestContext.Current.CancellationToken);
+        }
+        Assert.NotNull(target.Metrics(pid).Heap);
+    }
+
     [Fact]
     public async Task ProcessesIncludesAChildProcess()
     {

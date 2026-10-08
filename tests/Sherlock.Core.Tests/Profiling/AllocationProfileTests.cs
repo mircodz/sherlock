@@ -50,13 +50,29 @@ public sealed class AllocationProfileTests
             new(["App.Main()", "App.Filler()"], 800, 1, 0, 0, "A"),
         ]);
 
-        Assert.Equal(700, profile.Through("App.Fill").TotalAllocBytes);
+        Assert.Equal(700, profile.Through("App.Fill").TotalAllocBytes); // every overload, but not App.Filler
         Assert.Equal(200, profile.Through("App.Fill(string)").TotalAllocBytes);
         Assert.Equal(0, profile.Through("App.Fil").TotalAllocBytes);
 
         AllocationTreeNode callers = AllocationTreeNode.BuildCallers(profile, "App.Fill");
         Assert.Equal(700, callers.AllocBytes);
         Assert.Equal("App.Main()", Assert.Single(callers.Children).Frame);
+    }
+
+    [Fact]
+    public void QualifiedAndReturnTypeLabelsKeepSameNamedMethodsApart()
+    {
+        var profile = new AllocationProfile([
+            new(["App.Mapper.Map(Api.Order)"], 100, 1, 0, 0, "A"),
+            new(["App.Mapper.Map(Data.Order)"], 200, 1, 0, 0, "A"),
+            new(["App.Money.op_Explicit(Int128):int"], 400, 1, 0, 0, "A"),
+            new(["App.Money.op_Explicit(Int128):long"], 800, 1, 0, 0, "A"),
+        ]);
+
+        Assert.Equal(4, profile.HotMethods().Count);
+        Assert.Equal(100, profile.Through("App.Mapper.Map(Api.Order)").TotalAllocBytes);
+        Assert.Equal(300, profile.Through("App.Mapper.Map").TotalAllocBytes);
+        Assert.Equal(1200, profile.Through("App.Money.op_Explicit(Int128)").TotalAllocBytes);
     }
 
     [Fact]

@@ -406,49 +406,25 @@ public static class LiveDashboard
         // Samples metrics without the profiler, so it keeps running while a capture holds the target.
         var sampler = Task.Run(async () =>
         {
-            RuntimeCounters? counters = null;
-            try
+            while (!liveCancellation.IsCancellationRequested && !target.HasExited)
             {
-                while (!liveCancellation.IsCancellationRequested && !target.HasExited)
+                IReadOnlyList<RunProcess> tree = target.Processes();
+                app.Post(new ProcessList(tree));
+                int pid = Volatile.Read(ref selectedPid);
+                RunProcess? process = tree.FirstOrDefault(candidate => candidate.Pid == pid);
+                RuntimeMetrics metrics = process switch
                 {
-                    IReadOnlyList<RunProcess> tree = target.Processes();
-                    app.Post(new ProcessList(tree));
-                    int pid = Volatile.Read(ref selectedPid);
-                    if (counters is not null && counters.Pid != pid)
-                    {
-                        counters.Dispose();
-                        counters = null;
-                    }
-
-                    string? problem = null;
-                    RunProcess? process = tree.FirstOrDefault(candidate => candidate.Pid == pid);
-                    if (process is not { IsDotnet: true })
-                    {
-                        problem = process is null ? "process exited" : "not a .NET process";
-                    }
-                    else if (counters is null)
-                    {
-                        try
-                        {
-                            counters = RuntimeCounters.Start(pid, TimeSpan.FromSeconds(1));
-                        }
-                        catch (DumpAnalysisException ex)
-                        {
-                            problem = ex.InnerException?.Message ?? ex.Message;
-                        }
-                    }
-                    if (!Volatile.Read(ref paused))
-                    {
-                        app.Post(new HeapSample(pid, problem is null ? counters?.Latest : null, problem));
-                    }
-
-                    try { await Task.Delay(500, liveCancellation); }
-                    catch (OperationCanceledException) { break; }
+                    null => new RuntimeMetrics(null, "process exited"),
+                    { IsDotnet: false } => new RuntimeMetrics(null, "not a .NET process"),
+                    _ => target.Metrics(pid),
+                };
+                if (!Volatile.Read(ref paused))
+                {
+                    app.Post(new HeapSample(pid, metrics.Heap, metrics.Error));
                 }
-            }
-            finally
-            {
-                counters?.Dispose();
+
+                try { await Task.Delay(500, liveCancellation); }
+                catch (OperationCanceledException) { break; }
             }
             if (!liveCancellation.IsCancellationRequested)
             {

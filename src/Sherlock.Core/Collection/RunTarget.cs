@@ -38,6 +38,17 @@ public sealed class RunTarget : IDisposable
     /// <summary>Bounds one snapshot capture. The profiler releases a parked GC or exit after the same budget.</summary>
     internal static readonly TimeSpan CaptureTimeout = TimeSpan.FromMinutes(30);
 
+    // EventPipe session commands run managed code on a target's single diagnostics thread. During a coherent
+    // capture that code waits for the parked GC, and the dump request queues behind it until the capture times
+    // out. Counter sessions therefore start and stop only while no capture holds this gate. Not reentrant on purpose.
+    private readonly SemaphoreSlim _diagnosticsGate = new(1, 1);
+    private readonly ConcurrentDictionary<int, RuntimeCounters> _counters = new();
+    private readonly ConcurrentDictionary<int, (string Error, DateTimeOffset RetryAt)> _counterFailures = new();
+    private static readonly TimeSpan CounterRetryDelay = TimeSpan.FromSeconds(2);
+    private bool _disposed;
+
+    internal SemaphoreSlim DiagnosticsGate => _diagnosticsGate;
+
     private readonly ConcurrentDictionary<int, string> _names = new();
     private readonly ConcurrentDictionary<int, byte> _includedPids = new();
     private string? _processSelectionError;
@@ -419,6 +430,43 @@ public sealed class RunTarget : IDisposable
         return (IReadOnlyList<RunTrigger>?)hits ?? [];
     }
 
+    /// <summary>Latest runtime metrics for a .NET process of this run, with or without the profiler. The first call
+    /// starts an EventPipe session that lasts until the process exits or this target is disposed.</summary>
+    public RuntimeMetrics Metrics(int pid)
+    {
+        if (_counters.TryGetValue(pid, out RuntimeCounters? counters))
+        {
+            return new RuntimeMetrics(counters.Latest, null);
+        }
+        if (_counterFailures.TryGetValue(pid, out var failure) && DateTimeOffset.UtcNow < failure.RetryAt)
+        {
+            return new RuntimeMetrics(null, failure.Error);
+        }
+        if (!_diagnosticsGate.Wait(0))
+        {
+            return new RuntimeMetrics(null, null); // a capture holds the target; try again on the next read
+        }
+        try
+        {
+            if (!_disposed && !_counters.ContainsKey(pid))
+            {
+                _counters[pid] = RuntimeCounters.Start(pid, TimeSpan.FromSeconds(1));
+                _counterFailures.TryRemove(pid, out _);
+            }
+            return new RuntimeMetrics(null, null);
+        }
+        catch (DumpAnalysisException ex)
+        {
+            string error = ex.InnerException is OperationCanceledException ? ex.Message : ex.InnerException?.Message ?? ex.Message;
+            _counterFailures[pid] = (error, DateTimeOffset.UtcNow + CounterRetryDelay);
+            return new RuntimeMetrics(null, error);
+        }
+        finally
+        {
+            _diagnosticsGate.Release();
+        }
+    }
+
     public (bool Ok, string Detail) ArmTrigger(int pid, string spec, TimeSpan timeout)
     {
         if (!IncludesProcess(pid))
@@ -469,6 +517,7 @@ public sealed class RunTarget : IDisposable
 
         string? dumpPath = null;
         bool begun = false;
+        _diagnosticsGate.Wait();
         try
         {
             (bool ok, string[] fields) = Request(pid, ProfilerControl.BeginCoherentCapture, TimeSpan.FromSeconds(10), token);
@@ -518,6 +567,7 @@ public sealed class RunTarget : IDisposable
         finally
         {
             _coherentCaptures.TryRemove(token, out _);
+            _diagnosticsGate.Release();
         }
     }
 
@@ -618,6 +668,20 @@ public sealed class RunTarget : IDisposable
     public void Dispose()
     {
         // Dispose releases handles; only Kill terminates the process tree.
+        _diagnosticsGate.Wait();
+        try
+        {
+            _disposed = true;
+            foreach (RuntimeCounters counters in _counters.Values)
+            {
+                counters.Dispose();
+            }
+            _counters.Clear();
+        }
+        finally
+        {
+            _diagnosticsGate.Release();
+        }
         lock (_logLock)
         {
             _log?.Dispose();

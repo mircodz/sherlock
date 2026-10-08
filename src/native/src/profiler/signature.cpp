@@ -53,7 +53,7 @@ const char* keyword(BYTE element) {
 
 class Formatter {
 public:
-    explicit Formatter(const Context& context) : context_(context) {}
+    Formatter(const Context& context, bool qualified) : context_(context), qualified_(qualified) {}
 
     bool method(Reader& reader, std::string& parameters, std::string& returnType, unsigned depth) {
         BYTE convention = 0;
@@ -177,7 +177,7 @@ private:
         }
         const mdToken token = kTables[coded & 3] | (coded >> 2);
         if (TypeFromToken(token) != mdtTypeSpec) {
-            return append(out, shortTypeName(context_.typeName(token)));
+            return append(out, context_.typeName(token, qualified_));
         }
         const std::span<const BYTE> blob = context_.typeSpec(token);
         Reader spec{blob.data(), blob.data() + blob.size()};
@@ -185,16 +185,13 @@ private:
     }
 
     const Context& context_;
+    bool qualified_;
     std::size_t budget_ = kMaxLength;
 };
 
 } // namespace
 
-std::string shortTypeName(std::string_view metadataName) {
-    std::size_t dot = metadataName.rfind('.');
-    if (dot != std::string_view::npos && dot + 1 < metadataName.size()) {
-        metadataName.remove_prefix(dot + 1);
-    }
+std::string withoutArity(std::string_view metadataName) {
     std::size_t marker = metadataName.rfind('`');
     if (marker != std::string_view::npos && marker > 0 && marker + 1 < metadataName.size() &&
         metadataName.find_first_not_of("0123456789", marker + 1) == std::string_view::npos) {
@@ -203,19 +200,46 @@ std::string shortTypeName(std::string_view metadataName) {
     return std::string(metadataName);
 }
 
-std::optional<std::string> format(std::span<const BYTE> methodSignature, const Context& context, bool includeReturnType) {
+std::string shortTypeName(std::string_view metadataName) {
+    std::size_t dot = metadataName.rfind('.');
+    if (dot != std::string_view::npos && dot + 1 < metadataName.size()) {
+        metadataName.remove_prefix(dot + 1);
+    }
+    return withoutArity(metadataName);
+}
+
+std::optional<std::string> format(std::span<const BYTE> methodSignature, const Context& context, Detail detail) {
     Reader reader{methodSignature.data(), methodSignature.data() + methodSignature.size()};
-    Formatter formatter(context);
+    Formatter formatter(context, detail.qualifiedTypes);
     std::string parameters;
     std::string returnType;
     if (!formatter.method(reader, parameters, returnType, 0)) {
         return std::nullopt;
     }
     std::string result = "(" + parameters + ")";
-    if (includeReturnType) {
+    if (detail.returnType) {
         result += ":" + returnType;
     }
     return result;
+}
+
+std::optional<std::string> distinctLabel(
+    std::size_t self, std::size_t count, const std::function<std::optional<std::string>(std::size_t, Detail)>& label) {
+    static constexpr Detail kLevels[] = {{false, false}, {true, false}, {false, true}, {true, true}};
+    for (Detail detail : kLevels) {
+        std::optional<std::string> mine = label(self, detail);
+        if (!mine) {
+            return std::nullopt;
+        }
+        bool shared = false;
+        for (std::size_t other = 0; other < count && !shared; ++other) {
+            shared = other != self && label(other, detail) == mine;
+        }
+        if (!shared) {
+            return mine;
+        }
+    }
+    return std::nullopt;
 }
 
 } // namespace Sherlock::signature

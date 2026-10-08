@@ -173,7 +173,7 @@ public sealed class AllocationsReplCommand : IReplCommand
             double pct = 100.0 * child.AllocBytes / total;
             double survPct = child.AllocBytes == 0 ? 0 : 100.0 * child.SurvivedBytes / child.AllocBytes;
             TreeNode tn = parent.AddNode(
-                $"[#00D7FF]{Markup.Escape(ShortMethod(child.Frame))}[/]  [bold #AFFF00]{ByteSize.Format(child.AllocBytes)}[/] " +
+                $"[#00D7FF]{Markup.Escape(FrameNames.ShortMethod(child.Frame))}[/]  [bold #AFFF00]{ByteSize.Format(child.AllocBytes)}[/] " +
                 $"[#808791]· {Counts.Percent(pct)} · {Counts.Compact(child.AllocCount)}× · {Counts.Percent(survPct, 0)} surv[/]");
             AddChildren(tn, child, total, minFraction);
         }
@@ -183,43 +183,6 @@ public sealed class AllocationsReplCommand : IReplCommand
         {
             long hiddenBytes = kids.Skip(shown.Count).Sum(c => c.AllocBytes);
             parent.AddNode($"[#808791]… {hiddenCount} smaller ({ByteSize.Format(hiddenBytes)})[/]");
-        }
-    }
-
-    private static string ShortMethod(string method)
-    {
-        int methodDot = PreviousDot(method, method.Length);
-        if (methodDot < 0)
-        {
-            return method;
-        }
-
-        int typeDot = PreviousDot(method, methodDot);
-        if (typeDot == methodDot - 1)
-        {
-            typeDot = PreviousDot(method, typeDot);
-        }
-        return typeDot < 0 ? method : method[(typeDot + 1)..];
-
-        static int PreviousDot(string value, int before)
-        {
-            int depth = 0; // skip dots inside generic arguments and parameter lists
-            for (int i = before - 1; i >= 0; i--)
-            {
-                if (value[i] is '>' or ')')
-                {
-                    depth++;
-                }
-                else if (value[i] is '<' or '(')
-                {
-                    depth--;
-                }
-                else if (value[i] == '.' && depth == 0)
-                {
-                    return i;
-                }
-            }
-            return -1;
         }
     }
 }

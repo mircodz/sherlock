@@ -73,7 +73,7 @@ public static class AllocationDot
 
     private static string[] Label(string method, long flat, long cum, long total)
     {
-        string name = ShortMethod(method);
+        string name = FrameNames.ShortMethod(method);
         if (flat == cum)
         {
             return [name, $"{ByteSize.Format(cum)} ({100.0 * cum / total:0.0}%)"];
@@ -87,10 +87,4 @@ public static class AllocationDot
 
     /// <summary>DOT-safe ID within this process.</summary>
     private static string Id(string method) => $"n{(uint)StringComparer.Ordinal.GetHashCode(method):x}";
-
-    private static string ShortMethod(string frame)
-    {
-        string[] parts = frame.Split('.');
-        return parts.Length <= 2 ? frame : string.Join('.', parts[^2..]);
-    }
 }

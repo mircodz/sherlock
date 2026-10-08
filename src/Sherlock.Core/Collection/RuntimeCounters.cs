@@ -13,9 +13,14 @@ namespace Sherlock.Core.Collection;
 /// since monitoring started; <paramref name="At"/> is when the heap size arrived.</summary>
 public sealed record HeapStats(long Total, long Gen0, long Gen1, long Gen2, long Loh, long Poh, long Collections, DateTimeOffset At);
 
+/// <summary>A metrics reading: <paramref name="Heap"/> is null until the first counter interval arrives, or when
+/// <paramref name="Error"/> explains why the counters are unavailable.</summary>
+public sealed record RuntimeMetrics(HeapStats? Heap, string? Error);
+
 /// <summary>Streams the runtime's System.Runtime counters over EventPipe. Works for any .NET process, profiled or not.</summary>
 public sealed class RuntimeCounters : IDisposable
 {
+    private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(5);
     private readonly EventPipeSession? _session;
     private readonly Lock _lock = new();
     private double _heapMegabytes = -1;
@@ -31,7 +36,9 @@ public sealed class RuntimeCounters : IDisposable
         _session = session;
     }
 
-    /// <exception cref="DumpAnalysisException">The process has no reachable diagnostics port.</exception>
+    /// <summary>Starting or stopping a session runs managed code in the target, so it waits while the target's GC
+    /// is suspended. Never call this, or <see cref="Dispose"/>, while a coherent capture holds the process.</summary>
+    /// <exception cref="DumpAnalysisException">The process has no reachable diagnostics port or did not respond.</exception>
     public static RuntimeCounters Start(int pid, TimeSpan interval)
     {
         EventPipeSession session;
@@ -39,7 +46,16 @@ public sealed class RuntimeCounters : IDisposable
         {
             var provider = new EventPipeProvider("System.Runtime", EventLevel.Informational, 0,
                 new Dictionary<string, string> { ["EventCounterIntervalSec"] = interval.TotalSeconds.ToString(CultureInfo.InvariantCulture) });
-            session = new DiagnosticsClient(pid).StartEventPipeSession([provider], requestRundown: false);
+            using var timeout = new CancellationTokenSource(CommandTimeout);
+            // Counters need little buffering, and the target's memory is what is being measured.
+            session = new DiagnosticsClient(pid)
+                .StartEventPipeSessionAsync([provider], requestRundown: false, circularBufferMB: 4, timeout.Token)
+                .GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException ex)
+        {
+            throw new DumpAnalysisException(
+                $"Runtime counters are unavailable for process {pid}: it did not respond within {CommandTimeout.TotalSeconds:0} seconds.", ex);
         }
         catch (Exception ex)
         {
@@ -123,18 +139,15 @@ public sealed class RuntimeCounters : IDisposable
         {
             return;
         }
-        // Stopping waits on the target's diagnostics thread, which is frozen while a dump is written.
-        _ = Task.Run(() =>
+        try
         {
-            try
-            {
-                session.Stop();
-            }
-            catch (Exception)
-            {
-                // The target may already be gone.
-            }
-            session.Dispose();
-        });
+            using var timeout = new CancellationTokenSource(CommandTimeout);
+            session.StopAsync(timeout.Token).GetAwaiter().GetResult();
+        }
+        catch (Exception)
+        {
+            // The target is gone or unresponsive; closing the stream below also ends the session.
+        }
+        session.Dispose();
     }
 }
