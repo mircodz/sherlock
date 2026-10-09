@@ -150,7 +150,8 @@ public sealed class Snapshot : IDisposable
         return _diagnosis ??= new HeapDoctor(this).Diagnose(cancellationToken);
     }
 
-    public string? WhoAllocated(ulong address) => HasCorrelation ? GetProvenance()?.StackFor(address) : null;
+    /// <summary>See <see cref="Profiling.ProvenanceReader.FramesFor"/>.</summary>
+    public IReadOnlyList<string>? WhoAllocated(ulong address) => HasCorrelation ? GetProvenance()?.FramesFor(address) : null;
 
     internal HeapGraph GetHeapGraph(CancellationToken cancellationToken = default) => (_heapGraph ??= new HeapGraphProvider(this)).Get(cancellationToken);
     internal HeapGraph? TryGetCachedHeapGraph() => (_heapGraph ??= new HeapGraphProvider(this)).TryGetCachedOrOnDisk();

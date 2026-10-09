@@ -30,8 +30,8 @@ public sealed class GcRootReplCommand : IReplCommand
         context.Console.MarkupLineInterpolated($"[#808791]{Counts.Format(paths.Count)} root{(paths.Count == 1 ? "" : "s")} found[/]");
         foreach (GcRootPath path in paths)
         {
-            string flags = path.Root.IsPinned ? " [#FFAF00]pinned[/]" : "";
-            context.Console.MarkupLineInterpolated($"[bold]{path.Root.Kind}[/] [#808791]at[/] [#FFD75F]0x{path.Root.Address:x12}[/]{flags}");
+            context.Console.MarkupInterpolated($"[bold]{path.Root.Kind}[/] [#808791]at[/] [#FFD75F]0x{path.Root.Address:x12}[/]");
+            context.Console.MarkupLine(path.Root.IsPinned ? " [#FFAF00]pinned[/]" : "");
             for (int i = 0; i < path.Path.Count; i++)
             {
                 GcRootNode node = path.Path[i];

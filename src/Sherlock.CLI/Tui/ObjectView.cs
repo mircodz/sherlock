@@ -23,9 +23,9 @@ internal static class ObjectView
                 target => navigate(new ObjTarget(target)), type => navigate(new TypeTarget(type))))
             .Add("GC roots", () => new AsyncContent(cancellation => Roots(snapshot.Roots(address, cancellation), navigate)));
 
-        if (snapshot.HasCorrelation && snapshot.WhoAllocated(address) is { } stack)
+        if (snapshot.HasCorrelation && snapshot.WhoAllocated(address) is { } frames)
         {
-            tabs.Add("whoalloc", () => AllocationStack(stack, navigate));
+            tabs.Add("whoalloc", () => AllocationStack(frames, navigate));
         }
         tabs.ActiveIndex = tab switch
         {
@@ -66,9 +66,14 @@ internal static class ObjectView
             "Tab switch view  \u00b7  click a holder to inspect it  \u00b7  Backspace back");
     }
 
-    private static Widget AllocationStack(string stack, Action<NavigationTarget> navigate)
+    private static Widget AllocationStack(IReadOnlyList<string> stack, Action<NavigationTarget> navigate)
     {
-        string[] frames = stack.Split(';');
+        if (stack.Count == 0)
+        {
+            return new Panel(new Padding(new Label(new StyledText(ProvenanceReader.NoManagedFrames, Theme.Current.MutedStyle)),
+                new Thickness(1)), " Allocation stack ") { BorderStyle = BorderStyle.Rounded };
+        }
+        string[] frames = [.. stack];
         Array.Reverse(frames);
         Table table = Table(("Method", Constraint.Fill(2), false), ("Namespace", Constraint.Fill(3), false));
         SetRows(table, frames, frame =>

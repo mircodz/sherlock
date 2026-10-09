@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using Microsoft.Diagnostics.Runtime;
 using Sherlock.CLI.Rendering;
+using Sherlock.Core.Profiling;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -32,8 +33,8 @@ public sealed class WhoAllocReplCommand : IReplCommand
             : "[#808791]<not a live object in this dump>[/]";
         context.Console.MarkupLine($"[#FFD75F]0x{address:x}[/]  {typeLine}");
 
-        string? folded = context.Snapshot.WhoAllocated(address);
-        if (folded is null)
+        IReadOnlyList<string>? frames = context.Snapshot.WhoAllocated(address);
+        if (frames is null)
         {
             context.Console.MarkupLine(
                 "[#FFAF00]No allocation record.[/] [#808791]Untracked — allocated before profiling started, " +
@@ -41,13 +42,17 @@ public sealed class WhoAllocReplCommand : IReplCommand
             return ReplResult.Success;
         }
 
-        // Stored root-first; display the allocation site first.
-        string[] frames = folded.Split(';');
-        context.Console.MarkupLine("[#808791]allocated at:[/]");
-        for (int i = 0; i < frames.Length; i++)
+        if (frames.Count == 0)
         {
-            string frame = frames[frames.Length - 1 - i]; // leaf->root
-            context.Console.MarkupLineInterpolated($"  [#00D7FF]#{i}[/] {frame}");
+            context.Console.MarkupLineInterpolated($"[#808791]{ProvenanceReader.NoManagedFrames}[/]");
+            return ReplResult.Success;
+        }
+
+        // Stored root-first; display the allocation site first.
+        context.Console.MarkupLine("[#808791]allocated at:[/]");
+        for (int i = 0; i < frames.Count; i++)
+        {
+            context.Console.MarkupLineInterpolated($"  [#00D7FF]#{i}[/] {frames[frames.Count - 1 - i]}");
         }
         return ReplResult.Success;
     }

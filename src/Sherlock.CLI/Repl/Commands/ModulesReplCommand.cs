@@ -39,9 +39,9 @@ public sealed class ModulesReplCommand : IReplCommand
 
         foreach (ModuleInfo module in modules)
         {
-            string name = module.IsDynamic ? $"{Path.GetFileName(module.Name)} [#808791](dynamic)[/]" : Path.GetFileName(module.Name);
+            string name = Markup.Escape(Path.GetFileName(module.Name));
             table.AddRow(
-                Markup.Escape(name),
+                module.IsDynamic ? $"{name} [#808791](dynamic)[/]" : name,
                 module.ImageBase == 0 ? "-" : $"[#FFD75F]0x{module.ImageBase:x}[/]",
                 module.Size == 0 ? "-" : $"[bold #F2F2F2]{ByteSize.Format((long)module.Size)}[/]");
         }

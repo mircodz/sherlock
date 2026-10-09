@@ -3,6 +3,7 @@ using System.Threading;
 using Microsoft.Diagnostics.Runtime;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
+using Sherlock.Core.Analysis;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -147,7 +148,7 @@ public sealed class PrintExReplCommand : IReplCommand
         field.ElementType switch
         {
             ClrElementType.Boolean => field.Read<bool>(addr, false) ? "true" : "false",
-            ClrElementType.Char => $"'{field.Read<char>(addr, false)}'",
+            ClrElementType.Char => $"'{ObjectInspector.EscapePreview(field.Read<char>(addr, false).ToString(), '\'')}'",
             ClrElementType.Int8 => field.Read<sbyte>(addr, false).ToString(),
             ClrElementType.UInt8 => field.Read<byte>(addr, false).ToString(),
             ClrElementType.Int16 => field.Read<short>(addr, false).ToString(),

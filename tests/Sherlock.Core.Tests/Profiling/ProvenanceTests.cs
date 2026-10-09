@@ -88,11 +88,25 @@ public class ProvenanceTests : IDisposable
 
         Assert.True(r.TryGetStack(0x2000, out uint sid));
         Assert.Equal(s1, sid);
-        Assert.Equal("Program.Main;Registry.Add", r.StackFor(0x2000));
-        Assert.Equal("Program.Main;List.Resize", r.StackFor(0x3000));
-        Assert.Equal("Program.Main;Registry.Add", r.StackFor(0x1000));
+        Assert.Equal(["Program.Main", "Registry.Add"], r.FramesFor(0x2000)!);
+        Assert.Equal(["Program.Main", "List.Resize"], r.FramesFor(0x3000)!);
+        Assert.Equal(["Program.Main", "Registry.Add"], r.FramesFor(0x1000)!);
         Assert.False(r.TryGetStack(0x1500, out _)); // untracked
-        Assert.Null(r.StackFor(0x1500));
+        Assert.Null(r.FramesFor(0x1500));
+    }
+
+    [Fact]
+    public void RuntimeAllocationsHaveAnEmptyStackRatherThanNone()
+    {
+        var w = new ProvenanceWriter();
+        uint empty = w.InternStack([]);
+        w.AddAllocation(empty, w.InternType("T"), 100, 1, 100, 1);
+        w.AddObject(0x1000, empty);
+        using SlabFile slab = Write(w);
+        var r = new ProvenanceReader(slab);
+
+        Assert.Empty(r.FramesFor(0x1000)!);
+        Assert.Null(r.FramesFor(0x2000));
     }
 
     [Fact]
@@ -103,7 +117,7 @@ public class ProvenanceTests : IDisposable
         using SlabFile slab = Write(w); // no AddObject → no Correlation section
         var r = new ProvenanceReader(slab);
         Assert.Equal(0L, r.CorrelationCount);
-        Assert.Null(r.StackFor(0x1000));
+        Assert.Null(r.FramesFor(0x1000));
     }
 
     [Fact]

@@ -312,7 +312,7 @@ public sealed class ObjectInspector(Snapshot snapshot)
     private static string Preview(string text, bool escape) =>
         escape ? EscapePreview(text) : text.Length > StringPreviewLength ? text[..StringPreviewLength] + "…" : text;
 
-    internal static string EscapePreview(string text, char quote = '"')
+    public static string EscapePreview(string text, char quote = '"')
     {
         var result = new StringBuilder(Math.Min(text.Length, StringPreviewLength));
         for (int i = 0; i < text.Length; i++)
