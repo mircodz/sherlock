@@ -25,6 +25,8 @@ public sealed class FrameNamesTests
     [InlineData("App.Order..ctor(int)", "Order..ctor(int)")]
     [InlineData("App.Outer+Inner.Run()", "Outer+Inner.Run()")]
     [InlineData("Program.Main(string[])", "Program.Main(string[])")]
+    [InlineData("App.Cache<Api.Order>.Add(Api.Order)", "Cache<Api.Order>.Add(Api.Order)")]
+    [InlineData("<unresolved method frame=1>", "<unresolved method frame=1>")]
     public void ShortMethodDropsTheNamespace(string frame, string expected)
     {
         Assert.Equal(expected, FrameNames.ShortMethod(frame));
@@ -40,6 +42,12 @@ public sealed class FrameNamesTests
     [InlineData("App.Mapper.Map(Api.Order)", "App.Mapper.Map(Api", false)]
     [InlineData("App.List<T>.Add(T)", "App.List", false)]
     [InlineData("App.Mapper.Map(int)", "", false)]
+    [InlineData("App.Data.Mapper.Map(Api.Order)", "Mapper.Map", true)]
+    [InlineData("App.Data.Mapper.Map(Api.Order)", "Mapper.Map(Api.Order)", true)]
+    [InlineData("App.Order..ctor(int)", "Order..ctor", true)]
+    [InlineData("App.Cache<Api.Order>.Add(int)", "Cache<Api.Order>.Add", true)]
+    [InlineData("App.Data.Mapper.Map(Api.Order)", "Data.Mapper.Map", false)]
+    [InlineData("App.Data.Mapper.Map(Api.Order)", "Map", false)]
     public void MatchesOverloadsOnlyWhereTheQueryStops(string frame, string method, bool expected)
     {
         Assert.Equal(expected, FrameNames.Matches(frame, method));

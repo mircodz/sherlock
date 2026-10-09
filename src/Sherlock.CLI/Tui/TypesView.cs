@@ -5,6 +5,8 @@ using System.Linq;
 using Cellar.Layout;
 using Cellar.Primitives;
 using Cellar.Terminal;
+using Cellar.Text;
+using Cellar.Theming;
 using Cellar.Widgets;
 using Sherlock.Core;
 using static Sherlock.CLI.Tui.ViewFormatting;
@@ -17,7 +19,8 @@ internal static class TypesView
     {
         List<HeapTypeStat> types = histogram.OrderByDescending(s => s.TotalSize).ToList();
         Table table = Table(("Type", Constraint.Fill(3), false), ("Count", Constraint.Length(11), true),
-            ("Bytes", Constraint.Length(11), true), ("%", Constraint.Length(6), true), ("share", Constraint.Length(14), false));
+            ("Bytes", Constraint.Length(11), true), ("%", Constraint.Length(6), true), ("share", Constraint.Length(14), false),
+            ("Namespace", Constraint.Fill(2), false));
 
         void Populate(string query)
         {
@@ -29,37 +32,57 @@ internal static class TypesView
             SetRows(table, rows, row =>
             {
                 double percent = 100.0 * (long)row.TotalSize / total;
-                return [row.TypeName, row.Count.ToString("N0", CultureInfo.InvariantCulture), ByteFormat.Human(row.TotalSize),
-                    percent.ToString("0.0", CultureInfo.InvariantCulture), Bar(percent, 12)];
+                return [TypeNames.Short(row.TypeName), row.Count.ToString("N0", CultureInfo.InvariantCulture), ByteFormat.Human(row.TotalSize),
+                    percent.ToString("0.0", CultureInfo.InvariantCulture), Bar(percent, 12), TypeNames.Namespace(row.TypeName)];
             }, row => navigate(new TypeTarget(row.TypeName)));
         }
         Populate("");
         var filter = new Input { Placeholder = "/ to filter types by name\u2026", OnChange = Populate };
-        return Hinted(new Panel(new FilterStack(filter, table), " Types ") { BorderStyle = BorderStyle.Rounded },
-            "Enter \u2192 instances  \u00b7  / filter  \u00b7  Esc unfocus  \u00b7  s sort  \u00b7  Backspace back");
+        return Hinted(new Panel(new FilterStack(filter, table, Populate), " Types ") { BorderStyle = BorderStyle.Rounded },
+            "Enter instances  \u00b7  / filter  \u00b7  s sort");
     }
 
     public static Widget Instances(InstanceListing listing, string typeName, Action<NavigationTarget> navigate)
     {
-        Table table = Table(("Address", Constraint.Length(16), false), ("Type", Constraint.Fill(2), false),
-            ("Size", Constraint.Length(10), true), ("Preview", Constraint.Fill(3), false));
+        if (listing.Instances.Count == 0)
+        {
+            string message = typeName == "Free"
+                ? "Free is unused space between objects on the GC heap, not a type with instances."
+                : $"No live instances of {TypeNames.Short(typeName)} in this snapshot.";
+            return Hinted(new Panel(new Padding(new Label(new StyledText(message, Theme.Current.MutedStyle)), new Thickness(1)),
+                $" {TypeNames.Short(typeName)} ") { BorderStyle = BorderStyle.Rounded }, "");
+        }
+        string title = $" {TypeNames.Short(typeName)} \u2014 {listing.TotalMatched:N0} instances, {ByteFormat.Human(listing.TotalMatchedSize)} ";
+        if (listing.Instances.Count < listing.TotalMatched)
+        {
+            title += $"\u00b7 showing the first {listing.Instances.Count:N0} ";
+        }
+        Table table = Table(("Address", Constraint.Length(16), false), ("Size", Constraint.Length(10), true),
+            ("Preview", Constraint.Fill(), false));
         SetRows(table, listing.Instances,
-            row => [$"0x{row.Address:x}", TypeNames.Short(row.TypeName), ByteFormat.Human(row.Size), row.Preview ?? ""],
+            row => [Sherlock.CLI.Rendering.Addresses.Format(row.Address), ByteFormat.Human(row.Size), row.Preview ?? ""],
             row => navigate(new ObjTarget(row.Address)));
-        return Hinted(new Panel(table, $" {TypeNames.Short(typeName)} \u2014 {listing.TotalMatched:N0} instances, {ByteFormat.Human(listing.TotalMatchedSize)} ") { BorderStyle = BorderStyle.Rounded },
-            "Enter inspect  \u00b7  Backspace back");
+        return Hinted(new Panel(table, title) { BorderStyle = BorderStyle.Rounded }, "Enter inspect  \u00b7  s sort");
     }
 
+    /// <summary>The filter box above the types table. The table has focus; '/' moves it to the filter, where Enter
+    /// keeps the filter and Esc clears it, both returning to the table.</summary>
     private sealed class FilterStack : Widget
     {
+        private const string FilteringPlaceholder = "type a name  \u00b7  Enter keeps the filter  \u00b7  Esc clears it";
         private readonly Input _input;
         private readonly Widget _body;
+        private readonly Action<string> _apply;
         private readonly Stack _stack;
+        private readonly string _idlePlaceholder;
+        private bool _filtering;
 
-        public FilterStack(Input input, Widget body)
+        public FilterStack(Input input, Widget body, Action<string> apply)
         {
             _input = input;
             _body = body;
+            _apply = apply;
+            _idlePlaceholder = input.Placeholder;
             _stack = new Stack(Direction.Vertical).Add(input, Constraint.Length(1)).Add(body, Constraint.Fill());
         }
 
@@ -69,11 +92,9 @@ internal static class TypesView
             get => _stack.HasFocus;
             set
             {
-                _stack.HasFocus = value;
-                if (value && !_input.HasFocus && !_body.HasFocus)
-                {
-                    _body.HasFocus = true;
-                }
+                _stack.HasFocus = value; // focuses the stack's first child, the filter; correct that below
+                _input.HasFocus = value && _filtering;
+                _body.HasFocus = value && !_filtering;
             }
         }
         protected override void VisitChildren(Action<Widget> visit) => visit(_stack);
@@ -84,20 +105,30 @@ internal static class TypesView
         {
             if (input is KeyEvent key)
             {
-                if (!_input.HasFocus && key.IsChar && key.Rune.Value == '/')
+                if (!_filtering && key.IsChar && key.Rune.Value == '/')
                 {
-                    _body.HasFocus = false;
-                    _input.HasFocus = true;
+                    SetFiltering(true);
                     return true;
                 }
-                if (_input.HasFocus && key.Key == Key.Escape)
+                if (_filtering && key.Key is Key.Enter or Key.Escape)
                 {
-                    _input.HasFocus = false;
-                    _body.HasFocus = true;
+                    if (key.Key == Key.Escape)
+                    {
+                        _input.Text = "";
+                        _apply("");
+                    }
+                    SetFiltering(false);
                     return true;
                 }
             }
             return _stack.OnEvent(input);
+        }
+
+        private void SetFiltering(bool filtering)
+        {
+            _filtering = filtering;
+            _input.Placeholder = filtering ? FilteringPlaceholder : _idlePlaceholder;
+            HasFocus = true;
         }
     }
 }

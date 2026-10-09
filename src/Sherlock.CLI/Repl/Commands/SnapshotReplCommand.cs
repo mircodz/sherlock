@@ -13,8 +13,10 @@ public sealed class SnapshotReplCommand : IReplCommand
 {
     public string Name => "snapshot";
     public IReadOnlyList<string> Aliases => ["snap", "collect"];
-    public string Summary => "Snapshot a live .NET process into the library (default: the live app; `snapshot <pid>` for a specific one).";
+    public string Summary => "Snapshot a live .NET process into the library (default: the running app).";
     public string Usage => "snapshot [pid | --pid N | --name X]";
+    public int MaxArgs => 2;
+    public IReadOnlyList<string>? Options => ["--pid", "--name"];
     public string Category => "Live";
 
     public ReplResult Execute(ReplContext context, string[] args)
@@ -51,7 +53,7 @@ public sealed class SnapshotReplCommand : IReplCommand
                     Output.Warning(context.Console, $"Multiple live .NET processes; use [bold]snapshot <pid>[/]:");
                     foreach (RunProcess p in live)
                     {
-                        context.Console.MarkupLineInterpolated($"    [#FFD75F]{p.Pid}[/]  [#00D7FF]{p.Name}[/]  [#808791]{(p.IsRoot ? "root" : "child")}[/]");
+                        context.Console.MarkupLineInterpolated($"    [{Palette.Address}]{p.Pid}[/]  [{Palette.Name}]{p.Name}[/]  [{Palette.Muted}]{(p.IsRoot ? "root" : "child")}[/]");
                     }
                 }
                 return ReplResult.Failure;
@@ -115,7 +117,7 @@ public sealed class SnapshotReplCommand : IReplCommand
         string sizes = entry.HasAllocations
             ? $"{ByteSize.Format(entry.SizeBytes)} heap + {ByteSize.Format(entry.ProvenanceSizeBytes)} allocations"
             : ByteSize.Format(entry.SizeBytes);
-        Output.Success(context.Console, $"Saved and loaded [bold]{entry.Id}[/] [#808791]({contents} · {sizes})[/]");
+        Output.Success(context.Console, $"Saved and loaded [bold]{entry.Id}[/] [{Palette.Muted}]({contents} · {sizes})[/]");
         if (entry.HasCorrelation)
         {
             Output.Info(context.Console, $"Use [bold]whoalloc <address>[/] to see where an object was allocated.");

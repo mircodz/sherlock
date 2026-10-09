@@ -31,6 +31,12 @@ std::string shortTypeName(std::string_view metadataName);
 // "List`1" -> "List"; names without a numeric arity marker are unchanged.
 std::string withoutArity(std::string_view metadataName);
 
+// Spells a constructed type the way ClrMD names heap objects, so profiler and heap type names can be joined:
+// segments {"System.Collections.Generic.Dictionary`2", "Entry"} (outermost first) with arguments
+// {"System.String", "System.Object"} -> "System.Collections.Generic.Dictionary<System.String, System.Object>+Entry".
+// Each segment takes as many arguments as its own arity marker. Returns nullopt when they don't add up.
+std::optional<std::string> constructedTypeName(std::span<const std::string> segments, std::span<const std::string> typeArguments);
+
 // Formats a MethodDefSig as a C#-style parameter list such as "(int, List<string>, ref T)", with
 // ":<return type>" appended when requested. Returns nullopt for malformed or oversized signatures.
 std::optional<std::string> format(std::span<const BYTE> methodSignature, const Context& context, Detail detail);

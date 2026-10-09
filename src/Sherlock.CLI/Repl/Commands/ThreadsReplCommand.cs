@@ -11,8 +11,9 @@ public sealed class ThreadsReplCommand : IReplCommand
 {
     public string Name => "threads";
     public IReadOnlyList<string> Aliases => ["t"];
-    public string Summary => "List managed threads, or show one thread's stack with `threads <id>`.";
+    public string Summary => "List managed threads, or show one thread's stack.";
     public string Usage => "threads [managed-thread-id]";
+    public int MaxArgs => 1;
 
     public ReplResult Execute(ReplContext context, string[] args)
     {
@@ -28,7 +29,7 @@ public sealed class ThreadsReplCommand : IReplCommand
 
             if (thread is null)
             {
-                context.Console.MarkupLineInterpolated($"[#FFAF00]No managed thread with id {id}.[/]");
+                context.Console.MarkupLineInterpolated($"[{Palette.Warning}]No managed thread with id {id}.[/]");
                 return ReplResult.Failure;
             }
 
@@ -54,7 +55,7 @@ public sealed class ThreadsReplCommand : IReplCommand
         }
 
         context.Console.Write(table);
-        context.Console.MarkupLine($"[#808791]{threads.Count} managed threads. Use[/] threads <id> [#808791]for a stack.[/]");
+        context.Console.MarkupLine($"[{Palette.Muted}]{threads.Count} managed threads. Use[/] threads <id> [{Palette.Muted}]for a stack.[/]");
         return ReplResult.Success;
     }
 
@@ -63,17 +64,17 @@ public sealed class ThreadsReplCommand : IReplCommand
         var flags = new List<string>();
         if (thread.IsFinalizer)
         {
-            flags.Add("[#00D7FF]finalizer[/]");
+            flags.Add($"[{Palette.Name}]finalizer[/]");
         }
 
         if (thread.IsGcThread)
         {
-            flags.Add("[#00D7FF]gc[/]");
+            flags.Add($"[{Palette.Name}]gc[/]");
         }
 
         if (!thread.IsAlive)
         {
-            flags.Add("[#808791]dead[/]");
+            flags.Add($"[{Palette.Muted}]dead[/]");
         }
 
         return flags.Count == 0 ? "-" : string.Join(" ", flags);
@@ -84,13 +85,13 @@ public sealed class ThreadsReplCommand : IReplCommand
         console.MarkupLineInterpolated($"[bold]Thread {thread.ManagedThreadId}[/] (OS 0x{thread.OsThreadId:x})");
         if (thread.StackTrace.Count == 0)
         {
-            console.MarkupLine("[#808791]  <no managed frames>[/]");
+            console.MarkupLine($"[{Palette.Muted}]  <no managed frames>[/]");
             return;
         }
 
         foreach (StackFrameInfo frame in thread.StackTrace)
         {
-            console.MarkupLineInterpolated($"  [#808791]{frame.InstructionPointer:x12}[/]  {frame.Description}");
+            console.MarkupLineInterpolated($"  [{Palette.Muted}]{frame.InstructionPointer:x12}[/]  {frame.Description}");
         }
     }
 }

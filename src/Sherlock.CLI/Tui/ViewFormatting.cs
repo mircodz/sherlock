@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Collections.Generic;
 using System.Globalization;
 using Cellar.Layout;
@@ -21,10 +22,20 @@ internal static class ViewFormatting
         return table;
     }
 
-    public static Widget Hinted(Widget body, string hint) =>
+    /// <summary>The screen's one hint bar: <paramref name="hint"/> lists the view's own keys; the keys every screen
+    /// shares are appended here so they read the same everywhere. Only the library is neither tabbed nor nested.</summary>
+    public static Widget Hinted(Widget body, string hint, bool tabbed = true, bool canGoBack = true) =>
         new Stack(Direction.Vertical)
             .Add(body, Constraint.Fill())
-            .Add(new Label(new StyledText("  " + hint, Theme.Current.MutedStyle)), Constraint.Length(1));
+            .Add(new Label(new StyledText("  " + string.Join(HintSeparator,
+                new[] { hint, tabbed ? "Tab switch view" : null, canGoBack ? "Backspace back" : null, "q quit" }
+                    .Where(part => !string.IsNullOrEmpty(part))),
+                Theme.Current.MutedStyle)), Constraint.Length(1));
+
+    private const string HintSeparator = "  \u00b7  ";
+
+    /// <summary>Adds a tab whose content leaves Tab to the tabs (see <see cref="TabPane"/>).</summary>
+    public static Tabs AddPane(this Tabs tabs, string name, Func<Widget> build) => tabs.Add(name, () => new TabPane(build()));
 
     public static void SetRows<T>(Table table, IEnumerable<T> values, Func<T, string[]> render, Action<T> activate)
     {

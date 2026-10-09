@@ -11,7 +11,6 @@ using Cellar.Widgets.Charts.Trees;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using Sherlock.Core.Analysis;
-using Palette = Sherlock.CLI.Rendering.Theme;
 using Theme = Cellar.Theming.Theme;
 
 namespace Sherlock.CLI.Tui;
@@ -51,8 +50,8 @@ internal sealed class ObjectInspectorView : Widget
 
         _body = new Stack(Direction.Vertical)
             .Add(new Padding(_path, new Thickness(1, 0)), Constraint.Length(1))
-            .Add(new Panel(_tree, " Inspect - fields and contents ") { BorderStyle = BorderStyle.Rounded }, Constraint.Fill())
-            .Add(new Label(new StyledText(" Right/Left expand/collapse  Enter open  t type  Tab views  Backspace back", Theme.Current.MutedStyle)), Constraint.Length(1));
+            .Add(ViewFormatting.Hinted(new Panel(_tree, " Fields ") { BorderStyle = BorderStyle.Rounded },
+                "\u2192\u2190 expand  \u00b7  Enter open object  \u00b7  t open type"), Constraint.Fill());
     }
 
     public override bool IsFocusable => true;
@@ -167,7 +166,7 @@ internal sealed class ObjectInspectorView : Widget
         if (row.Value.TypeName.Length > 0)
         {
             text.Append(" : ").Fg(Theme.Current.Muted)
-                .Append(row.Value.TypeName).Fg(Color.Hex(Palette.Identity));
+                .Append(row.Value.TypeName).Fg(Color.Hex(Palette.Name));
         }
         if (row.Value.Offset is { } offset && row.Kind == RowKind.Value)
         {
@@ -197,7 +196,7 @@ internal sealed class ObjectInspectorView : Widget
         if (value.TypeName.Length > 0)
         {
             text.Append(" : ").Fg(theme.Muted)
-                .Append(TypeNames.Short(value.TypeName)).Fg(Color.Hex(Palette.Identity)).Underline().Link(new TypeTarget(value.TypeName));
+                .Append(TypeNames.Short(value.TypeName)).Fg(Color.Hex(Palette.Name)).Underline().Link(new TypeTarget(value.TypeName));
         }
         if (ObjectAddress(value) is { } address)
         {
@@ -208,7 +207,7 @@ internal sealed class ObjectInspectorView : Widget
         {
             Color color = value.Kind switch
             {
-                ObjectValueKind.String or ObjectValueKind.Character => Color.Hex(Palette.Focus),
+                ObjectValueKind.String or ObjectValueKind.Character => Color.Hex(Palette.Hot),
                 ObjectValueKind.Number => Color.Hex(Palette.Magenta),
                 ObjectValueKind.Boolean or ObjectValueKind.Pointer => Color.Hex(Palette.Address),
                 ObjectValueKind.Null => theme.Muted,

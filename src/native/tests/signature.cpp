@@ -58,6 +58,20 @@ TEST(Signature, FormatsTypeTokensWithShortNames) {
               "(List<string>)");
 }
 
+TEST(Signature, ConstructedTypeNamesMatchClrMdSpelling) {
+    using Names = std::vector<std::string>;
+    auto name = [](Names segments, Names arguments) { return signature::constructedTypeName(segments, arguments); };
+    EXPECT_EQ(name({"System.String"}, {}), "System.String");
+    EXPECT_EQ(name({"System.Collections.Generic.List`1"}, {"System.Int32"}), "System.Collections.Generic.List<System.Int32>");
+    EXPECT_EQ(name({"System.Collections.Generic.Dictionary`2", "Entry"}, {"System.String", "System.Object"}),
+              "System.Collections.Generic.Dictionary<System.String, System.Object>+Entry");
+    EXPECT_EQ(name({"System.Runtime.CompilerServices.AsyncTaskMethodBuilder`1", "AsyncStateMachineBox`1"}, {"App.Result", "App.<Run>d__0"}),
+              "System.Runtime.CompilerServices.AsyncTaskMethodBuilder<App.Result>+AsyncStateMachineBox<App.<Run>d__0>");
+    EXPECT_EQ(name({"App.Outer", "Inner`1"}, {"System.Byte[]"}), "App.Outer+Inner<System.Byte[]>");
+    EXPECT_EQ(name({"System.Collections.Generic.List`1"}, {}), std::nullopt);
+    EXPECT_EQ(name({"System.String"}, {"System.Int32"}), std::nullopt);
+}
+
 TEST(Signature, ResolvesTypeAndMethodGenericParameters) {
     Fixture fixture;
     // static void M<T>(T, List<TValue>)

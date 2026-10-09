@@ -22,30 +22,44 @@ public static class FrameNames
     }
 
     /// <summary>The label without its namespace: <c>Type.Method(params)</c>.</summary>
-    public static string ShortMethod(string frame)
+    public static string ShortMethod(string frame) => frame[ShortStart(frame)..];
+
+    /// <summary>Where <see cref="ShortMethod"/> starts: after the declaring type's namespace, or 0 without one.</summary>
+    private static int ShortStart(string frame)
     {
-        (string type, string method) = Split(frame);
-        int dot = PreviousDot(type, type.Length);
-        return type.Length == 0 ? method : $"{type[(dot + 1)..]}.{method}";
+        int dot = PreviousDot(frame, ParametersStart(frame));
+        if (dot <= 0)
+        {
+            return 0;
+        }
+        int split = frame[dot - 1] == '.' ? dot - 1 : dot;
+        return PreviousDot(frame, split) + 1;
     }
 
     /// <summary>Whether <paramref name="frame"/> is <paramref name="method"/>, or one of its overloads when the
-    /// parameter list is omitted, or one of its return-type variants when only the return type is omitted.</summary>
+    /// parameter list is omitted, or one of its return-type variants when only the return type is omitted. The query
+    /// may also leave out the namespace, as <see cref="ShortMethod"/> displays it.</summary>
     public static bool Matches(string frame, string method)
     {
         if (method.Length == 0)
         {
             return frame.Length == 0;
         }
-        if (!frame.StartsWith(method, StringComparison.Ordinal))
+        return MatchesFrom(frame, 0, method) || ShortStart(frame) is > 0 and int start && MatchesFrom(frame, start, method);
+    }
+
+    private static bool MatchesFrom(string frame, int start, string method)
+    {
+        ReadOnlySpan<char> label = frame.AsSpan(start);
+        if (!label.StartsWith(method, StringComparison.Ordinal))
         {
             return false;
         }
-        if (frame.Length == method.Length)
+        if (label.Length == method.Length)
         {
             return true;
         }
-        ReadOnlySpan<char> rest = frame.AsSpan(method.Length);
+        ReadOnlySpan<char> rest = label[method.Length..];
         if (method.EndsWith(')'))
         {
             return rest[0] == ':' || rest.StartsWith(" [", StringComparison.Ordinal);

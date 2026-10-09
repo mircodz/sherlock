@@ -12,22 +12,26 @@ public sealed class PrintReplCommand : IReplCommand
 
     public string Name => "print";
     public IReadOnlyList<string> Aliases => ["p", "do"];
-    public string Summary => "Print one object by address: its type, size and fields (px for a graph).";
+    public string Summary => "Print an object's type, size and fields.";
     public string Usage => "print <address> [element-count]";
+    public int MaxArgs => 2;
 
     public ReplResult Execute(ReplContext context, string[] args)
     {
         ulong address = Args.Address(args, 0, Usage);
-        int elementLimit = Args.Limit(args, 1, DefaultElementLimit);
+        int elementLimit = Args.Count(args, 1, DefaultElementLimit, Usage);
 
         ObjectDetail detail = context.Snapshot.Inspect(address);
 
-        context.Console.MarkupLineInterpolated($"[bold]{detail.TypeName}[/]");
-        context.Console.MarkupLineInterpolated($"  [#808791]address[/] [#FFD75F]0x{detail.Address:x}[/]   [#808791]size[/] [bold #F2F2F2]{ByteSize.Format((long)detail.Size)}[/]");
+        context.Console.MarkupLine(Styled.Object(detail.TypeName, detail.Address, (long)detail.Size));
+        if (TypeNames.Namespace(detail.TypeName) is { Length: > 0 } ns)
+        {
+            context.Console.MarkupLineInterpolated($"  [{Palette.Muted}]namespace[/] {ns}");
+        }
 
         if (detail.StringValue is not null)
         {
-            context.Console.MarkupLineInterpolated($"  [#808791]value[/] [#00D7FF]\"{detail.StringValue}\"[/]");
+            context.Console.MarkupLineInterpolated($"  [{Palette.Muted}]value[/] [{Palette.Name}]\"{detail.StringValue}\"[/]");
             return ReplResult.Success;
         }
 
@@ -39,7 +43,7 @@ public sealed class PrintReplCommand : IReplCommand
 
         if (detail.Fields.Count == 0)
         {
-            context.Console.MarkupLine("  [#808791]<no instance fields>[/]");
+            context.Console.MarkupLine($"  [{Palette.Muted}]<no instance fields>[/]");
             return ReplResult.Success;
         }
 
@@ -52,9 +56,9 @@ public sealed class PrintReplCommand : IReplCommand
         foreach (FieldValue field in detail.Fields)
         {
             table.AddRow(
-                $"[#FFD75F]+0x{field.Offset:x}[/]",
+                $"[{Palette.Muted}]+0x{field.Offset:x}[/]",
                 Markup.Escape(field.Name),
-                Markup.Escape(TypeNames.Short(field.TypeName)),
+                Styled.Type(field.TypeName),
                 Markup.Escape(field.Value));
         }
 
@@ -64,7 +68,7 @@ public sealed class PrintReplCommand : IReplCommand
 
     private static void PrintElements(IAnsiConsole console, ObjectDetail detail, int count, int limit)
     {
-        console.MarkupLineInterpolated($"  [#808791]count[/] {count}");
+        console.MarkupLineInterpolated($"  [{Palette.Muted}]count[/] {count}");
         int shown = 0;
         foreach (string element in detail.Elements)
         {
@@ -79,7 +83,7 @@ public sealed class PrintReplCommand : IReplCommand
         int remaining = count - shown;
         if (remaining > 0)
         {
-            console.MarkupLineInterpolated($"  [#808791]… {remaining} more (print 0x{detail.Address:x} <n> to show more)[/]");
+            console.MarkupLineInterpolated($"  [{Palette.Muted}]… {remaining} more (print 0x{detail.Address:x} <n> to show more)[/]");
         }
     }
 }

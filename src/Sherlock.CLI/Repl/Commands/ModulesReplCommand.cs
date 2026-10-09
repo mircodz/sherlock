@@ -15,6 +15,7 @@ public sealed class ModulesReplCommand : IReplCommand
     public IReadOnlyList<string> Aliases => ["lm"];
     public string Summary => "List loaded managed modules/assemblies.";
     public string Usage => "modules [name-filter]";
+    public int MaxArgs => 1;
 
     public ReplResult Execute(ReplContext context, string[] args)
     {
@@ -28,7 +29,7 @@ public sealed class ModulesReplCommand : IReplCommand
 
         if (modules.Count == 0)
         {
-            context.Console.MarkupLine("[#FFAF00]No modules matched.[/]");
+            context.Console.MarkupLine($"[{Palette.Warning}]No modules matched.[/]");
             return ReplResult.Success;
         }
 
@@ -41,13 +42,13 @@ public sealed class ModulesReplCommand : IReplCommand
         {
             string name = Markup.Escape(Path.GetFileName(module.Name));
             table.AddRow(
-                module.IsDynamic ? $"{name} [#808791](dynamic)[/]" : name,
-                module.ImageBase == 0 ? "-" : $"[#FFD75F]0x{module.ImageBase:x}[/]",
-                module.Size == 0 ? "-" : $"[bold #F2F2F2]{ByteSize.Format((long)module.Size)}[/]");
+                module.IsDynamic ? $"{name} [{Palette.Muted}](dynamic)[/]" : name,
+                module.ImageBase == 0 ? "-" : $"[{Palette.Address}]0x{module.ImageBase:x}[/]",
+                module.Size == 0 ? "-" : $"[bold {Palette.Text}]{ByteSize.Format((long)module.Size)}[/]");
         }
 
         context.Console.Write(table);
-        context.Console.MarkupLine($"[#808791]{modules.Count} modules.[/]");
+        context.Console.MarkupLine($"[{Palette.Muted}]{modules.Count} modules.[/]");
         return ReplResult.Success;
     }
 }

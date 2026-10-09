@@ -15,10 +15,11 @@ public sealed class EventLeaksReplCommand : IReplCommand
     public IReadOnlyList<string> Aliases => ["events"];
     public string Summary => "Delegates with large invocation lists (suspected event-handler leaks).";
     public string Usage => "eventleaks [min-subscribers]";
+    public int MaxArgs => 1;
 
     public ReplResult Execute(ReplContext context, string[] args)
     {
-        int min = Args.Limit(args, 0, DefaultMin);
+        int min = Args.Count(args, 0, DefaultMin, Usage);
 
         IReadOnlyList<EventSubscription> leaks = context.Console.Status()
             .Start("Scanning delegates…", _ => context.Snapshot.EventHandlerLeaks(min, context.Cancellation));
@@ -26,7 +27,7 @@ public sealed class EventLeaksReplCommand : IReplCommand
         if (leaks.Count == 0)
         {
             context.Console.MarkupLineInterpolated(
-                $"[#AFFF00]No suspicious event subscriptions[/] [#808791](no delegate has ≥ {min} subscribers).[/]");
+                $"[{Palette.Hot}]No suspicious event subscriptions[/] [{Palette.Muted}](no delegate has ≥ {min} subscribers).[/]");
             return ReplResult.Success;
         }
 
@@ -41,15 +42,15 @@ public sealed class EventLeaksReplCommand : IReplCommand
             string subscribers = string.Join(", ",
                 leak.Targets.Take(3).Select(t => $"{Markup.Escape(TypeNames.Short(t.TypeName))} ×{t.Count}"));
             table.AddRow(
-                $"[#FFD75F]0x{leak.DelegateAddress:x}[/]",
+                $"[{Palette.Address}]0x{leak.DelegateAddress:x}[/]",
                 $"[bold]{Counts.Compact(leak.SubscriberCount)}[/]",
-                $"[#00D7FF]{Markup.Escape(TypeNames.Short(leak.DelegateType))}[/]",
+                $"[{Palette.Name}]{Markup.Escape(TypeNames.Short(leak.DelegateType))}[/]",
                 subscribers);
         }
 
         context.Console.Write(table);
         context.Console.MarkupLine(
-            "[#808791]Each subscriber is pinned until it unsubscribes (-=).[/] gcroot <address> [#808791]to find the publisher that owns the event.[/]");
+            $"[{Palette.Muted}]Each subscriber is pinned until it unsubscribes (-=).[/] gcroot <address> [{Palette.Muted}]to find the publisher that owns the event.[/]");
         return ReplResult.Success;
     }
 }

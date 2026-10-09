@@ -28,7 +28,7 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
             cancellation.ThrowIfCancellationRequested();
             foreach (string line in lines)
             {
-                console.MarkupLineInterpolated($"[#5AF78E]{Prompt}[/]{line}");
+                console.MarkupLineInterpolated($"[{Palette.Hot}]{Prompt}[/]{line}");
                 result |= RunLine(line);
                 if ((result & (ReplResult.Quit | ReplResult.Cancelled)) != 0)
                 {
@@ -109,7 +109,7 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
                 }
 
                 line = _lastCommand;
-                console.MarkupLineInterpolated($"[#5AF78E]{Prompt}[/][#808791]{line}[/]");
+                console.MarkupLineInterpolated($"[{Palette.Hot}]{Prompt}[/][{Palette.Muted}]{line}[/]");
             }
             else
             {
@@ -149,6 +149,7 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
                 Output.Error(console, $"Unknown command [bold]{name}[/]. Use [bold]help[/] for a list.");
                 return ReplResult.Failure;
             }
+            Validate(command, args);
             ReplResult result = command.Execute(_context, args);
             return _context.Cancellation.IsCancellationRequested ? result | ReplResult.Cancelled : result;
         }
@@ -169,6 +170,30 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
         }
     }
 
+    private static void Validate(IReplCommand command, string[] args)
+    {
+        if (command.Options is { } options)
+        {
+            foreach (string arg in args)
+            {
+                if (arg == "--")
+                {
+                    break; // everything after "--" is an operand
+                }
+                if (arg.StartsWith("--", StringComparison.Ordinal) && !System.Linq.Enumerable.Contains(options, arg))
+                {
+                    throw new DumpAnalysisException($"Unknown option {arg}. usage: {command.Usage}");
+                }
+            }
+        }
+        if (args.Length > command.MaxArgs)
+        {
+            throw new DumpAnalysisException(command.MaxArgs == 0
+                ? $"{command.Name} takes no arguments."
+                : $"Too many arguments. usage: {command.Usage}");
+        }
+    }
+
     private ReplResult PollTargets()
     {
         if (_context is null)
@@ -179,7 +204,7 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
         var result = ReplResult.Success;
         foreach (Core.Store.Session session in _context.Workspace.PollExitedAllocationProfiles())
         {
-            Output.Success(console, $"Allocation profile captured for [bold]{session.Id}[/] [#808791]({session.Command})[/]");
+            Output.Success(console, $"Allocation profile captured for [bold]{session.Id}[/] [{Palette.Muted}]({session.Command})[/]");
         }
 
         foreach (TriggeredCaptureResult capture in _context.Workspace.PollTriggeredSnapshots())
@@ -196,15 +221,15 @@ public sealed class Repl(ReplCommandRegistry registry, ReplHistory history, IAns
     {
         if (workspace.Current is not null)
         {
-            console.MarkupLineInterpolated($"[bold #5AF78E]sl[/] [#808791]·[/] [#00D7FF]{workspace.CurrentName}[/] [#808791]loaded[/]");
+            console.MarkupLineInterpolated($"[bold {Palette.Hot}]sl[/] [{Palette.Muted}]·[/] [{Palette.Name}]{workspace.CurrentName}[/] [{Palette.Muted}]loaded[/]");
         }
         else
         {
             int count = workspace.Store.Sessions.Count;
             string workspaces = count == 1 ? "workspace" : "workspaces";
-            console.MarkupLineInterpolated($"[bold #5AF78E]sl[/] [#808791]·[/] {count} {workspaces} [#808791]· no snapshot loaded[/]");
+            console.MarkupLineInterpolated($"[bold {Palette.Hot}]sl[/] [{Palette.Muted}]·[/] {count} {workspaces} [{Palette.Muted}]· no snapshot loaded[/]");
         }
-        console.MarkupLine("[#808791]type `help` for commands · `exit` to quit[/]");
+        console.MarkupLine($"[{Palette.Muted}]type `help` for commands · `exit` to quit[/]");
         console.WriteLine();
     }
 

@@ -178,7 +178,8 @@ public sealed class HeapDoctor(Snapshot snapshot)
             Type = suspect.TypeName,
             Bytes = (long)suspect.TotalSize,
             Count = suspect.Count,
-            NextCommand = $"objects {TypeNames.Short(suspect.TypeName)}",
+            // A command, not a label: objects matches substrings of full names, so drop only the outer namespace.
+            NextCommand = $"objects {WithoutNamespace(suspect.TypeName)}",
         });
     }
 
@@ -193,5 +194,11 @@ public sealed class HeapDoctor(Snapshot snapshot)
     {
         value = value.Replace('\n', ' ').Replace('\r', ' ');
         return value.Length <= 48 ? value : value[..48] + "...";
+    }
+
+    private static string WithoutNamespace(string typeName)
+    {
+        string ns = TypeNames.Namespace(typeName);
+        return ns.Length == 0 ? typeName : typeName[(ns.Length + 1)..];
     }
 }

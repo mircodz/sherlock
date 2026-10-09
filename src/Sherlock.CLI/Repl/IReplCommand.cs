@@ -59,6 +59,12 @@ public interface IReplCommand
 
     string Usage { get; }
 
+    /// <summary>The most arguments, option values included, the command accepts; more is an error.</summary>
+    int MaxArgs => 0;
+
+    /// <summary><c>--</c> options the command understands; any other is an error. Null when it parses its own.</summary>
+    IReadOnlyList<string>? Options => [];
+
     /// <summary>Arguments exclude the command name.</summary>
     ReplResult Execute(ReplContext context, string[] args);
 }

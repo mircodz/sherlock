@@ -14,6 +14,8 @@ public sealed class KillReplCommand : IReplCommand
     public string Name => "kill";
     public string Summary => "Snapshot then kill a run target (default: the latest).";
     public string Usage => "kill [pid] [--no-snapshot]";
+    public int MaxArgs => 2;
+    public IReadOnlyList<string>? Options => ["--no-snapshot"];
     public string Category => "Live";
 
     public ReplResult Execute(ReplContext context, string[] args)
@@ -58,7 +60,7 @@ public sealed class KillReplCommand : IReplCommand
                     $"Snapshotting pid {target.Pid} before kill…",
                     _ => context.Workspace.Capture(target.Pid, load: false));
                 string contents = entry.HasAllocations ? "heap + allocations" : "heap only";
-                Output.Success(context.Console, $"Saved [bold]{entry.Id}[/] [#808791]({contents} · {ByteSize.Format(entry.TotalSizeBytes)})[/]");
+                Output.Success(context.Console, $"Saved [bold]{entry.Id}[/] [{Palette.Muted}]({contents} · {ByteSize.Format(entry.TotalSizeBytes)})[/]");
             }
             catch (DumpAnalysisException ex)
             {
@@ -68,7 +70,7 @@ public sealed class KillReplCommand : IReplCommand
         }
 
         target.Kill();
-        Output.Success(context.Console, $"Killed [#00D7FF]{target.Name}[/] · pid {target.Pid}");
+        Output.Success(context.Console, $"Killed [{Palette.Name}]{target.Name}[/] · pid {target.Pid}");
         return result;
     }
 }

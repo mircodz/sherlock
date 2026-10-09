@@ -124,7 +124,8 @@ public sealed class Snapshot : IDisposable
         return new ObjectInspector(this).InspectChildren(value, startIndex, count, raw);
     }
     public IReadOnlyList<GcRootPath> Roots(ulong address, CancellationToken cancellationToken = default) => RootAnalyzer.Find(GetHeapGraph(cancellationToken), address, cancellationToken);
-    public InstanceListing Instances(string filter, int limit = 20, CancellationToken cancellationToken = default) => new HeapAnalyzer(this).ListInstances(filter, limit, cancellationToken);
+    public InstanceListing Instances(string filter, int limit = 20, CancellationToken cancellationToken = default, bool exact = false) =>
+        new HeapAnalyzer(this).ListInstances(filter, limit, cancellationToken, exact);
 
     public IReadOnlyList<DuplicateString> DuplicateStrings(int limit = 20, CancellationToken cancellationToken = default)
     {

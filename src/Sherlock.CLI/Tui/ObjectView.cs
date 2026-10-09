@@ -19,13 +19,13 @@ internal static class ObjectView
     {
         ObjectValue value = snapshot.InspectValue(address);
         var tabs = new Tabs()
-            .Add("Inspect", new ObjectInspectorView(value, snapshot.InspectChildren,
-                target => navigate(new ObjTarget(target)), type => navigate(new TypeTarget(type))))
-            .Add("GC roots", () => new AsyncContent(cancellation => Roots(snapshot.Roots(address, cancellation), navigate)));
+            .Add("Inspect", new TabPane(new ObjectInspectorView(value, snapshot.InspectChildren,
+                target => navigate(new ObjTarget(target)), type => navigate(new TypeTarget(type)))))
+            .Add("GC roots", () => new LazyContent(cancellation => Roots(snapshot.Roots(address, cancellation), navigate)));
 
         if (snapshot.HasCorrelation && snapshot.WhoAllocated(address) is { } frames)
         {
-            tabs.Add("whoalloc", () => AllocationStack(frames, navigate));
+            tabs.Add("whoalloc", () => new TabPane(AllocationStack(frames, navigate)));
         }
         tabs.ActiveIndex = tab switch
         {
@@ -42,10 +42,17 @@ internal static class ObjectView
         {
             RenderLabel = node => node.Value.Address is ulong address
                 ? StyledText.Of(node.Value.Text + " ").Fg(Theme.Current.Foreground)
-                    .Append($"@0x{address:x}").Fg(Theme.Current.Accent).Underline().Link(new ObjTarget(address))
+                    .Append($"0x{address:x}").Fg(Theme.Current.Secondary).Underline().Link(new ObjTarget(address))
                 : new StyledText(node.Value.Text, Theme.Current.MutedStyle),
             ShowGuides = true,
             OnLinkClick = payload => navigate(NavigationTarget.FromLink(payload)),
+            OnActivate = node =>
+            {
+                if (node.Value.Address is ulong address)
+                {
+                    navigate(new ObjTarget(address));
+                }
+            },
         };
         if (paths.Count == 0)
         {
@@ -53,7 +60,7 @@ internal static class ObjectView
         }
         foreach (GcRootPath path in paths)
         {
-            TreeNode<RootRow> root = tree.AddRoot(new RootRow($"{path.Root.Kind} @ 0x{path.Root.Address:x12}", null));
+            TreeNode<RootRow> root = tree.AddRoot(new RootRow($"{path.Root.Kind} {Sherlock.CLI.Rendering.Addresses.Format(path.Root.Address)}", null));
             TreeNode<RootRow> node = root;
             foreach (GcRootNode step in path.Path)
             {
@@ -62,28 +69,23 @@ internal static class ObjectView
             root.ExpandAll();
         }
         tree.MarkDirty();
-        return Hinted(new Panel(tree, " Why it's alive \u2014 click a holder to inspect it ") { BorderStyle = BorderStyle.Rounded },
-            "Tab switch view  \u00b7  click a holder to inspect it  \u00b7  Backspace back");
+        return Hinted(new Panel(tree, " Why it's alive ") { BorderStyle = BorderStyle.Rounded }, "Enter inspect");
     }
 
     private static Widget AllocationStack(IReadOnlyList<string> stack, Action<NavigationTarget> navigate)
     {
         if (stack.Count == 0)
         {
-            return new Panel(new Padding(new Label(new StyledText(ProvenanceReader.NoManagedFrames, Theme.Current.MutedStyle)),
-                new Thickness(1)), " Allocation stack ") { BorderStyle = BorderStyle.Rounded };
+            return Hinted(new Panel(new Padding(new Label(new StyledText(ProvenanceReader.NoManagedFrames, Theme.Current.MutedStyle)),
+                new Thickness(1)), " Allocation stack ") { BorderStyle = BorderStyle.Rounded }, "");
         }
         string[] frames = [.. stack];
         Array.Reverse(frames);
-        Table table = Table(("Method", Constraint.Fill(2), false), ("Namespace", Constraint.Fill(3), false));
-        SetRows(table, frames, frame =>
-        {
-            (string type, string method) = FrameNames.Split(frame);
-            return [method, type];
-        }, frame => navigate(new MethodTarget(frame)));
+        Table table = Table(("Method", Constraint.Fill(3), false), ("Namespace", Constraint.Fill(2), false));
+        SetRows(table, frames, frame => [FrameNames.ShortMethod(frame), TypeNames.Namespace(FrameNames.Split(frame).Type)],
+            frame => navigate(new MethodTarget(frame)));
         table.Sortable = false;
-        return Hinted(new Panel(table, " Allocation stack \u2014 Enter a frame for its callers ") { BorderStyle = BorderStyle.Rounded },
-            "Enter \u2192 callers of this frame  \u00b7  Backspace back");
+        return Hinted(new Panel(table, " Allocation stack ") { BorderStyle = BorderStyle.Rounded }, "Enter open method");
     }
 
     private sealed record RootRow(string Text, ulong? Address);

@@ -15,6 +15,7 @@ public sealed class SnapshotOnReplCommand : IReplCommand
     public string Summary => "Capture a snapshot when an event fires (call/alloc/gc/throw) on a live target.";
     public string Category => "Live";
     public string Usage => "snapshot-on <call:Type.Method | alloc:Type | gc[:gen2] | throw[:Exception]>";
+    public int MaxArgs => 1;
 
     public ReplResult Execute(ReplContext context, string[] args)
     {
@@ -41,7 +42,7 @@ public sealed class SnapshotOnReplCommand : IReplCommand
 
         if (ok)
         {
-            Output.Success(context.Console, $"Armed [bold]{spec}[/] on [#00D7FF]{target.Name}[/] · pid {target.Pid}");
+            Output.Success(context.Console, $"Armed [bold]{spec}[/] on [{Palette.Name}]{target.Name}[/] · pid {target.Pid}");
         }
         else
         {

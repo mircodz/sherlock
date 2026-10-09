@@ -53,13 +53,43 @@ public sealed class PresentationTests
     }
 
     [Theory]
-    [InlineData("System.Collections.Generic.List<App.Order>", "List<App.Order>")]
-    [InlineData("App.Order[]", "Order[]")]
-    [InlineData("Order", "Order")]
+    [InlineData("System.Collections.Generic.List<App.Order>", "List<Order>")]
+    [InlineData("System.Collections.Generic.Dictionary<System.String, System.Object>+Entry[]", "Dictionary<String, Object>+Entry[]")]
+    [InlineData("System.Collections.Generic.Dictionary<System.String, System.Collections.Generic.List<App.Order[]>>", "Dictionary<String, List<Order[]>>")]
+    [InlineData("System.Threading.PortableThreadPool+HillClimbing+LogEntry[]", "PortableThreadPool+HillClimbing+LogEntry[]")]
+    [InlineData("System.String[,]", "String[,]")]
+    [InlineData("App.Program+<>c", "Program+<>c")]
+    [InlineData("App.Program+<Main>d__0", "Program+<Main>d__0")]
+    [InlineData("<PrivateImplementationDetails>", "<PrivateImplementationDetails>")]
+    [InlineData("App.Cache<T>+<>c__DisplayClass1_0<U>", "Cache<T>+<>c__DisplayClass1_0<U>")]
+    [InlineData("Free", "Free")]
     [InlineData("", "")]
-    public void ShortNamesRetainGenericArguments(string name, string expected)
+    public void ShortNamesDropNamespacesEverywhere(string name, string expected)
     {
         Assert.Equal(expected, TypeNames.Short(name));
+    }
+
+    [Fact]
+    public void StyledValuesEscapeTypeNamesAndShareOneLabel()
+    {
+        Assert.Equal($"[{Palette.Name}]Byte[[]][/]", Styled.Type("System.Byte[]"));
+        Assert.Equal($"[{Palette.Address}]0x1a[/]", Styled.Address(0x1a));
+        Assert.Equal($"[{Palette.Name}]List<Order>[/] [{Palette.Address}]0x10[/] [{Palette.Muted}]·[/] 24 B",
+            Styled.Object("System.Collections.Generic.List<App.Order>", 0x10, 24));
+        // Parses as markup: escaping and palette tags are well-formed.
+        _ = new Spectre.Console.Markup(Styled.Object("App.Weird[,]<X>", 1, 1));
+    }
+
+    [Theory]
+    [InlineData("System.Collections.Generic.Dictionary<System.String, App.Order>+Entry[]", "System.Collections.Generic")]
+    [InlineData("App.Program+<>c", "App")]
+    [InlineData("App.Order[]", "App")]
+    [InlineData("Order", "")]
+    [InlineData("<PrivateImplementationDetails>", "")]
+    [InlineData("Free", "")]
+    public void NamespaceIsTheOutermostTypes(string name, string expected)
+    {
+        Assert.Equal(expected, TypeNames.Namespace(name));
     }
 
     [Fact]
@@ -114,8 +144,8 @@ public sealed class PresentationTests
     {
         var profile = new AllocationProfile(
         [
-            new(["App.Zeta"], 2048, 8, 0, 0),
-            new(["Other.Alpha"], 512, 2, 0, 0),
+            new(["App.Zeta.Run"], 2048, 8, 0, 0),
+            new(["Other.Alpha.Run"], 512, 2, 0, 0),
         ]);
         NavigationTarget? activated = null;
         Table table = AllocationsView.HotTable(profile, target => activated = target);
@@ -123,7 +153,7 @@ public sealed class PresentationTests
 
         ActivateFirst(table);
 
-        Assert.Equal(new MethodTarget("Other.Alpha"), activated);
+        Assert.Equal(new MethodTarget("Other.Alpha.Run"), activated);
     }
 
     [Fact]

@@ -138,16 +138,16 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         }
         foreach (SnapshotEntry snapshot in snapshots)
         {
-            console.MarkupLineInterpolated($"    [#00D7FF]{snapshot.Id}[/] [#808791]{snapshot.Reason ?? "manual"}[/]");
+            console.MarkupLineInterpolated($"    [{Palette.Name}]{snapshot.Id}[/] [{Palette.Muted}]{snapshot.Reason ?? "manual"}[/]");
         }
 
         if (snapshots.Count > 0)
         {
-            console.MarkupLineInterpolated($"    [#808791]next: sl · load {snapshots[0].Id}[/]");
+            console.MarkupLineInterpolated($"    [{Palette.Muted}]next: sl {snapshots[0].Id}[/]");
         }
         else
         {
-            console.MarkupLine("    [#808791]no snapshots captured · use --snapshot-on <event> or capture interactively[/]");
+            console.MarkupLine($"    [{Palette.Muted}]no snapshots captured · use --snapshot-on <event> or capture interactively[/]");
         }
     }
 

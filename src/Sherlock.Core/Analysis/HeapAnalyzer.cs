@@ -47,12 +47,13 @@ public sealed class HeapAnalyzer(Snapshot snapshot)
     /// <paramref name="limit"/> largest by size descending, plus totals over all matches.
     /// </summary>
     /// <remarks>Uses cached type columns when available, with bounded top-K selection on either path.</remarks>
-    public InstanceListing ListInstances(string typeFilter, int limit = 20, CancellationToken cancellationToken = default)
+    /// <param name="exact">Match the full type name exactly instead of any name containing <paramref name="typeFilter"/>.</param>
+    public InstanceListing ListInstances(string typeFilter, int limit = 20, CancellationToken cancellationToken = default, bool exact = false)
     {
         ArgumentException.ThrowIfNullOrEmpty(typeFilter);
         ArgumentOutOfRangeException.ThrowIfNegative(limit);
         cancellationToken.ThrowIfCancellationRequested();
-        if (snapshot.TryGetCachedHeapGraph()?.ListInstances(typeFilter, limit, cancellationToken) is { } listing)
+        if (snapshot.TryGetCachedHeapGraph()?.ListInstances(typeFilter, limit, cancellationToken, exact) is { } listing)
         {
             var selected = new ObjectInstance[listing.Instances.Count];
             for (int i = 0; i < selected.Length; i++)
@@ -81,7 +82,7 @@ public sealed class HeapAnalyzer(Snapshot snapshot)
             }
 
             string name = type.Name ?? "<unknown>";
-            if (!name.Contains(typeFilter, StringComparison.OrdinalIgnoreCase))
+            if (exact ? name != typeFilter : !name.Contains(typeFilter, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }

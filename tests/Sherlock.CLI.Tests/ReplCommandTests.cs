@@ -84,6 +84,12 @@ public sealed class ReplCommandTests : IDisposable
     [InlineData("sleep 2147484")]
     [InlineData("quit unexpected")]
     [InlineData("help \"unterminated")]
+    [InlineData("ls extra")]
+    [InlineData("history banana")]
+    [InlineData("history 0")]
+    [InlineData("help a b")]
+    [InlineData("kill --typo")]
+    [InlineData("snapshot --bogus 1")]
     public void FailedCommandsHaveAnExplicitFailedOutcome(string line)
     {
         Assert.Equal(ReplResult.Failure, DefaultRepl().RunBatch(_workspace, [line]));
@@ -293,6 +299,17 @@ public sealed class ReplCommandTests : IDisposable
     }
 
     [Fact]
+    public void EveryCommandDeclaresHowManyArgumentsItTakes()
+    {
+        // The default (none) is right only for commands whose usage lists no arguments.
+        foreach (IReplCommand command in ReplCommandRegistry.CreateDefault(new ReplHistory(null)).Commands)
+        {
+            bool takesArguments = command.Usage.Trim() != command.Name;
+            Assert.True(takesArguments == command.MaxArgs > 0, $"{command.Name}: usage '{command.Usage}' but MaxArgs {command.MaxArgs}");
+        }
+    }
+
+    [Fact]
     public void TokenizerPreservesQuotedEmptyTargetArguments()
     {
         var probe = new ProbeCommand((_, args) =>
@@ -310,6 +327,7 @@ public sealed class ReplCommandTests : IDisposable
         public IReadOnlyList<string> Aliases => ["probe-alias"];
         public string Summary => "Probe command outcomes.";
         public string Usage => "probe";
+        public int MaxArgs => int.MaxValue;
         public int Calls { get; private set; }
 
         public ReplResult Execute(ReplContext context, string[] args)

@@ -93,7 +93,7 @@ public static class RunLauncher
             process.Exec = options.Command[0];
             workspace.Store.Persist(session);
             workspace.AddTarget(target, session);
-            Output.Success(console, $"Launched [#00D7FF]{Path.GetFileName(options.Command[0])}[/] · pid {target.Pid} · workspace [bold]{session.Id}[/]");
+            Output.Success(console, $"Launched [{Palette.Name}]{Path.GetFileName(options.Command[0])}[/] · pid {target.Pid} · workspace [bold]{session.Id}[/]");
             return (target, session);
         }
         catch (Exception ex)

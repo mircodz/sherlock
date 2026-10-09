@@ -1,5 +1,6 @@
 #include "sherlock/profiler/signature.hpp"
 
+#include <charconv>
 #include <cstdint>
 
 #include "sherlock/profiler/il_writer.hpp"
@@ -206,6 +207,37 @@ std::string shortTypeName(std::string_view metadataName) {
         metadataName.remove_prefix(dot + 1);
     }
     return withoutArity(metadataName);
+}
+
+std::optional<std::string> constructedTypeName(std::span<const std::string> segments, std::span<const std::string> typeArguments) {
+    std::string name;
+    std::size_t next = 0;
+    for (const std::string& segment : segments) {
+        std::string bare = withoutArity(segment);
+        std::size_t arity = 0;
+        if (bare.size() < segment.size() &&
+            std::from_chars(segment.data() + bare.size() + 1, segment.data() + segment.size(), arity).ec != std::errc{}) {
+            return std::nullopt;
+        }
+        if (arity > typeArguments.size() - next) {
+            return std::nullopt;
+        }
+        if (!name.empty()) {
+            name += '+';
+        }
+        name += bare;
+        if (arity > 0) {
+            name += '<';
+            for (std::size_t i = 0; i < arity; ++i) {
+                name += (i == 0 ? "" : ", ") + typeArguments[next++];
+            }
+            name += '>';
+        }
+    }
+    if (next != typeArguments.size()) {
+        return std::nullopt;
+    }
+    return name;
 }
 
 std::optional<std::string> format(std::span<const BYTE> methodSignature, const Context& context, Detail detail) {

@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System;
 using System.IO;
 using System.Linq;
@@ -16,8 +17,11 @@ public sealed class ExportReplCommand : IReplCommand
     private const int DefaultDominatorNodes = 40;
 
     public string Name => "export";
-    public string Summary => "Export a view to a file (dominators -> Graphviz .dot, allocations -> folded flamegraph).";
-    public string Usage => "export <dominators [count] | allocations [--survived]> <file>";
+    public string Summary => "Export dominators (.dot) or allocations (folded flame graph) to a file.";
+    private const string UsageText = "export <dominators [count] | allocations [--survived]> <file>";
+    public string Usage => UsageText;
+    public int MaxArgs => 3;
+    public IReadOnlyList<string>? Options => ["--survived"];
 
     public ReplResult Execute(ReplContext context, string[] args)
     {
@@ -39,12 +43,12 @@ public sealed class ExportReplCommand : IReplCommand
 
     private static void ExportDominators(ReplContext context, string[] args)
     {
-        int count = args.Length >= 3 && int.TryParse(args[1], out int n) && n > 0 ? n : DefaultDominatorNodes;
+        int count = args.Length >= 3 ? Args.Count(args, 1, DefaultDominatorNodes, UsageText) : DefaultDominatorNodes;
         string file = FileArg(args);
 
         DominatorTree tree = context.Console.Status().Start("Building dominator tree…", _ => context.Snapshot.GetDominatorTree(context.Cancellation));
         Write(context, file, DominatorDot.Write(tree.BuildGraph(count)));
-        context.Console.MarkupLineInterpolated($"[#808791]render with[/] dot -Tsvg {Markup.Escape(file)} -o out.svg[#808791].[/]");
+        context.Console.MarkupLineInterpolated($"[{Palette.Muted}]render with[/] dot -Tsvg {Markup.Escape(file)} -o out.svg[{Palette.Muted}].[/]");
     }
 
     private static void ExportAllocations(ReplContext context, string[] args)
@@ -58,14 +62,18 @@ public sealed class ExportReplCommand : IReplCommand
         // .dot -> pprof-style call graph (graphviz); anything else -> folded flamegraph.
         if (file.EndsWith(".dot", StringComparison.OrdinalIgnoreCase))
         {
+            if (survived)
+            {
+                throw new DumpAnalysisException("--survived applies to folded stacks, not .dot call graphs.");
+            }
             Write(context, file, AllocationDot.Write(profile));
-            context.Console.MarkupLineInterpolated($"[#808791]render with[/] dot -Tsvg {Markup.Escape(file)} -o out.svg[#808791].[/]");
+            context.Console.MarkupLineInterpolated($"[{Palette.Muted}]render with[/] dot -Tsvg {Markup.Escape(file)} -o out.svg[{Palette.Muted}].[/]");
         }
         else
         {
             Write(context, file, FoldedStacks.Write(profile, survived));
             context.Console.MarkupLineInterpolated(
-                $"[#808791]open at[/] https://speedscope.app[#808791], or[/] flamegraph.pl {Markup.Escape(file)} > out.svg[#808791].[/]");
+                $"[{Palette.Muted}]open at[/] https://speedscope.app[{Palette.Muted}], or[/] flamegraph.pl {Markup.Escape(file)} > out.svg[{Palette.Muted}].[/]");
         }
     }
 
@@ -80,6 +88,6 @@ public sealed class ExportReplCommand : IReplCommand
     {
         File.WriteAllText(file, content);
         long size = new FileInfo(file).Length;
-        context.Console.MarkupLineInterpolated($"[#AFFF00]✓[/] wrote [#00D7FF]{Markup.Escape(file)}[/] [#808791]({ByteSize.Format(size)})[/]");
+        context.Console.MarkupLineInterpolated($"[{Palette.Hot}]✓[/] wrote [{Palette.Name}]{Markup.Escape(file)}[/] [{Palette.Muted}]({ByteSize.Format(size)})[/]");
     }
 }

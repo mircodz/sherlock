@@ -19,7 +19,7 @@ internal static class RetentionView
         var tree = new TreeView<DominatorNode>
         {
             RenderLabel = node => StyledText.Of(TypeNames.Short(node.Value.TypeName)).Fg(Theme.Current.Accent).Underline().Link(new TypeTarget(node.Value.TypeName))
-                .Append("  @").Fg(Theme.Current.Muted)
+                .Append(" ").Fg(Theme.Current.Muted)
                 .Append($"0x{node.Value.Address:x}").Fg(Theme.Current.Secondary).Underline().Link(new ObjTarget(node.Value.Address)),
             ShowHeader = true,
             ShowGuides = true,
@@ -42,6 +42,6 @@ internal static class RetentionView
             tree.AddRoot(node, parent => dominators.ImmediateChildren(parent.Address, 20));
         }
         return Hinted(new Panel(tree, " Retention \u2014 what holds the memory ") { BorderStyle = BorderStyle.Rounded },
-            "\u2192/\u2190 expand   \u00b7   click a type or address   \u00b7   Enter inspect   \u00b7   Backspace back");
+            "\u2192\u2190 expand  \u00b7  Enter inspect");
     }
 }

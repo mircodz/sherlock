@@ -15,6 +15,7 @@ public sealed class StringsReplCommand : IReplCommand
     public IReadOnlyList<string> Aliases => ["str"];
     public string Summary => "Find duplicate string values wasting memory.";
     public string Usage => "strings [count]";
+    public int MaxArgs => 1;
 
     public ReplResult Execute(ReplContext context, string[] args)
     {
@@ -31,7 +32,7 @@ public sealed class StringsReplCommand : IReplCommand
 
         if (duplicates.Count == 0)
         {
-            context.Console.MarkupLine("[#AFFF00]No duplicated strings found.[/]");
+            context.Console.MarkupLine($"[{Palette.Hot}]No duplicated strings found.[/]");
             return ReplResult.Success;
         }
 
@@ -46,12 +47,12 @@ public sealed class StringsReplCommand : IReplCommand
             totalWasted += dupString.WastedBytes;
             table.AddRow(
                 Counts.Format(dupString.Count),
-                $"[bold #AFFF00]{ByteSize.Format((long)dupString.WastedBytes)}[/]",
-                $"[#00D7FF]{Markup.Escape(TextUtil.Preview(dupString.Value, 80))}[/]");
+                $"[bold {Palette.Hot}]{ByteSize.Format((long)dupString.WastedBytes)}[/]",
+                $"[{Palette.Name}]{Markup.Escape(TextUtil.Preview(dupString.Value, 80))}[/]");
         }
 
         context.Console.Write(table);
-        context.Console.MarkupLine($"[#808791]Top {duplicates.Count} duplicated strings waste[/] [bold #AFFF00]{ByteSize.Format((long)totalWasted)}[/].");
+        context.Console.MarkupLine($"[{Palette.Muted}]Top {duplicates.Count} duplicated strings waste[/] [bold {Palette.Hot}]{ByteSize.Format((long)totalWasted)}[/].");
         return ReplResult.Success;
     }
 

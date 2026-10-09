@@ -7,6 +7,7 @@ using Cellar.Text;
 using Cellar.Theming;
 using Cellar.Widgets;
 using Cellar.Widgets.Charts;
+using Cellar.Widgets.Charts.Trees;
 using Sherlock.Core;
 using Sherlock.Core.Diagnostics;
 using static Sherlock.CLI.Tui.ViewFormatting;
@@ -39,7 +40,18 @@ internal static class HealthView
             legend.Items.Add(new LegendItem("other", Theme.Current.Muted, $"{100.0 * (total - shown) / total:0}%"));
         }
 
-        var rows = new Stack(Direction.Vertical);
+        var rows = new TreeView<FindingRow>
+        {
+            RenderLabel = node => node.Value.Text,
+            OnLinkClick = payload => navigate(NavigationTarget.FromLink(payload)),
+            OnActivate = node =>
+            {
+                if (node.Value.Target is { } target)
+                {
+                    navigate(target);
+                }
+            },
+        };
         foreach (Finding finding in findings)
         {
             (string glyph, Color color) = finding.Severity switch
@@ -48,33 +60,41 @@ internal static class HealthView
                 FindingSeverity.Warning => ("\u25cf", Theme.Current.Warning),
                 _ => ("\u25cb", Theme.Current.Muted),
             };
-            rows.Add(new Label(StyledText.Of($"{glyph} ").Fg(color).Append(finding.Title).Fg(Theme.Current.Foreground)), Constraint.Length(1));
-            rows.Add(new Label(new StyledText("   " + finding.Detail, Theme.Current.MutedStyle)), Constraint.Length(1));
-
             NavigationTarget? target = finding.Address is ulong address
                 ? new ObjTarget(address, finding.Category.Contains("event", StringComparison.OrdinalIgnoreCase) ? ObjectTab.Roots : ObjectTab.Inspect)
                 : finding.Type is { } type ? new TypeTarget(type) : null;
+
+            TreeNode<FindingRow> node = rows.AddRoot(new FindingRow(
+                StyledText.Of($"{glyph} ").Fg(color).Append(finding.Title).Fg(Theme.Current.Foreground), target));
+            node.AddChild(new FindingRow(new StyledText(finding.Detail, Theme.Current.MutedStyle), target));
             if (finding.NextCommand is { } next)
             {
-                StyledText text = StyledText.Of("   \u2192 ").Fg(Theme.Current.Muted).Append(next).Fg(Theme.Current.Accent);
+                StyledText text = StyledText.Of("\u2192 ").Fg(Theme.Current.Muted).Append(next).Fg(Theme.Current.Accent);
                 if (target is not null)
                 {
                     text.Underline().Link(target);
                 }
-                var line = new Label(text) { OnLinkClick = payload => navigate(NavigationTarget.FromLink(payload)) };
-                rows.Add(line, Constraint.Length(1));
+                node.AddChild(new FindingRow(text, target));
             }
+            node.ExpandAll();
         }
+        if (findings.Count == 0)
+        {
+            rows.AddRoot(new FindingRow(new StyledText("Nothing stands out.", Theme.Current.MutedStyle), null));
+        }
+        rows.MarkDirty();
 
         var body = new Stack(Direction.Vertical)
             .Add(new Label(StyledText.Empty()), Constraint.Length(1))
-            .Add(new Label(StyledText.Of("Heap composition").Bold().Fg(Theme.Current.Accent)), Constraint.Length(1))
+            .Add(new Label(StyledText.Of("Heap composition").Bold().Fg(Theme.Current.Info)), Constraint.Length(1))
             .Add(bar, Constraint.Length(1))
             .Add(legend, Constraint.Length(1))
             .Add(new Label(StyledText.Empty()), Constraint.Length(1))
-            .Add(new Label(StyledText.Of("What looks wrong").Bold().Fg(Theme.Current.Accent)), Constraint.Length(1))
-            .Add(new ScrollView(rows), Constraint.Fill());
+            .Add(new Label(StyledText.Of("What looks wrong").Bold().Fg(Theme.Current.Info)), Constraint.Length(1))
+            .Add(rows, Constraint.Fill());
         return Hinted(new Panel(new Padding(body, new Thickness(1, 0)), $" {id} \u2014 {ByteFormat.Human(total)} on the heap ") { BorderStyle = BorderStyle.Rounded },
-            "click a \u2192 to jump  \u00b7  Tab switch lens  \u00b7  q quit");
+            findings.Count > 0 ? "\u2191\u2193 move  \u00b7  Enter investigate" : "");
     }
+
+    private sealed record FindingRow(StyledText Text, NavigationTarget? Target);
 }
