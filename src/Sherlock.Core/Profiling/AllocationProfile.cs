@@ -84,9 +84,9 @@ public sealed record AllocationProfile(IReadOnlyList<AllocationSite> Sites)
     public AllocationProfile OfType(string typeName) =>
         new(Sites.Where(s => s.TypeName == typeName).ToList());
 
-    /// <summary>Sites whose call stack contains <paramref name="method"/>.</summary>
+    /// <summary>Sites whose call stack contains <paramref name="method"/> (see <see cref="FrameNames.Matches"/>).</summary>
     public AllocationProfile Through(string method) =>
-        new(Sites.Where(s => s.Frames.Contains(method)).ToList());
+        new(Sites.Where(s => s.Frames.Any(frame => FrameNames.Matches(frame, method))).ToList());
 }
 
 /// <summary>Reads an allocation profile from a <c>.slab</c> container (the Allocations section + stack table).</summary>

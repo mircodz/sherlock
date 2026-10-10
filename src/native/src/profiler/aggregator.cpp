@@ -1,6 +1,7 @@
 #include "sherlock/profiler/aggregator.hpp"
 
 #include "sherlock/common/logger.hpp"
+#include "sherlock/profiler/signature.hpp"
 #include "sherlock/storage/profile.hpp"
 
 #include <algorithm>
@@ -11,6 +12,7 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <system_error>
 #include <string_view>
 #include <unordered_map>
@@ -80,10 +82,10 @@ const char* primitiveElementName(CorElementType t) {
     }
 }
 
-// Nested TypeDefs supply only leaf names. Join enclosing types with '+' and retain
-// metadata's generic-arity suffixes to match ClrMD.
-std::string typeDefName(IMetaDataImport* md, mdTypeDef typeDef) {
-    std::string name;
+// A TypeDef's name and those of its enclosing types, outermost first. Generic arity markers ("`2") are kept;
+// constructedTypeName replaces them with the type arguments.
+std::vector<std::string> typeDefSegments(IMetaDataImport* md, mdTypeDef typeDef) {
+    std::vector<std::string> segments;
     mdTypeDef cur = typeDef;
     for (;;) {
         WCHAR buf[512];
@@ -91,8 +93,7 @@ std::string typeDefName(IMetaDataImport* md, mdTypeDef typeDef) {
         DWORD flags = 0;
         if (FAILED(md->GetTypeDefProps(cur, buf, 512, &len, &flags, nullptr)))
             break;
-        std::string part = narrow(buf, len);
-        name = name.empty() ? part : part + "+" + name;
+        segments.insert(segments.begin(), narrow(buf, len));
         if (!IsTdNested(flags))
             break;
         mdTypeDef enclosing = 0;
@@ -100,7 +101,7 @@ std::string typeDefName(IMetaDataImport* md, mdTypeDef typeDef) {
             break;
         cur = enclosing;
     }
-    return name;
+    return segments;
 }
 
 } // namespace
@@ -637,16 +638,43 @@ std::string Aggregator::resolveTypeNameUncached(ClassID classId) {
 
     ModuleID moduleId = 0;
     mdTypeDef typeDef = 0;
-    if (FAILED(info_->GetClassIDInfo(classId, &moduleId, &typeDef)) || typeDef == 0)
+    ClassID parent = 0;
+    ULONG32 argumentCount = 0;
+    std::vector<ClassID> argumentIds;
+    // The first call reports the module, TypeDef and argument count; the CLR truncates to the buffer otherwise.
+    HRESULT hr = info_->GetClassIDInfo2(classId, &moduleId, &typeDef, &parent, 0, &argumentCount, nullptr);
+    if (SUCCEEDED(hr) && argumentCount > 0) {
+        argumentIds.resize(argumentCount);
+        hr = info_->GetClassIDInfo2(classId, &moduleId, &typeDef, &parent, argumentCount, &argumentCount, argumentIds.data());
+    }
+    if (FAILED(hr)) {
+        // Without the arguments the open name ("List`1") is still better than nothing.
+        argumentCount = 0;
+        if (FAILED(info_->GetClassIDInfo(classId, &moduleId, &typeDef)))
+            return "<unknown>";
+    }
+    if (typeDef == 0)
         return "<unknown>";
 
     IMetaDataImport* md = nullptr;
     if (FAILED(info_->GetModuleMetaData(moduleId, ofRead, IID_IMetaDataImport, (IUnknown**)&md)) || md == nullptr)
         return "<unknown>";
-
-    std::string name = typeDefName(md, typeDef);
+    std::vector<std::string> segments = typeDefSegments(md, typeDef);
     md->Release();
-    return name.empty() ? "<unknown>" : name;
+    if (segments.empty())
+        return "<unknown>";
+
+    std::vector<std::string> arguments;
+    arguments.reserve(argumentCount);
+    for (ULONG32 i = 0; i < argumentCount; ++i)
+        arguments.push_back(resolveTypeName(argumentIds[i]));
+    if (std::optional<std::string> constructed = signature::constructedTypeName(segments, arguments))
+        return *constructed;
+
+    std::string open;
+    for (const std::string& segment : segments)
+        open += (open.empty() ? "" : "+") + segment;
+    return open;
 }
 
 } // namespace Sherlock

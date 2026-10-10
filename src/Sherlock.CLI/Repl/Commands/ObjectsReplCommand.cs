@@ -14,12 +14,13 @@ public sealed class ObjectsReplCommand : IReplCommand
     public IReadOnlyList<string> Aliases => ["obj", "instances"];
     public string Summary => "List instances of a type, largest first. e.g. objects System.String";
     public string Usage => "objects <type-filter> [count]";
+    public int MaxArgs => 2;
 
     public ReplResult Execute(ReplContext context, string[] args)
     {
         Args.Require(args, 1, Usage);
         string filter = args[0];
-        int limit = Args.Limit(args, 1, DefaultLimit);
+        int limit = Args.Count(args, 1, DefaultLimit, Usage);
 
         InstanceListing listing = context.Console.Status()
             .Start($"Scanning heap for '{filter}'…", _ =>
@@ -27,7 +28,7 @@ public sealed class ObjectsReplCommand : IReplCommand
 
         if (listing.TotalMatched == 0)
         {
-            context.Console.MarkupLineInterpolated($"[#FFAF00]No instances matched[/] '{filter}'.");
+            context.Console.MarkupLineInterpolated($"[{Palette.Warning}]No instances matched[/] '{filter}'.");
             return ReplResult.Success;
         }
 
@@ -40,17 +41,17 @@ public sealed class ObjectsReplCommand : IReplCommand
         foreach (ObjectInstance instance in listing.Instances)
         {
             table.AddRow(
-                $"[#FFD75F]0x{instance.Address:x}[/]",
-                $"[bold #F2F2F2]{ByteSize.Format((long)instance.Size)}[/]",
-                $"[#00D7FF]{Markup.Escape(TypeNames.Short(instance.TypeName))}[/]",
-                instance.Preview is null ? "" : $"[#F2F2F2]{Markup.Escape(instance.Preview)}[/]");
+                $"[{Palette.Address}]0x{instance.Address:x}[/]",
+                $"[bold {Palette.Text}]{ByteSize.Format((long)instance.Size)}[/]",
+                Styled.Type(instance.TypeName),
+                instance.Preview is null ? "" : $"[{Palette.Text}]{Markup.Escape(TextUtil.Preview(instance.Preview))}[/]");
         }
 
         context.Console.Write(table);
         context.Console.MarkupLine(
             $"Showing top [bold]{listing.Instances.Count}[/] of [bold]{Counts.Format(listing.TotalMatched)}[/] matches, " +
-            $"[bold #F2F2F2]{ByteSize.Format((long)listing.TotalMatchedSize)}[/] total. " +
-            $"[#808791]Copy an address into[/] gcroot <address>.");
+            $"[bold {Palette.Text}]{ByteSize.Format((long)listing.TotalMatchedSize)}[/] total. " +
+            $"[{Palette.Muted}]Copy an address into[/] gcroot <address>.");
         return ReplResult.Success;
     }
 }

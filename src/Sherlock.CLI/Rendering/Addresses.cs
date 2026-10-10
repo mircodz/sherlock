@@ -3,9 +3,11 @@ using System.Globalization;
 
 namespace Sherlock.CLI.Rendering;
 
-/// <summary>Parses object addresses entered as hex, with or without a 0x prefix.</summary>
+/// <summary>Formats and parses object addresses: always lowercase hex with a 0x prefix and no padding.</summary>
 public static class Addresses
 {
+    public static string Format(ulong address) => "0x" + address.ToString("x", CultureInfo.InvariantCulture);
+
     public static bool TryParse(string text, out ulong address)
     {
         text = text.Trim();

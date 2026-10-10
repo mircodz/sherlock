@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Threading.Tasks;
 using Sherlock.Core;
 using Spectre.Console;
+using Sherlock.CLI.Rendering;
 
 namespace Sherlock.CLI.Repl.Commands;
 
@@ -11,9 +12,10 @@ public sealed class SleepReplCommand : IReplCommand
 {
     public string Name => "sleep";
     public IReadOnlyList<string> Aliases => ["wait"];
-    public string Summary => "Pause for N seconds (useful in scripts before snapshotting a live target).";
+    public string Summary => "Pause for N seconds (for scripts).";
     public string Category => "Live";
     public string Usage => "sleep <seconds>";
+    public int MaxArgs => 1;
 
     public ReplResult Execute(ReplContext context, string[] args)
     {
@@ -24,7 +26,7 @@ public sealed class SleepReplCommand : IReplCommand
             throw new DumpAnalysisException($"'{args[0]}' is not a valid duration in seconds.");
         }
 
-        context.Console.MarkupLineInterpolated($"[#808791]sleeping {seconds:0.##}s…[/]");
+        context.Console.MarkupLineInterpolated($"[{Palette.Muted}]sleeping {seconds:0.##}s…[/]");
         Task.Delay((int)(seconds * 1000), context.Cancellation).GetAwaiter().GetResult();
         return ReplResult.Success;
     }

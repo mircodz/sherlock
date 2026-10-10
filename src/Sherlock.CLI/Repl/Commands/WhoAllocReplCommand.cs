@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using Microsoft.Diagnostics.Runtime;
 using Sherlock.CLI.Rendering;
+using Sherlock.Core.Profiling;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -13,6 +14,7 @@ public sealed class WhoAllocReplCommand : IReplCommand
     public string Summary => "Show where an object (address) was allocated from.";
     public string Category => "Allocation profiling";
     public string Usage => "whoalloc <address>";
+    public int MaxArgs => 1;
 
     public ReplResult Execute(ReplContext context, string[] args)
     {
@@ -21,34 +23,40 @@ public sealed class WhoAllocReplCommand : IReplCommand
         if (!context.Snapshot.HasCorrelation)
         {
             context.Console.MarkupLine(
-                "[#FFAF00]This snapshot has no allocation provenance.[/] Capture one with " +
+                $"[{Palette.Warning}]This snapshot has no allocation provenance.[/] Capture one with " +
                 "[bold]run --correlate -- <app>[/] then [bold]snapshot[/].");
             return ReplResult.Failure;
         }
 
         ClrObject obj = context.Snapshot.Runtime.Heap.GetObject(address);
-        string typeLine = obj.Type is { } t
-            ? $"[bold]{Markup.Escape(t.Name ?? "<unknown>")}[/] [#808791]({ByteSize.Format((long)obj.Size)})[/]"
-            : "[#808791]<not a live object in this dump>[/]";
-        context.Console.MarkupLine($"[#FFD75F]0x{address:x}[/]  {typeLine}");
+        context.Console.MarkupLine(obj.Type is { } t
+            ? Styled.Object(t.Name ?? "<unknown>", address, (long)obj.Size)
+            : $"{Styled.Address(address)}  [{Palette.Muted}]<not a live object in this dump>[/]");
 
-        string? folded = context.Snapshot.WhoAllocated(address);
-        if (folded is null)
+        IReadOnlyList<string>? frames = context.Snapshot.WhoAllocated(address);
+        if (frames is null)
         {
             context.Console.MarkupLine(
-                "[#FFAF00]No allocation record.[/] [#808791]Untracked — allocated before profiling started, " +
+                $"[{Palette.Warning}]No allocation record.[/] [{Palette.Muted}]Untracked — allocated before profiling started, " +
                 "sampled out, or freed & the slot reused since capture.[/]");
             return ReplResult.Success;
         }
 
-        // Stored root-first; display the allocation site first.
-        string[] frames = folded.Split(';');
-        context.Console.MarkupLine("[#808791]allocated at:[/]");
-        for (int i = 0; i < frames.Length; i++)
+        if (frames.Count == 0)
         {
-            string frame = frames[frames.Length - 1 - i]; // leaf->root
-            context.Console.MarkupLineInterpolated($"  [#00D7FF]#{i}[/] {frame}");
+            context.Console.MarkupLineInterpolated($"[{Palette.Muted}]{ProvenanceReader.NoManagedFrames}[/]");
+            return ReplResult.Success;
         }
+
+        // Stored root-first; display the allocation site first.
+        context.Console.MarkupLine($"[{Palette.Muted}]allocated at:[/]");
+        var stack = new Grid().AddColumn(new GridColumn().Padding(2, 0, 2, 0).NoWrap()).AddColumn().AddColumn();
+        for (int i = 0; i < frames.Count; i++)
+        {
+            string frame = frames[frames.Count - 1 - i];
+            stack.AddRow(Styled.Muted($"#{i}"), Styled.Method(frame), Styled.Namespace(FrameNames.Split(frame).Type));
+        }
+        context.Console.Write(stack);
         return ReplResult.Success;
     }
 }

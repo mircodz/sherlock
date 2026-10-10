@@ -13,6 +13,7 @@ public sealed class ListReplCommand : IReplCommand
     public string Name => "ls";
     public string Summary => "List workspaces and their snapshots.";
     public string Usage => "ls";
+    public int MaxArgs => 0;
     public string Category => "Library";
 
     public ReplResult Execute(ReplContext context, string[] args)
@@ -38,9 +39,9 @@ public sealed class ListReplCommand : IReplCommand
             string kind = s.Kind.ToString().ToUpperInvariant();
             string when = s.CreatedAt.LocalDateTime.ToString("yyyy-MM-dd HH:mm");
             long totalSize = s.Snapshots.Sum(snapshot => snapshot.TotalSizeBytes);
-            string wsMarker = s.Id == currentWs ? "[#AFFF00]*[/]" : " ";
+            string wsMarker = s.Id == currentWs ? $"[{Palette.Hot}]*[/]" : " ";
             context.Console.MarkupLine(
-                $"{wsMarker} [bold]{s.Id}[/]  [#808791]{kind} · {when}[/]  [#F2F2F2]{ByteSize.Format(totalSize)}[/]");
+                $"{wsMarker} [bold]{s.Id}[/]  [{Palette.Muted}]{kind} · {when}[/]  [{Palette.Text}]{ByteSize.Format(totalSize)}[/]");
 
             if (s.Command is { } command)
             {
@@ -49,7 +50,7 @@ public sealed class ListReplCommand : IReplCommand
 
             if (s.Processes.Count == 0)
             {
-                context.Console.MarkupLine("    [#808791]└─ no processes[/]");
+                context.Console.MarkupLine($"    [{Palette.Muted}]└─ no processes[/]");
                 continue;
             }
 
@@ -60,14 +61,14 @@ public sealed class ListReplCommand : IReplCommand
                 string processBranch = lastProcess ? "└─" : "├─";
                 string name = proc.Name is { } n ? Markup.Escape(n) : "?";
                 string role = proc.IsRoot ? "" : " · child";
-                string profiled = proc.HasAllocations ? " · [#00D7FF]allocations[/]" : "";
+                string profiled = proc.HasAllocations ? $" · [{Palette.Name}]allocations[/]" : "";
                 context.Console.MarkupLine(
-                    $"    [#808791]{processBranch}[/] [#00D7FF]{name}[/] [#808791]· pid {proc.Pid}{role}[/]{profiled}");
+                    $"    [{Palette.Muted}]{processBranch}[/] [{Palette.Name}]{name}[/] [{Palette.Muted}]· pid {proc.Pid}{role}[/]{profiled}");
 
                 if (proc.Snapshots.Count == 0)
                 {
                     string emptyPrefix = lastProcess ? "       " : "    │  ";
-                    context.Console.MarkupLine($"{emptyPrefix}[#808791]└─ no snapshots[/]");
+                    context.Console.MarkupLine($"{emptyPrefix}[{Palette.Muted}]└─ no snapshots[/]");
                     continue;
                 }
 
@@ -76,20 +77,20 @@ public sealed class ListReplCommand : IReplCommand
                     SnapshotEntry e = proc.Snapshots[snapshotIndex];
                     string snapshotPrefix = lastProcess ? "       " : "    │  ";
                     string snapshotBranch = snapshotIndex == proc.Snapshots.Count - 1 ? "└─" : "├─";
-                    string marker = e.Id == currentSnap ? "[#AFFF00]*[/]" : " ";
-                    string label = e.Label is { } l ? $"  [#00D7FF]{Markup.Escape(l)}[/]" : "";
-                    string missing = e.Exists ? "" : " [#FF3B5C](missing)[/]";
+                    string marker = e.Id == currentSnap ? $"[{Palette.Hot}]*[/]" : " ";
+                    string label = e.Label is { } l ? $"  [{Palette.Name}]{Markup.Escape(l)}[/]" : "";
+                    string missing = e.Exists ? "" : $" [{Palette.Error}](missing)[/]";
                     string etime = e.CreatedAt.LocalDateTime.ToString("HH:mm");
-                    string reason = e.Reason is { } r ? $"  [#808791]via {Markup.Escape(r)}[/]" : "";
+                    string reason = e.Reason is { } r ? $"  [{Palette.Muted}]via {Markup.Escape(r)}[/]" : "";
                     context.Console.MarkupLine(
-                        $"{snapshotPrefix}[#808791]{snapshotBranch}[/]{marker} [bold]{e.Id,-3}[/]  [#808791]{etime}[/]  " +
-                        $"[#F2F2F2]{ByteSize.Format(e.TotalSizeBytes),10}[/]  {Contents(e)}{reason}{label}{missing}");
+                        $"{snapshotPrefix}[{Palette.Muted}]{snapshotBranch}[/]{marker} [bold]{e.Id,-3}[/]  [{Palette.Muted}]{etime}[/]  " +
+                        $"[{Palette.Text}]{ByteSize.Format(e.TotalSizeBytes),10}[/]  {Contents(e)}{reason}{label}{missing}");
                 }
             }
         }
 
         context.Console.WriteLine();
-        context.Console.MarkupLine("[#808791]load <id> · label <id> <name> · rm <id|workspace>[/]");
+        context.Console.MarkupLine($"[{Palette.Muted}]load <id> · label <id> <name> · rm <id|workspace>[/]");
         return ReplResult.Success;
     }
 
@@ -97,13 +98,13 @@ public sealed class ListReplCommand : IReplCommand
     {
         if (snapshot.HasCorrelation)
         {
-            return "heap + [#00D7FF]alloc[/] + [#AFFF00]corr[/]";
+            return $"heap + [{Palette.Name}]alloc[/] + [{Palette.Hot}]corr[/]";
         }
         if (snapshot.HasAllocations)
         {
-            return "heap + [#00D7FF]alloc[/]";
+            return $"heap + [{Palette.Name}]alloc[/]";
         }
-        return "[#808791]heap only[/]";
+        return $"[{Palette.Muted}]heap only[/]";
     }
 
     private static string ShortCommand(string command)

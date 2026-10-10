@@ -41,11 +41,13 @@ TEST(MethodRegistry, RepeatedRegistrationAndModuleLoadKeepOneCookie) {
     registry.moduleLoaded(kModule);
     EXPECT_EQ(registry.intern(kModule, kMethod), frame);
     EXPECT_EQ(calls, 1);
-    EXPECT_EQ(registry.name(frame), "Example.Owner.Method [m1:06000001]");
+    EXPECT_EQ(registry.name(frame), "Example.Owner.Method");
 }
 
-TEST(MethodRegistry, ModulesAndOverloadTokensHaveDistinctCookiesAndNames) {
-    MethodRegistry registry([](ModuleID, mdMethodDef) { return resolved(); });
+TEST(MethodRegistry, ModulesAndOverloadTokensHaveDistinctCookies) {
+    MethodRegistry registry([](ModuleID, mdMethodDef token) {
+        return resolved(token == kMethod ? "Example.Owner.Method(int)" : "Example.Owner.Method(string)");
+    });
     registry.moduleLoaded(kModule);
     registry.moduleLoaded(kModule + 1);
     FrameId first = registry.intern(kModule, kMethod);
@@ -53,11 +55,9 @@ TEST(MethodRegistry, ModulesAndOverloadTokensHaveDistinctCookiesAndNames) {
     FrameId otherModule = registry.intern(kModule + 1, kMethod);
     EXPECT_LT(first, overload);
     EXPECT_LT(overload, otherModule);
-    EXPECT_NE(registry.name(first), registry.name(overload));
-    EXPECT_NE(registry.name(first), registry.name(otherModule));
-    EXPECT_EQ(registry.name(first), "Example.Owner.Method [m1:06000001]");
-    EXPECT_EQ(registry.name(overload), "Example.Owner.Method [m1:06000002]");
-    EXPECT_EQ(registry.name(otherModule), "Example.Owner.Method [m2:06000001]");
+    EXPECT_EQ(registry.name(first), "Example.Owner.Method(int)");
+    EXPECT_EQ(registry.name(overload), "Example.Owner.Method(string)");
+    EXPECT_EQ(registry.name(otherModule), "Example.Owner.Method(int)");
 }
 
 TEST(MethodRegistry, ReloadedModuleRetainsHistoricalNamesAndGetsFreshCookies) {
@@ -78,7 +78,7 @@ TEST(MethodRegistry, ReloadedModuleRetainsHistoricalNamesAndGetsFreshCookies) {
     EXPECT_TRUE(registry.name(replacement).starts_with(symbol));
 }
 
-TEST(MethodRegistry, SameNamedDefinitionInReloadedModuleDoesNotAliasOldName) {
+TEST(MethodRegistry, ReloadedDefinitionGetsFreshCookieButKeepsItsName) {
     MethodRegistry registry([](ModuleID, mdMethodDef) { return resolved(); });
     registry.moduleLoaded(kModule);
     FrameId old = registry.intern(kModule, kMethod);
@@ -86,9 +86,8 @@ TEST(MethodRegistry, SameNamedDefinitionInReloadedModuleDoesNotAliasOldName) {
     registry.moduleLoaded(kModule);
     FrameId current = registry.intern(kModule, kMethod);
     EXPECT_NE(old, current);
-    EXPECT_NE(registry.name(old), registry.name(current));
-    EXPECT_TRUE(registry.name(old).ends_with("[m1:06000001]"));
-    EXPECT_TRUE(registry.name(current).ends_with("[m2:06000001]"));
+    EXPECT_EQ(registry.name(old), "Example.Owner.Method");
+    EXPECT_EQ(registry.name(current), "Example.Owner.Method");
 }
 
 TEST(MethodRegistry, FailedResolutionRetriesSameCookieAndReturnsIndependentCopies) {
@@ -107,7 +106,7 @@ TEST(MethodRegistry, FailedResolutionRetriesSameCookieAndReturnsIndependentCopie
     EXPECT_NE(failure.find("HRESULT=0x80004005"), std::string::npos);
     EXPECT_EQ(registry.intern(kModule, kMethod), frame);
     EXPECT_EQ(calls, 2);
-    EXPECT_TRUE(registry.name(frame).starts_with("Example.Owner.Method "));
+    EXPECT_EQ(registry.name(frame), "Example.Owner.Method");
     EXPECT_TRUE(failure.starts_with("<unresolved method "));
     EXPECT_EQ(registry.intern(kModule, kMethod), frame);
     EXPECT_EQ(calls, 2);
@@ -164,8 +163,8 @@ TEST(MethodRegistry, GenericDeclarationsAndOverloadSymbolsArePreserved) {
     registry.moduleLoaded(kModule);
     FrameId first = registry.intern(kModule, kMethod);
     FrameId second = registry.intern(kModule, kMethod + 1);
-    EXPECT_TRUE(registry.name(first).starts_with("Example.Outer<T>+Inner<U>.Allocate<TValue>(System.Int32) "));
-    EXPECT_TRUE(registry.name(second).starts_with("Example.Outer<T>+Inner<U>.Allocate<TValue>(System.String) "));
+    EXPECT_EQ(registry.name(first), "Example.Outer<T>+Inner<U>.Allocate<TValue>(System.Int32)");
+    EXPECT_EQ(registry.name(second), "Example.Outer<T>+Inner<U>.Allocate<TValue>(System.String)");
     EXPECT_NE(registry.name(first), registry.name(second));
 }
 
@@ -174,7 +173,7 @@ TEST(MethodRegistry, LongUnicodeSymbolsAreOwnedAndNotTruncated) {
     MethodRegistry registry([&](ModuleID, mdMethodDef) { return resolved(symbol); });
     registry.moduleLoaded(kModule);
     FrameId frame = registry.intern(kModule, kMethod);
-    EXPECT_TRUE(registry.name(frame).starts_with(symbol + " "));
+    EXPECT_EQ(registry.name(frame), symbol);
     std::string original = registry.name(frame);
     symbol.assign("changed");
     EXPECT_EQ(registry.name(frame), original);
@@ -188,7 +187,7 @@ TEST(MethodRegistry, EscapesControlsAndSemicolonsWithoutIntroducingFoldedFrames)
     registry.moduleLoaded(kModule);
     FrameId frame = registry.intern(kModule, kMethod);
     std::string label = registry.name(frame);
-    EXPECT_EQ(label, "Example.Type.Method\\x3b\\x0a\\x0d\\x09\\x1b[31m\\\\literal\\x00end [m1:06000001]");
+    EXPECT_EQ(label, "Example.Type.Method\\x3b\\x0a\\x0d\\x09\\x1b[31m\\\\literal\\x00end");
 
     std::string folded = "root;" + label + ";leaf 1\n";
     EXPECT_EQ(std::count(folded.begin(), folded.end(), ';'), 2);
@@ -217,8 +216,8 @@ TEST(MethodRegistry, EscapedMetadataDoesNotLookLikeLiteralEscapeSequences) {
         return resolved(token == kMethod ? "Example.Type.Method;" : "Example.Type.Method\\x3b");
     });
     registry.moduleLoaded(kModule);
-    EXPECT_EQ(registry.name(registry.intern(kModule, kMethod)), "Example.Type.Method\\x3b [m1:06000001]");
-    EXPECT_EQ(registry.name(registry.intern(kModule, kMethod + 1)), "Example.Type.Method\\\\x3b [m1:06000002]");
+    EXPECT_EQ(registry.name(registry.intern(kModule, kMethod)), "Example.Type.Method\\x3b");
+    EXPECT_EQ(registry.name(registry.intern(kModule, kMethod + 1)), "Example.Type.Method\\\\x3b");
 }
 
 TEST(MethodRegistry, UnresolvedDiagnosticsEscapeUntrustedStagesAndKeepFullIdentity) {
@@ -241,7 +240,7 @@ TEST(MethodRegistry, EmptySuccessfulResolutionIsAnExplicitRetryableFailure) {
     FrameId frame = registry.intern(kModule, kMethod);
     EXPECT_NE(registry.name(frame).find("resolver/empty-symbol"), std::string::npos);
     EXPECT_EQ(registry.intern(kModule, kMethod), frame);
-    EXPECT_TRUE(registry.name(frame).starts_with("Example.Owner.Method "));
+    EXPECT_EQ(registry.name(frame), "Example.Owner.Method");
 }
 
 TEST(MethodRegistry, ResolverExceptionsPropagateAndDoNotPreventRetry) {
@@ -256,7 +255,7 @@ TEST(MethodRegistry, ResolverExceptionsPropagateAndDoNotPreventRetry) {
     EXPECT_THROW(registry.intern(kModule, kMethod), std::runtime_error);
     FrameId frame = registry.intern(kModule, kMethod);
     EXPECT_EQ(frame, 1);
-    EXPECT_TRUE(registry.name(frame).starts_with("Example.Owner.Method "));
+    EXPECT_EQ(registry.name(frame), "Example.Owner.Method");
     EXPECT_EQ(calls, 2);
 }
 
@@ -276,7 +275,7 @@ TEST(MethodRegistry, ResolverMayReenterRegistryWithoutDeadlockingOrRecursing) {
     FrameId frame = registry.intern(kModule, kMethod);
     EXPECT_EQ(frame, reentered);
     EXPECT_EQ(calls, 1);
-    EXPECT_TRUE(registry.name(frame).starts_with("Example.Owner.Method "));
+    EXPECT_EQ(registry.name(frame), "Example.Owner.Method");
 }
 
 TEST(MethodRegistry, InFlightResolutionCannotPublishIntoReusedModuleLifetime) {
@@ -302,7 +301,7 @@ TEST(MethodRegistry, InFlightResolutionCannotPublishIntoReusedModuleLifetime) {
     finish.set_value();
     worker.join();
     EXPECT_NE(old, current);
-    EXPECT_TRUE(registry.name(current).starts_with("Current.Type.Method "));
+    EXPECT_EQ(registry.name(current), "Current.Type.Method");
     EXPECT_NE(registry.name(old).find("module-lifetime-ended-during-resolution"), std::string::npos);
     EXPECT_EQ(registry.name(old).find("Stale.Type.Method"), std::string::npos);
 }
@@ -341,6 +340,6 @@ TEST(MethodRegistry, ConcurrentRegistrationSharesCookiesAndKeepsResolvedNames) {
         EXPECT_EQ(frames[worker], frames[0]);
     }
     for (FrameId frame : unique) {
-        EXPECT_TRUE(registry.name(frame).starts_with("Example.Owner.Method "));
+        EXPECT_EQ(registry.name(frame), "Example.Owner.Method");
     }
 }

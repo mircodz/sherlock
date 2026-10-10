@@ -3,6 +3,7 @@ using System.Linq;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using Sherlock.Core.Collection;
+using Sherlock.Core.Store;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
@@ -12,8 +13,10 @@ public sealed class SnapshotReplCommand : IReplCommand
 {
     public string Name => "snapshot";
     public IReadOnlyList<string> Aliases => ["snap", "collect"];
-    public string Summary => "Snapshot a live .NET process into the library (default: the live app; `snapshot <pid>` for a specific one).";
+    public string Summary => "Snapshot a live .NET process into the library (default: the running app).";
     public string Usage => "snapshot [pid | --pid N | --name X]";
+    public int MaxArgs => 2;
+    public IReadOnlyList<string>? Options => ["--pid", "--name"];
     public string Category => "Live";
 
     public ReplResult Execute(ReplContext context, string[] args)
@@ -50,7 +53,7 @@ public sealed class SnapshotReplCommand : IReplCommand
                     Output.Warning(context.Console, $"Multiple live .NET processes; use [bold]snapshot <pid>[/]:");
                     foreach (RunProcess p in live)
                     {
-                        context.Console.MarkupLineInterpolated($"    [#FFD75F]{p.Pid}[/]  [#00D7FF]{p.Name}[/]  [#808791]{(p.IsRoot ? "root" : "child")}[/]");
+                        context.Console.MarkupLineInterpolated($"    [{Palette.Address}]{p.Pid}[/]  [{Palette.Name}]{p.Name}[/]  [{Palette.Muted}]{(p.IsRoot ? "root" : "child")}[/]");
                     }
                 }
                 return ReplResult.Failure;
@@ -97,10 +100,10 @@ public sealed class SnapshotReplCommand : IReplCommand
 
     private static ReplResult Capture(ReplContext context, int pid)
     {
-        CaptureResult result;
+        SnapshotEntry entry;
         try
         {
-            result = context.Console.Status().Start($"Snapshotting pid {pid}…", _ => context.Workspace.Capture(pid));
+            entry = context.Console.Status().Start($"Snapshotting pid {pid}…", _ => context.Workspace.Capture(pid));
         }
         catch (DumpAnalysisException ex)
         {
@@ -108,25 +111,16 @@ public sealed class SnapshotReplCommand : IReplCommand
             return ReplResult.Failure;
         }
 
-        string contents = result.Entry.HasAllocations
-            ? result.Entry.HasCorrelation ? "heap + allocations + correlation" : "heap + allocations"
+        string contents = entry.HasAllocations
+            ? entry.HasCorrelation ? "heap + allocations + correlation" : "heap + allocations"
             : "heap only";
-        string sizes = result.Entry.HasAllocations
-            ? $"{ByteSize.Format(result.Entry.SizeBytes)} heap + {ByteSize.Format(result.Entry.ProvenanceSizeBytes)} allocations"
-            : ByteSize.Format(result.Entry.SizeBytes);
-        Output.Success(context.Console, $"Saved and loaded [bold]{result.Entry.Id}[/] [#808791]({contents} · {sizes})[/]");
-
-        switch (result.Provenance)
+        string sizes = entry.HasAllocations
+            ? $"{ByteSize.Format(entry.SizeBytes)} heap + {ByteSize.Format(entry.ProvenanceSizeBytes)} allocations"
+            : ByteSize.Format(entry.SizeBytes);
+        Output.Success(context.Console, $"Saved and loaded [bold]{entry.Id}[/] [{Palette.Muted}]({contents} · {sizes})[/]");
+        if (entry.HasCorrelation)
         {
-            case ProvenanceState.Drifted:
-                Output.Warning(context.Console, $"A GC ran during capture; allocation totals remain available, but object correlation was disabled.");
-                break;
-            case ProvenanceState.Exact:
-                Output.Info(context.Console, $"Allocation correlation is exact · use [bold]whoalloc <address>[/].");
-                break;
-            case ProvenanceState.Unverified:
-                Output.Warning(context.Console, $"Correlation could not be verified; allocation totals remain available, but object correlation was disabled.");
-                break;
+            Output.Info(context.Console, $"Use [bold]whoalloc <address>[/] to see where an object was allocated.");
         }
         return ReplResult.Success;
     }

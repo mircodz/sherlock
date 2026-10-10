@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -144,7 +145,6 @@ private:
     std::unique_ptr<SnapshotTriggers> triggers; // alloc:/gc:/throw: triggers via callbacks
     // Server GC may start and finish on different threads.
     std::atomic<int> maxGenCollected{0};
-    std::atomic<std::uint64_t> gcCount{0};      // GCs seen — for snapshot drift detection
 
     bool correlate = false;           // SHERLOCK_CORRELATE: track live objects for snapshot join
     std::string correlationPath;
@@ -161,6 +161,9 @@ private:
     void fireTrigger(const std::string& display) noexcept; // emit a snapshot-trigger event to sl
 
     bool snapshotOnExit_ = false;
+    // sl's capture budget (SHERLOCK_CAPTURE_TIMEOUT_MS) bounds how long Main or a GC stays parked
+    // if sl stops responding; a disconnect releases both immediately.
+    std::chrono::milliseconds captureTimeout_{std::chrono::minutes(30)};
     std::atomic<bool> exitEntryPointArmed_{false};
     std::atomic<bool> exitCaptureFired_{false};
     std::atomic<std::uint64_t> exitCaptureSequence_{1};

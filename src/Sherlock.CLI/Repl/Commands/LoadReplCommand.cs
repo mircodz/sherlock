@@ -10,6 +10,7 @@ public sealed class LoadReplCommand : IReplCommand
     public string Name => "load";
     public string Summary => "Load a snapshot from the library by id or label.";
     public string Usage => "load <id>";
+    public int MaxArgs => 1;
     public string Category => "Library";
 
     public ReplResult Execute(ReplContext context, string[] args)
@@ -29,7 +30,7 @@ public sealed class LoadReplCommand : IReplCommand
         }
 
         context.Workspace.Load(session, entry);
-        Output.Success(context.Console, $"Loaded [bold]{entry.Id}[/] [#808791]({Path.GetFileName(entry.Path)})[/]");
+        Output.Success(context.Console, $"Loaded [bold]{entry.Id}[/] [{Palette.Muted}]({Path.GetFileName(entry.Path)})[/]");
         return ReplResult.Success;
     }
 }

@@ -17,7 +17,7 @@ public sealed class AnalyzeCommand : Command<AnalyzeCommand.Settings>
     public sealed class Settings : CommandSettings
     {
         [CommandArgument(0, "[dump]")]
-        [Description("Optional dump file to open. Omit to start in the snapshot library.")]
+        [Description("A dump file, or a library snapshot id or label, to open. Omit to start in the snapshot library.")]
         public string? DumpPath { get; init; }
 
         [CommandOption("-x|--exec <COMMAND>")]
@@ -33,7 +33,7 @@ public sealed class AnalyzeCommand : Command<AnalyzeCommand.Settings>
         public bool Interactive { get; init; }
     }
 
-    protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellation)
+    public override int Execute(CommandContext context, Settings settings, CancellationToken cancellation)
     {
         IAnsiConsole console = AnsiConsole.Console;
         try
@@ -65,11 +65,19 @@ public sealed class AnalyzeCommand : Command<AnalyzeCommand.Settings>
         {
             try
             {
-                workspace.LoadTransient(settings.DumpPath);
+                // A path that doesn't exist may name a library snapshot ("sl s1").
+                if (!File.Exists(settings.DumpPath) && workspace.Store.FindSnapshot(settings.DumpPath) is ({ } session, { Exists: true } entry))
+                {
+                    workspace.Load(session, entry);
+                }
+                else
+                {
+                    workspace.LoadTransient(settings.DumpPath);
+                }
             }
             catch (FileNotFoundException ex)
             {
-                Output.Error(console, $"Dump file not found: {ex.FileName}");
+                Output.Error(console, $"No dump file or library snapshot named {ex.FileName}.");
                 return 1;
             }
             catch (DumpAnalysisException ex)

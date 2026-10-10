@@ -15,6 +15,7 @@ public sealed class DumpHeapReplCommand : IReplCommand
     public IReadOnlyList<string> Aliases => ["dh", "heap"];
     public string Summary => "Show heap object statistics by type, largest first.";
     public string Usage => "dumpheap [type-filter]";
+    public int MaxArgs => 1;
 
     public ReplResult Execute(ReplContext context, string[] args)
     {
@@ -30,8 +31,8 @@ public sealed class DumpHeapReplCommand : IReplCommand
         if (stats.Count == 0)
         {
             context.Console.MarkupLine(filter is null
-                ? "[#FFAF00]No objects found on the heap.[/]"
-                : $"[#FFAF00]No types matched[/] '{Markup.Escape(filter)}'.");
+                ? $"[{Palette.Warning}]No objects found on the heap.[/]"
+                : $"[{Palette.Warning}]No types matched[/] '{Markup.Escape(filter)}'.");
             return ReplResult.Success;
         }
 
@@ -40,6 +41,7 @@ public sealed class DumpHeapReplCommand : IReplCommand
         table.AddColumn(new TableColumn("[bold]Count[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]Total[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]Avg[/]").RightAligned());
+        table.AddColumn("[bold]Namespace[/]");
 
         long totalCount = 0;
         ulong totalSize = 0;
@@ -52,21 +54,22 @@ public sealed class DumpHeapReplCommand : IReplCommand
         foreach (HeapTypeStat stat in stats.Take(DefaultLimit))
         {
             table.AddRow(
-                $"[#00D7FF]{Markup.Escape(TypeNames.Short(stat.TypeName))}[/]",
+                Styled.Type(stat.TypeName),
                 Counts.Format(stat.Count),
-                $"[bold #AFFF00]{ByteSize.Format((long)stat.TotalSize)}[/]",
-                ByteSize.Format((long)stat.AverageSize));
+                Styled.HotSize((long)stat.TotalSize),
+                ByteSize.Format((long)stat.AverageSize),
+                Styled.Namespace(stat.TypeName));
         }
 
         context.Console.Write(table);
 
         if (stats.Count > DefaultLimit)
         {
-            context.Console.MarkupLine($"[#808791]… {Counts.Format(stats.Count - DefaultLimit)} more types not shown. Filter with[/] dumpheap <type>.");
+            context.Console.MarkupLine($"[{Palette.Muted}]… {Counts.Format(stats.Count - DefaultLimit)} more types not shown. Filter with[/] dumpheap <type>.");
         }
 
         context.Console.MarkupLine(
-            $"[bold]{Counts.Format(stats.Count)}[/] types, [bold]{Counts.Format(totalCount)}[/] objects, [bold #AFFF00]{ByteSize.Format((long)totalSize)}[/] total.");
+            $"[bold]{Counts.Format(stats.Count)}[/] types, [bold]{Counts.Format(totalCount)}[/] objects, [bold {Palette.Hot}]{ByteSize.Format((long)totalSize)}[/] total.");
         return ReplResult.Success;
     }
 }

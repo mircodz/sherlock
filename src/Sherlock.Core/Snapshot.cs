@@ -24,6 +24,7 @@ public sealed class Snapshot : IDisposable
     private DumpInfo? _info;
     private IReadOnlyList<ModuleInfo>? _modules;
     private IReadOnlyList<SegmentInfo>? _segments;
+    private HeapGenerations? _generations;
     private IReadOnlyList<ThreadInfo>? _threads;
     private IReadOnlyList<ExceptionInfo>? _exceptions;
     private IReadOnlyList<HeapTypeStat>? _histogram;
@@ -80,6 +81,7 @@ public sealed class Snapshot : IDisposable
     public DumpInfo Info => _info ??= new DumpInspector(this).Inspect();
     public IReadOnlyList<ModuleInfo> Modules => _modules ??= new RuntimeAnalyzer(this).GetModules();
     public IReadOnlyList<SegmentInfo> Segments => _segments ??= new RuntimeAnalyzer(this).GetSegments();
+    public HeapGenerations Generations => _generations ??= new RuntimeAnalyzer(this).GetGenerations();
     public IReadOnlyList<ThreadInfo> Threads => _threads ??= new ThreadAnalyzer(this).GetThreads();
     public IReadOnlyList<ExceptionInfo> Exceptions => GetExceptions();
     public IReadOnlyList<HeapTypeStat> Histogram => _histogram ??= BuildHistogram();
@@ -124,7 +126,8 @@ public sealed class Snapshot : IDisposable
         return new ObjectInspector(this).InspectChildren(value, startIndex, count, raw);
     }
     public IReadOnlyList<GcRootPath> Roots(ulong address, CancellationToken cancellationToken = default) => RootAnalyzer.Find(GetHeapGraph(cancellationToken), address, cancellationToken);
-    public InstanceListing Instances(string filter, int limit = 20, CancellationToken cancellationToken = default) => new HeapAnalyzer(this).ListInstances(filter, limit, cancellationToken);
+    public InstanceListing Instances(string filter, int limit = 20, CancellationToken cancellationToken = default, bool exact = false) =>
+        new HeapAnalyzer(this).ListInstances(filter, limit, cancellationToken, exact);
 
     public IReadOnlyList<DuplicateString> DuplicateStrings(int limit = 20, CancellationToken cancellationToken = default)
     {
@@ -150,7 +153,8 @@ public sealed class Snapshot : IDisposable
         return _diagnosis ??= new HeapDoctor(this).Diagnose(cancellationToken);
     }
 
-    public string? WhoAllocated(ulong address) => HasCorrelation ? GetProvenance()?.StackFor(address) : null;
+    /// <summary>See <see cref="Profiling.ProvenanceReader.FramesFor"/>.</summary>
+    public IReadOnlyList<string>? WhoAllocated(ulong address) => HasCorrelation ? GetProvenance()?.FramesFor(address) : null;
 
     internal HeapGraph GetHeapGraph(CancellationToken cancellationToken = default) => (_heapGraph ??= new HeapGraphProvider(this)).Get(cancellationToken);
     internal HeapGraph? TryGetCachedHeapGraph() => (_heapGraph ??= new HeapGraphProvider(this)).TryGetCachedOrOnDisk();

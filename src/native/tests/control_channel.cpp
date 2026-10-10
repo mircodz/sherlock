@@ -57,14 +57,14 @@ TEST(ControlProtocol, ReadsBackToBackFramesInOneBuffer) {
 }
 
 TEST(ControlProtocol, SplitAndJoinFieldsRoundTrip) {
-    std::vector<std::string_view> fields = splitFields("REQ\t7\temit-correlation\targ1\targ2");
+    std::vector<std::string_view> fields = splitFields("REQ\t7\tflush-allocations\targ1\targ2");
     ASSERT_EQ(fields.size(), 5u);
     EXPECT_EQ(fields[0], "REQ");
     EXPECT_EQ(fields[1], "7");
-    EXPECT_EQ(fields[2], "emit-correlation");
+    EXPECT_EQ(fields[2], "flush-allocations");
     EXPECT_EQ(fields[3], "arg1");
     EXPECT_EQ(fields[4], "arg2");
-    EXPECT_EQ(joinFields(fields), "REQ\t7\temit-correlation\targ1\targ2");
+    EXPECT_EQ(joinFields(fields), "REQ\t7\tflush-allocations\targ1\targ2");
 }
 
 TEST(ControlProtocol, SplitFieldsAlwaysReturnsAtLeastOneField) {

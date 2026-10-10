@@ -14,6 +14,7 @@ public sealed class SourceReplCommand : IReplCommand
     public IReadOnlyList<string> Aliases => ["@"];
     public string Summary => "Run commands from a script file, one per line.";
     public string Usage => "source <file>";
+    public int MaxArgs => 1;
     public string Category => "Session";
 
     public ReplResult Execute(ReplContext context, string[] args)
@@ -38,7 +39,7 @@ public sealed class SourceReplCommand : IReplCommand
             foreach (string raw in ReadCommands(path, context.Cancellation))
             {
                 string line = raw.Trim();
-                context.Console.MarkupLineInterpolated($"[#808791]source>[/] {line}");
+                context.Console.MarkupLineInterpolated($"[{Palette.Muted}]source>[/] {line}");
                 result |= context.RunLine(line);
                 if ((result & (ReplResult.Quit | ReplResult.Cancelled)) != 0)
                 {

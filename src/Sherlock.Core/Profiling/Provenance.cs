@@ -179,5 +179,11 @@ public sealed class ProvenanceReader
     }
 
     /// <summary>Resolves an object address directly to its allocation stack string, or null if untracked.</summary>
-    public string? StackFor(ulong address) => TryGetStack(address, out uint stackId) ? Stacks.FormatStack(stackId) : null;
+    /// <summary>Explains an empty <see cref="FramesFor"/> stack.</summary>
+    public const string NoManagedFrames =
+        "Allocated by the runtime with no managed code on the stack (startup, statics, or a runtime helper).";
+
+    /// <summary>The allocation stack of a live object, root->leaf; empty when it was allocated without managed frames,
+    /// null when the object is untracked.</summary>
+    public string[]? FramesFor(ulong address) => TryGetStack(address, out uint stackId) ? Stacks.FrameNames(stackId) : null;
 }

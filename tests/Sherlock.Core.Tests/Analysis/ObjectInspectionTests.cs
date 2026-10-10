@@ -36,6 +36,16 @@ public sealed class ObjectInspectionTests
             char.GetUnicodeCategory(c) is UnicodeCategory.Format or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator);
     }
 
+    [Theory]
+    [InlineData("<Payload>k__BackingField", "Payload")]
+    [InlineData("_firstChar", "_firstChar")]
+    [InlineData("<>k__BackingField", "<>k__BackingField")]
+    [InlineData(null, "<field>")]
+    public void BackingFieldsDisplayAsTheirProperty(string? field, string expected)
+    {
+        Assert.Equal(expected, ObjectInspector.FieldDisplayName(field));
+    }
+
     [Fact]
     public void CharacterPreviewEscapesSingleQuotes()
     {

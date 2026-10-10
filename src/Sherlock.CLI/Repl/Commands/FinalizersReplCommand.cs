@@ -15,17 +15,18 @@ public sealed class FinalizersReplCommand : IReplCommand
     public IReadOnlyList<string> Aliases => ["fin"];
     public string Summary => "Objects awaiting finalization by type (a missed-Dispose heuristic).";
     public string Usage => "finalizers [count]";
+    public int MaxArgs => 1;
 
     public ReplResult Execute(ReplContext context, string[] args)
     {
-        int limit = Args.Limit(args, 0, DefaultLimit);
+        int limit = Args.Count(args, 0, DefaultLimit, Usage);
 
         FinalizerReport report = context.Console.Status()
             .Start("Scanning finalizer queue…", _ => context.Snapshot.Finalizers(context.Cancellation));
 
         if (report.TotalObjects == 0)
         {
-            context.Console.MarkupLine("[#AFFF00]No finalizable objects.[/] [#808791]Nothing is waiting on the finalizer queue.[/]");
+            context.Console.MarkupLine($"[{Palette.Hot}]No finalizable objects.[/] [{Palette.Muted}]Nothing is waiting on the finalizer queue.[/]");
             return ReplResult.Success;
         }
 
@@ -33,18 +34,20 @@ public sealed class FinalizersReplCommand : IReplCommand
         table.AddColumn(new TableColumn("[bold]Count[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]Bytes[/]").RightAligned());
         table.AddColumn("[bold]Type[/]");
+        table.AddColumn("[bold]Namespace[/]");
 
         foreach (FinalizableTypeStat stat in report.ByType.Take(limit))
         {
             table.AddRow(
                 $"[bold]{Counts.Compact(stat.Count)}[/]",
-                $"[#F2F2F2]{ByteSize.Format((long)stat.TotalBytes)}[/]",
-                $"[#00D7FF]{Markup.Escape(TypeNames.Short(stat.TypeName))}[/]");
+                Styled.HotSize((long)stat.TotalBytes),
+                Styled.Type(stat.TypeName),
+                Styled.Namespace(stat.TypeName));
         }
 
         context.Console.Write(table);
         context.Console.MarkupLineInterpolated(
-            $"[#808791]{Counts.Format(report.TotalObjects)} finalizable objects,[/] [#F2F2F2]{ByteSize.Format((long)report.TotalBytes)}[/][#808791]. A live finalizer usually means Dispose() wasn't called; list a type with[/] objects <type>[#808791].[/]");
+            $"[{Palette.Muted}]{Counts.Format(report.TotalObjects)} finalizable objects,[/] [{Palette.Text}]{ByteSize.Format((long)report.TotalBytes)}[/][{Palette.Muted}]. A live finalizer usually means Dispose() wasn't called; list a type with[/] objects <type>[{Palette.Muted}].[/]");
         return ReplResult.Success;
     }
 }

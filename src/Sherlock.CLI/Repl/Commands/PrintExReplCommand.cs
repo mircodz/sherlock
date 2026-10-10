@@ -1,13 +1,14 @@
 using System.Collections.Generic;
 using System.Threading;
-using Microsoft.Diagnostics.Runtime;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
+using Sherlock.Core.Analysis;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;
 
-/// <summary>Prints a depth-limited reference graph with cycle detection.</summary>
+/// <summary>Prints a depth-limited reference graph with cycle detection, from the same object model as <c>print</c>
+/// and the TUI inspector.</summary>
 public sealed class PrintExReplCommand : IReplCommand
 {
     private const int DefaultDepth = 2;
@@ -15,181 +16,63 @@ public sealed class PrintExReplCommand : IReplCommand
 
     public string Name => "printx";
     public IReadOnlyList<string> Aliases => ["px"];
-    public string Summary => "Print an object graph (reference tree) to a depth. `print`/`p` for one object.";
+    public string Summary => "Print an object and what it references, as a tree to a depth.";
     public string Usage => "printx <address> [depth]";
+    public int MaxArgs => 2;
 
     public ReplResult Execute(ReplContext context, string[] args)
     {
         ulong address = Args.Address(args, 0, Usage);
-        int depth = args.Length > 1 && int.TryParse(args[1], out int d) && d >= 0 ? d : DefaultDepth;
+        int depth = Args.Count(args, 1, DefaultDepth, Usage, allowZero: true);
 
-        ClrHeap heap = context.Snapshot.Runtime.Heap;
-        ClrObject root = heap.GetObject(address);
-        if (!root.IsValid || root.Type is null)
-        {
-            context.Console.MarkupLineInterpolated($"[#FFAF00]No object at[/] 0x{address:x}.");
-            return ReplResult.Failure;
-        }
-
+        Snapshot snapshot = context.Snapshot;
+        ObjectValue root = snapshot.InspectValue(address);
         var tree = new Tree(Label(root)) { Style = new Style(foreground: Theme.MutedColor) };
-        var visited = new HashSet<ulong> { root.Address };
-        AddChildren(tree, root, depth, visited, context.Cancellation);
+        var visited = new HashSet<ulong> { address };
+        AddChildren(snapshot, tree, root, depth, visited, context.Cancellation);
         context.Console.Write(tree);
         return ReplResult.Success;
     }
 
-    private static void AddChildren(IHasTreeNodes parent, ClrObject obj, int depth, HashSet<ulong> visited, CancellationToken cancellation)
+    private static void AddChildren(Snapshot snapshot, IHasTreeNodes parent, ObjectValue value, int depth, HashSet<ulong> visited,
+        CancellationToken cancellation)
     {
         cancellation.ThrowIfCancellationRequested();
-        if (obj.Type is null)
+        InspectionPage page = snapshot.InspectChildren(value, 0, MaxChildren);
+        foreach (ObjectValue child in page.Items)
         {
-            return;
-        }
-
-        foreach ((string name, string value) in ScalarFields(obj))
-        {
-            parent.AddNode($"{Markup.Escape(name)} [#808791]=[/] {value}");
-        }
-
-        if (depth <= 0)
-        {
-            return;
-        }
-
-        int shown = 0;
-        foreach ((string edge, ClrObject child) in ObjectFields(obj))
-        {
-            if (shown++ >= MaxChildren)
+            string name = Markup.Escape(child.Name);
+            if (child.Kind != ObjectValueKind.Reference || child.Address is not { } address)
             {
-                parent.AddNode("[#808791]… more references (raise depth/limit)[/]");
-                break;
-            }
-
-            if (!visited.Add(child.Address))
-            {
-                parent.AddNode($"{Markup.Escape(edge)} [#808791]→[/] {Label(child)} [#808791](seen)[/]");
+                parent.AddNode($"{name} [{Palette.Muted}]=[/] {Scalar(child)}");
                 continue;
             }
-
-            TreeNode node = parent.AddNode($"{Markup.Escape(edge)} [#808791]→[/] {Label(child)}");
-            AddChildren(node, child, depth - 1, visited, cancellation);
+            if (depth <= 0)
+            {
+                continue; // references appear only while depth remains
+            }
+            if (!visited.Add(address))
+            {
+                parent.AddNode($"{name} [{Palette.Muted}]→[/] {Label(child)} [{Palette.Muted}](seen)[/]");
+                continue;
+            }
+            TreeNode node = parent.AddNode($"{name} [{Palette.Muted}]→[/] {Label(child)}");
+            AddChildren(snapshot, node, child, depth - 1, visited, cancellation);
+        }
+        if (page.HasMore)
+        {
+            parent.AddNode($"[{Palette.Muted}]… {page.TotalCount - page.Items.Count} more (print shows every field)[/]");
         }
     }
 
-    private static IEnumerable<(string Name, string Value)> ScalarFields(ClrObject obj)
+    private static string Label(ObjectValue value) =>
+        Styled.Object(value.TypeName, value.Address ?? 0, (long)(value.Size ?? 0));
+
+    private static string Scalar(ObjectValue value) => value.Kind switch
     {
-        if (obj.Type is null || obj.IsArray)
-        {
-            yield break;
-        }
-
-        int shown = 0;
-        foreach (ClrInstanceField field in obj.Type.Fields)
-        {
-            if (shown >= MaxChildren)
-            {
-                yield break;
-            }
-
-            string? value = ScalarValue(field, obj.Address);
-            if (value is not null)
-            {
-                shown++;
-                yield return (FieldName(field.Name), value);
-            }
-        }
-    }
-
-    // Strings appear inline rather than as graph edges.
-    private static IEnumerable<(string Edge, ClrObject Target)> ObjectFields(ClrObject obj)
-    {
-        if (obj.IsArray)
-        {
-            ClrArray array = obj.AsArray();
-            if (array.Type.ComponentType?.ElementType is not (ClrElementType.Class or ClrElementType.Object or ClrElementType.String or ClrElementType.Array or ClrElementType.SZArray))
-            {
-                yield break;
-            }
-            int len = array.Length;
-            for (int i = 0; i < len && i < MaxChildren; i++)
-            {
-                ClrObject el = array.GetObjectValue(i);
-                if (el.IsValid && !el.IsNull)
-                {
-                    yield return ($"[{i}]", el);
-                }
-            }
-            yield break;
-        }
-
-        if (obj.Type is null)
-        {
-            yield break;
-        }
-
-        foreach (ClrInstanceField field in obj.Type.Fields)
-        {
-            if (!field.IsObjectReference || field.ElementType == ClrElementType.String)
-            {
-                continue; // strings are shown as scalar values, not recursed
-            }
-
-            ClrObject target = field.ReadObject(obj.Address, interior: false);
-            if (target.IsValid && !target.IsNull)
-            {
-                yield return (FieldName(field.Name), target);
-            }
-        }
-    }
-
-    /// <summary>Returns null for non-scalar fields.</summary>
-    private static string? ScalarValue(ClrInstanceField field, ulong addr) =>
-        field.ElementType switch
-        {
-            ClrElementType.Boolean => field.Read<bool>(addr, false) ? "true" : "false",
-            ClrElementType.Char => $"'{field.Read<char>(addr, false)}'",
-            ClrElementType.Int8 => field.Read<sbyte>(addr, false).ToString(),
-            ClrElementType.UInt8 => field.Read<byte>(addr, false).ToString(),
-            ClrElementType.Int16 => field.Read<short>(addr, false).ToString(),
-            ClrElementType.UInt16 => field.Read<ushort>(addr, false).ToString(),
-            ClrElementType.Int32 => field.Read<int>(addr, false).ToString(),
-            ClrElementType.UInt32 => field.Read<uint>(addr, false).ToString(),
-            ClrElementType.Int64 => field.Read<long>(addr, false).ToString(),
-            ClrElementType.UInt64 => field.Read<ulong>(addr, false).ToString(),
-            ClrElementType.Float => field.Read<float>(addr, false).ToString(),
-            ClrElementType.Double => field.Read<double>(addr, false).ToString(),
-            ClrElementType.NativeInt or ClrElementType.NativeUInt or ClrElementType.Pointer
-                => "0x" + field.Read<nuint>(addr, false).ToString("x"),
-            ClrElementType.String => FormatString(field.ReadString(addr, false)),
-            _ => null, // object references and value types are handled elsewhere
-        };
-
-    private static string FormatString(string? value) =>
-        value is null ? "[#808791]null[/]" : $"[#F2F2F2]\"{Markup.Escape(TextUtil.Preview(value, 48))}\"[/]";
-
-    /// <summary>Uses the property name for compiler-generated backing fields.</summary>
-    private static string FieldName(string? name)
-    {
-        if (name is null)
-        {
-            return "<field>";
-        }
-
-        if (name.StartsWith('<') && name.EndsWith(">k__BackingField"))
-        {
-            int end = name.IndexOf('>');
-            if (end > 1)
-            {
-                return name[1..end];
-            }
-        }
-
-        return name;
-    }
-
-    private static string Label(ClrObject obj)
-    {
-        string type = obj.Type?.Name ?? "<unknown>";
-        return $"[#00D7FF]{Markup.Escape(TypeNames.Short(type))}[/] [#FFD75F]0x{obj.Address:x}[/] [#808791]·[/] [bold #F2F2F2]{ByteSize.Format((long)obj.Size)}[/]";
-    }
+        ObjectValueKind.Null => $"[{Palette.Muted}]null[/]",
+        ObjectValueKind.String => $"[{Palette.Text}]{Markup.Escape(value.Value)}[/]",
+        ObjectValueKind.Unreadable => $"[{Palette.Warning}]{Markup.Escape(value.Value)}[/]",
+        _ => Markup.Escape(value.Value),
+    };
 }

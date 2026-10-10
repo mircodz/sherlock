@@ -198,7 +198,7 @@ public sealed class ObjectInspector(Snapshot snapshot)
 
     private ObjectValue ReadField(ulong address, ClrInstanceField field, bool interior, bool escape)
     {
-        string name = field.Name ?? "<field>";
+        string name = FieldDisplayName(field.Name);
         string typeName = field.Type?.Name ?? field.ElementType.ToString();
         try
         {
@@ -280,7 +280,20 @@ public sealed class ObjectInspector(Snapshot snapshot)
             string text = obj.AsString(StringPreviewLength + 1) ?? throw new InvalidDataException("String contents are unavailable.");
             return new ObjectValue(name, typeName, $"\"{Preview(text, escape)}\"", ObjectValueKind.String, obj.Address, obj.Size);
         }
-        return new ObjectValue(name, typeName, Preview($"0x{obj.Address:x} ({typeName})", escape), ObjectValueKind.Reference, obj.Address, obj.Size);
+        return new ObjectValue(name, typeName, Preview($"0x{obj.Address:x} ({TypeNames.Short(typeName)})", escape), ObjectValueKind.Reference, obj.Address, obj.Size);
+    }
+
+    /// <summary>The property name for a compiler-generated backing field ("&lt;Name&gt;k__BackingField" is "Name").</summary>
+    public static string FieldDisplayName(string? name)
+    {
+        if (name is null)
+        {
+            return "<field>";
+        }
+        const string Suffix = ">k__BackingField";
+        return name.StartsWith('<') && name.EndsWith(Suffix, StringComparison.Ordinal) && name.Length > Suffix.Length + 1
+            ? name[1..^Suffix.Length]
+            : name;
     }
 
     private T Read<T>(ulong address) where T : unmanaged
@@ -312,7 +325,7 @@ public sealed class ObjectInspector(Snapshot snapshot)
     private static string Preview(string text, bool escape) =>
         escape ? EscapePreview(text) : text.Length > StringPreviewLength ? text[..StringPreviewLength] + "…" : text;
 
-    internal static string EscapePreview(string text, char quote = '"')
+    public static string EscapePreview(string text, char quote = '"')
     {
         var result = new StringBuilder(Math.Min(text.Length, StringPreviewLength));
         for (int i = 0; i < text.Length; i++)

@@ -10,6 +10,7 @@ public sealed class LabelReplCommand : IReplCommand
     public string Name => "label";
     public string Summary => "Label a snapshot (omit the name to clear it).";
     public string Usage => "label <id> [name]";
+    public int MaxArgs => int.MaxValue;
     public string Category => "Library";
 
     public ReplResult Execute(ReplContext context, string[] args)

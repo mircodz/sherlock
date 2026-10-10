@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using Sherlock.CLI.Rendering;
@@ -20,6 +21,7 @@ public sealed class AllocationsReplCommand : IReplCommand
     public string Summary => "Allocation views: call tree (default), hot methods, callers.";
     public string Category => "Allocation profiling";
     public string Usage => "allocations [tree|hot|callers <method>] [path] [count]";
+    public int MaxArgs => 4;
 
     public ReplResult Execute(ReplContext context, string[] args)
     {
@@ -35,19 +37,16 @@ public sealed class AllocationsReplCommand : IReplCommand
             i = 1;
             if (mode == "callers")
             {
-                if (args.Length <= i)
-                {
-                    Output.Error(context.Console, $"Usage: [bold]{Usage}[/]");
-                    return ReplResult.Failure;
-                }
+                Args.Require(args, i + 1, Usage);
                 method = args[i++];
             }
         }
         for (; i < args.Length; i++)
         {
-            if (int.TryParse(args[i], out int n))
+            // A number is the row count, and must be a valid one; anything else is a profile path.
+            if (int.TryParse(args[i], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out _))
             {
-                limit = n;
+                limit = Args.Count(args, i, DefaultLimit, Usage);
             }
             else
             {
@@ -62,7 +61,7 @@ public sealed class AllocationsReplCommand : IReplCommand
                ?? runTarget?.AllocationPath;
         if (path is null)
         {
-            context.Console.MarkupLine("[#FFAF00]No allocation profile.[/] Pass a path, or run something with [bold]run --profile[/].");
+            context.Console.MarkupLine($"[{Palette.Warning}]No allocation profile.[/] Pass a path, or run something with [bold]run --profile[/].");
             return ReplResult.Failure;
         }
         if (!File.Exists(path))
@@ -79,7 +78,7 @@ public sealed class AllocationsReplCommand : IReplCommand
                 }
                 catch (DumpAnalysisException ex)
                 {
-                    context.Console.MarkupLineInterpolated($"[#FFAF00]Couldn't flush[/] — {ex.Message}");
+                    context.Console.MarkupLineInterpolated($"[{Palette.Warning}]Couldn't flush[/] — {ex.Message}");
                     return ReplResult.Failure;
                 }
             }
@@ -93,7 +92,7 @@ public sealed class AllocationsReplCommand : IReplCommand
         AllocationProfile profile = AllocationProfileReader.Read(path);
         if (profile.Sites.Count == 0)
         {
-            context.Console.MarkupLine("[#FFAF00]Profile has no sites.[/]");
+            context.Console.MarkupLine($"[{Palette.Warning}]Profile has no sites.[/]");
             return ReplResult.Success;
         }
 
@@ -105,7 +104,7 @@ public sealed class AllocationsReplCommand : IReplCommand
         }
 
         context.Console.MarkupLineInterpolated(
-            $"[#808791]{Counts.Format(profile.Sites.Count)} call paths,[/] [bold #AFFF00]{ByteSize.Format(profile.TotalAllocBytes)}[/] [#808791]allocated,[/] [bold #F2F2F2]{ByteSize.Format(profile.TotalSurvivedBytes)}[/] [#808791]survived first GC.[/]");
+            $"[{Palette.Muted}]{Counts.Format(profile.Sites.Count)} call paths,[/] [bold {Palette.Hot}]{ByteSize.Format(profile.TotalAllocBytes)}[/] [{Palette.Muted}]allocated,[/] [bold {Palette.Text}]{ByteSize.Format(profile.TotalSurvivedBytes)}[/] [{Palette.Muted}]survived first GC.[/]");
         return ReplResult.Success;
     }
 
@@ -115,7 +114,7 @@ public sealed class AllocationsReplCommand : IReplCommand
         long total = root.AllocBytes == 0 ? 1 : root.AllocBytes;
         const double minFraction = 0.01; // hide branches under 1% of total
 
-        var tree = new Tree("[bold]Allocation call tree[/] [#808791](method · allocated · % total · objects · survived)[/]")
+        var tree = new Tree($"[bold]Allocation call tree[/] [{Palette.Muted}](method · allocated · % total · objects · survived)[/]")
         {
             Style = new Style(foreground: Theme.MutedColor),
         };
@@ -130,14 +129,16 @@ public sealed class AllocationsReplCommand : IReplCommand
         table.AddColumn(new TableColumn("[bold]Inclusive[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]Count[/]").RightAligned());
         table.AddColumn("[bold]Method[/]");
+        table.AddColumn("[bold]Namespace[/]");
 
         foreach (AllocationMethodStat method in profile.HotMethods(limit))
         {
             table.AddRow(
-                $"[bold #AFFF00]{ByteSize.Format(method.SelfBytes)}[/]",
-                $"[#F2F2F2]{ByteSize.Format(method.InclusiveBytes)}[/]",
-                $"[#808791]{Counts.Compact(method.AllocCount)}×[/]",
-                Markup.Escape(method.Method));
+                $"[bold {Palette.Hot}]{ByteSize.Format(method.SelfBytes)}[/]",
+                $"[{Palette.Text}]{ByteSize.Format(method.InclusiveBytes)}[/]",
+                $"[{Palette.Muted}]{Counts.Compact(method.AllocCount)}×[/]",
+                Styled.Method(method.Method),
+                Styled.Namespace(FrameNames.Split(method.Method).Type));
         }
 
         console.Write(table);
@@ -149,13 +150,13 @@ public sealed class AllocationsReplCommand : IReplCommand
         if (root.AllocBytes == 0)
         {
             console.MarkupLineInterpolated(
-                $"[#FFAF00]No allocations flow through[/] {method}[#FFAF00].[/] [#808791]Check the name with[/] allocations hot[#808791].[/]");
+                $"[{Palette.Warning}]No allocations flow through[/] {method}[{Palette.Warning}].[/] [{Palette.Muted}]Check the name with[/] allocations hot[{Palette.Muted}].[/]");
             return;
         }
 
         long total = root.AllocBytes;
         var tree = new Tree(
-            $"[#00D7FF]{Markup.Escape(method)}[/] [#808791]— callers ·[/] [bold #AFFF00]{ByteSize.Format(total)}[/] [#808791]allocated through it[/]")
+            $"[{Palette.Name}]{Markup.Escape(FrameNames.ShortMethod(method))}[/] [{Palette.Muted}]— callers ·[/] [bold {Palette.Hot}]{ByteSize.Format(total)}[/] [{Palette.Muted}]allocated through it[/]")
         {
             Style = new Style(foreground: Theme.MutedColor),
         };
@@ -173,8 +174,8 @@ public sealed class AllocationsReplCommand : IReplCommand
             double pct = 100.0 * child.AllocBytes / total;
             double survPct = child.AllocBytes == 0 ? 0 : 100.0 * child.SurvivedBytes / child.AllocBytes;
             TreeNode tn = parent.AddNode(
-                $"[#00D7FF]{Markup.Escape(ShortMethod(child.Frame))}[/]  [bold #AFFF00]{ByteSize.Format(child.AllocBytes)}[/] " +
-                $"[#808791]· {Counts.Percent(pct)} · {Counts.Compact(child.AllocCount)}× · {Counts.Percent(survPct, 0)} surv[/]");
+                $"{Styled.Method(child.Frame)}  [bold {Palette.Hot}]{ByteSize.Format(child.AllocBytes)}[/] " +
+                $"[{Palette.Muted}]· {Counts.Percent(pct)} · {Counts.Compact(child.AllocCount)}× · {Counts.Percent(survPct, 0)} surv[/]");
             AddChildren(tn, child, total, minFraction);
         }
 
@@ -182,44 +183,7 @@ public sealed class AllocationsReplCommand : IReplCommand
         if (hiddenCount > 0)
         {
             long hiddenBytes = kids.Skip(shown.Count).Sum(c => c.AllocBytes);
-            parent.AddNode($"[#808791]… {hiddenCount} smaller ({ByteSize.Format(hiddenBytes)})[/]");
-        }
-    }
-
-    private static string ShortMethod(string method)
-    {
-        int methodDot = PreviousDot(method, method.Length);
-        if (methodDot < 0)
-        {
-            return method;
-        }
-
-        int typeDot = PreviousDot(method, methodDot);
-        if (typeDot == methodDot - 1)
-        {
-            typeDot = PreviousDot(method, typeDot);
-        }
-        return typeDot < 0 ? method : method[(typeDot + 1)..];
-
-        static int PreviousDot(string value, int before)
-        {
-            int genericDepth = 0;
-            for (int i = before - 1; i >= 0; i--)
-            {
-                if (value[i] == '>')
-                {
-                    genericDepth++;
-                }
-                else if (value[i] == '<')
-                {
-                    genericDepth--;
-                }
-                else if (value[i] == '.' && genericDepth == 0)
-                {
-                    return i;
-                }
-            }
-            return -1;
+            parent.AddNode($"[{Palette.Muted}]… {hiddenCount} smaller ({ByteSize.Format(hiddenBytes)})[/]");
         }
     }
 }

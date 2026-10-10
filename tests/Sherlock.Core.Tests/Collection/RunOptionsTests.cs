@@ -32,15 +32,6 @@ public sealed class RunOptionsTests
     }
 
     [Fact]
-    public void ExperimentalBarrierRequiresCorrelation()
-    {
-        var options = new RunOptions { Command = ["app"], ExperimentalGcBarrier = true };
-        Assert.Throws<ArgumentException>(() => options.Validate());
-        (options with { Correlate = true }).Validate();
-        Assert.True((options with { Correlate = true }).UseGcBarrier);
-    }
-
-    [Fact]
     public void ValidOptionsPreserveCapturePolicyAndLiteralArguments()
     {
         var options = new RunOptions
@@ -53,8 +44,6 @@ public sealed class RunOptionsTests
         options.Validate();
         Assert.True(options.NeedsProfiler);
         Assert.True(options.SnapshotOnExit);
-        Assert.True(options.UseGcBarrier);
-        Assert.False(options.ExperimentalGcBarrier);
         Assert.Equal(new[] { "app", "", "--profile", "--" }, options.Command);
     }
 
@@ -68,7 +57,6 @@ public sealed class RunOptionsTests
         Assert.True(options.HasProcessFilter);
         Assert.True(options.NeedsProfiler);
         Assert.False(options.Correlate);
-        Assert.False(options.UseGcBarrier);
         Assert.False(new RunOptions { Command = ["dotnet", "test"] }.NeedsProfiler);
     }
 

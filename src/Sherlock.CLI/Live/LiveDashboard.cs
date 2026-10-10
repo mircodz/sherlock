@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -13,8 +14,10 @@ using Cellar.Widgets;
 using Cellar.Widgets.Charts;
 using Cellar.Widgets.Charts.Trees;
 using Sherlock.CLI.Rendering;
+using Sherlock.CLI.Tui;
 using Sherlock.Core;
 using Sherlock.Core.Collection;
+using Sherlock.Core.Store;
 using Theme = Cellar.Theming.Theme;
 
 namespace Sherlock.CLI.Live;
@@ -22,27 +25,27 @@ namespace Sherlock.CLI.Live;
 /// <summary>The live process, heap, event, and snapshot context shown by <c>run --live</c>.</summary>
 public static class LiveDashboard
 {
-    private sealed record HeapSample(int Pid, HeapStats? Heap, long Gc, DateTimeOffset At);
+    private sealed record HeapSample(int Pid, HeapStats? Heap, string? Problem);
     private sealed record ProcessList(IReadOnlyList<RunProcess> Processes);
     private sealed record Capturing(int Pid, string Name, DateTimeOffset At);
-    private sealed record Captured(
-        string Id, long Bytes, ProvenanceState Provenance,
-        bool HasAllocations, TimeSpan Duration, DateTimeOffset At);
+    private sealed record Captured(SnapshotEntry Entry, TimeSpan? Duration, DateTimeOffset At);
     private sealed record Status(string Text, Color Color);
     private sealed record LiveEvent(DateTimeOffset At, string Text, Color Color);
 
-    public static void Run(Workspace workspace, RunTarget target, IReadOnlyList<string> command, CancellationToken cancellation)
+    /// <summary>Returns false when a triggered capture failed.</summary>
+    public static bool Run(Workspace workspace, RunTarget target, IReadOnlyList<string> command, CancellationToken cancellation)
     {
         Sherlock.CLI.Rendering.Theme.ApplyCellar();
         using var terminal = new AnsiTerminal();
         using var app = new App(terminal);
         int eventRowCount = Math.Clamp(terminal.Size.Height / 4, 3, 8);
 
-        var poll = TimeSpan.FromMilliseconds(200);
         using var liveCts = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         CancellationToken liveCancellation = liveCts.Token;
         var started = Stopwatch.StartNew();
         var busy = 0;
+        var triggerFailed = false;
+        var requests = new ConcurrentQueue<int>();
         var selectedPid = target.Pid;
         var paused = false;
         var showLogs = false;
@@ -54,7 +57,7 @@ public static class LiveDashboard
         var samples = new Queue<(DateTimeOffset At, long Bytes)>();
         long previousGc = -1;
         long previousHeap = -1;
-        int unavailablePid = 0;
+        DateTimeOffset lastSampleAt = default;
 
         var title = new Label(StyledText.Empty());
         var status = new Label(new StyledText("select a process, then press Enter to capture", Theme.Current.MutedStyle));
@@ -76,7 +79,8 @@ public static class LiveDashboard
             },
             ShowGuides = true,
             ShowHeader = false,
-        };
+            HasFocus = true, // the tree ignores navigation keys without focus
+        }.KeepSelectionOnHover();
 
         var snapshots = new Table { ShowHeader = true, Striped = true, ShowScrollbar = true };
         snapshots.Columns.Add(new Column("Id", Constraint.Length(7)));
@@ -158,7 +162,7 @@ public static class LiveDashboard
             heap.SetValues([]);
             previousGc = -1;
             previousHeap = -1;
-            unavailablePid = 0;
+            lastSampleAt = default;
             heapStat.Content = new StyledText("waiting for heap metrics", Theme.Current.MutedStyle);
             generationStat.Content = StyledText.Empty();
         }
@@ -194,27 +198,8 @@ public static class LiveDashboard
             }
 
             string name = processes.FirstOrDefault(process => process.Pid == pid)?.Name ?? "process";
-            DateTimeOffset began = DateTimeOffset.Now;
-            app.Post(new Capturing(pid, name, began));
-            _ = Task.Run(() =>
-            {
-                var elapsed = Stopwatch.StartNew();
-                try
-                {
-                    CaptureResult result = workspace.Capture(pid, load: false);
-                    app.Post(new Captured(result.Entry.Id, result.Entry.TotalSizeBytes,
-                        result.Provenance, result.Entry.HasAllocations,
-                        elapsed.Elapsed, DateTimeOffset.Now));
-                }
-                catch (Exception ex)
-                {
-                    app.Post(new Status($"capture failed: {ex.Message}", Theme.Current.Error));
-                }
-                finally
-                {
-                    Interlocked.Exchange(ref busy, 0);
-                }
-            });
+            requests.Enqueue(pid);
+            app.Post(new Capturing(pid, name, DateTimeOffset.Now));
         }
 
         void SnapshotSelected()
@@ -227,7 +212,6 @@ public static class LiveDashboard
 
         processTree.OnSelect = node => SelectProcess(node.Value);
         processTree.OnLinkClick = pid => Snapshot((int)pid);
-        processTree.OnActivate = node => Snapshot(node.Value.Pid);
 
         var footer = new Stack(Direction.Horizontal)
             .Add(FooterButton("Enter", "Snapshot", SnapshotSelected), Constraint.Length(18))
@@ -296,6 +280,9 @@ public static class LiveDashboard
                 case KeyEvent { IsChar: true } key when key.Rune.Value == 'p':
                     TogglePause();
                     return true;
+                case KeyEvent { Key: Key.Enter }: // the tree would also collapse an expanded parent
+                    SnapshotSelected();
+                    return true;
             }
             return processTree.OnEvent(input);
         };
@@ -308,18 +295,21 @@ public static class LiveDashboard
                     UpdateTitle(sample.Heap is null ? "WAITING" : "RUNNING");
                     if (sample.Heap is not { } current)
                     {
-                        heapStat.Content = new StyledText("heap metrics unavailable for selected process", new Style(Theme.Current.Warning, Color.Default));
-                        if (unavailablePid != sample.Pid)
+                        if (sample.Problem is not null)
                         {
-                            unavailablePid = sample.Pid;
-                            AddEvent($"no profiler control for pid {sample.Pid}", Theme.Current.Warning, sample.At);
+                            heapStat.Content = new StyledText($"heap metrics unavailable: {sample.Problem}", new Style(Theme.Current.Warning, Color.Default));
+                            generationStat.Content = StyledText.Empty();
                         }
                         break;
                     }
+                    if (current.At == lastSampleAt)
+                    {
+                        break;
+                    }
 
-                    unavailablePid = 0;
-                    samples.Enqueue((sample.At, current.Total));
-                    while (samples.Count > 1 && sample.At - samples.Peek().At > TimeSpan.FromSeconds(10))
+                    lastSampleAt = current.At;
+                    samples.Enqueue((current.At, current.Total));
+                    while (samples.Count > 1 && current.At - samples.Peek().At > TimeSpan.FromSeconds(10))
                     {
                         samples.Dequeue();
                     }
@@ -329,7 +319,7 @@ public static class LiveDashboard
                     heapStat.Content = StyledText.Of(ByteSize.Format(current.Total)).Bold().Fg(Theme.Current.Success)
                         .Append("  managed heap").Fg(Theme.Current.Muted)
                         .Append($"    {deltaText} / 10s").Fg(delta > 0 ? Theme.Current.Success : Theme.Current.Foreground)
-                        .Append($"    {sample.Gc} GCs").Fg(Theme.Current.Muted);
+                        .Append($"    {current.Collections} GCs observed").Fg(Theme.Current.Muted);
                     generationStat.Content = StyledText.Of("gen0 ").Fg(Theme.Current.Muted)
                         .Append(ByteSize.Format(current.Gen0)).Fg(Theme.Current.Foreground)
                         .Append("  gen1 ").Fg(Theme.Current.Muted)
@@ -341,19 +331,19 @@ public static class LiveDashboard
                         .Append("  POH ").Fg(Theme.Current.Muted)
                         .Append(ByteSize.Format(current.Poh)).Fg(Theme.Current.Foreground);
 
-                    if (previousGc >= 0 && sample.Gc > previousGc)
+                    if (previousGc >= 0 && current.Collections > previousGc)
                     {
-                        AddEvent($"GC {sample.Gc}  heap {ByteSize.Format(previousHeap)} -> {ByteSize.Format(current.Total)}",
-                            Theme.Current.Info, sample.At);
+                        long count = current.Collections - previousGc;
+                        AddEvent($"{(count == 1 ? "GC" : $"{count} GCs")}  heap {ByteSize.Format(previousHeap)} -> {ByteSize.Format(current.Total)}",
+                            Theme.Current.Info, current.At);
                     }
-                    previousGc = sample.Gc;
+                    previousGc = current.Collections;
                     previousHeap = current.Total;
                     break;
 
                 case Capturing capture:
                     status.Content = StyledText.Of("snapshotting ").Fg(Theme.Current.Warning)
-                        .Append($"{capture.Name} [{capture.Pid}]").Fg(Theme.Current.Foreground)
-                        .Append("; heap polling paused").Fg(Theme.Current.Muted);
+                        .Append($"{capture.Name} [{capture.Pid}]").Fg(Theme.Current.Foreground);
                     AddEvent($"snapshot started for {capture.Name} [{capture.Pid}]", Theme.Current.Warning, capture.At);
                     app.Invalidate();
                     break;
@@ -395,24 +385,18 @@ public static class LiveDashboard
                     break;
 
                 case Captured capture:
-                    string contents = capture.Provenance == ProvenanceState.Exact
-                        ? "heap + alloc + corr"
-                        : capture.HasAllocations ? "heap + alloc" : "heap";
+                    SnapshotEntry entry = capture.Entry;
+                    string contents = entry.HasCorrelation ? "heap + alloc + corr" : entry.HasAllocations ? "heap + alloc" : "heap";
+                    string size = ByteSize.Format(entry.TotalSizeBytes);
+                    string took = capture.Duration is { } duration ? $" in {Duration(duration)}" : "";
                     snapshots.Rows.Insert(0,
-                        [capture.Id, ByteSize.Format(capture.Bytes), contents, capture.At.ToLocalTime().ToString("HH:mm:ss", CultureInfo.InvariantCulture)]);
+                        [entry.Id, size, entry.Reason is { } reason ? $"{contents} ({reason})" : contents,
+                         capture.At.ToLocalTime().ToString("HH:mm:ss", CultureInfo.InvariantCulture)]);
                     status.Content = StyledText.Of("captured ").Fg(Theme.Current.Success)
-                        .Append(capture.Id).Bold().Fg(Theme.Current.Foreground)
-                        .Append($"  {contents}  {ByteSize.Format(capture.Bytes)} in {Duration(capture.Duration)}").Fg(Theme.Current.Muted);
-                    AddEvent($"snapshot {capture.Id} captured  {contents}  {ByteSize.Format(capture.Bytes)}  {Duration(capture.Duration)}",
+                        .Append(entry.Id).Bold().Fg(Theme.Current.Foreground)
+                        .Append($"  {contents}  {size}{took}").Fg(Theme.Current.Muted);
+                    AddEvent($"snapshot {entry.Id} captured{(entry.Reason is { } why ? $" on {why}" : "")}  {contents}  {size}{took}",
                         Theme.Current.Success, capture.At);
-                    if (capture.Provenance == ProvenanceState.Drifted)
-                    {
-                        AddEvent($"snapshot {capture.Id}: correlation disabled after GC drift", Theme.Current.Warning, capture.At);
-                    }
-                    else if (capture.Provenance == ProvenanceState.Unverified)
-                    {
-                        AddEvent($"snapshot {capture.Id}: correlation could not be verified", Theme.Current.Warning, capture.At);
-                    }
                     app.Invalidate();
                     break;
             }
@@ -420,22 +404,83 @@ public static class LiveDashboard
 
         UpdateTitle("STARTING");
         AddEvent("live view started", Theme.Current.Info);
-        var producer = Task.Run(async () =>
+        // Samples metrics without the profiler, so it keeps running while a capture holds the target.
+        var sampler = Task.Run(async () =>
         {
             while (!liveCancellation.IsCancellationRequested && !target.HasExited)
             {
-                app.Post(new ProcessList(target.Processes()));
-                if (Volatile.Read(ref busy) == 0 && !Volatile.Read(ref paused))
+                IReadOnlyList<RunProcess> tree = target.Processes();
+                app.Post(new ProcessList(tree));
+                int pid = Volatile.Read(ref selectedPid);
+                RunProcess? process = tree.FirstOrDefault(candidate => candidate.Pid == pid);
+                RuntimeMetrics metrics = process switch
                 {
-                    int pid = Volatile.Read(ref selectedPid);
-                    app.Post(new HeapSample(pid, target.HeapSize(pid, poll), target.GcCount(pid, poll), DateTimeOffset.Now));
+                    null => new RuntimeMetrics(null, "process exited"),
+                    { IsDotnet: false } => new RuntimeMetrics(null, "not a .NET process"),
+                    _ => target.Metrics(pid),
+                };
+                if (!Volatile.Read(ref paused))
+                {
+                    app.Post(new HeapSample(pid, metrics.Heap, metrics.Error));
                 }
+
                 try { await Task.Delay(500, liveCancellation); }
                 catch (OperationCanceledException) { break; }
             }
             if (!liveCancellation.IsCancellationRequested)
             {
                 app.Post(new Status(target.ExitCode is { } code ? $"process exited  code {code}" : "process exited", Theme.Current.Muted));
+            }
+        }, liveCancellation);
+
+        // The only thread that captures or writes to the store: manual snapshots, triggers, exit profiles.
+        var capturer = Task.Run(async () =>
+        {
+            while (!liveCancellation.IsCancellationRequested)
+            {
+                if (requests.TryDequeue(out int pid))
+                {
+                    var elapsed = Stopwatch.StartNew();
+                    try
+                    {
+                        app.Post(new Captured(workspace.Capture(pid, load: false), elapsed.Elapsed, DateTimeOffset.Now));
+                    }
+                    catch (Exception ex)
+                    {
+                        app.Post(new Status($"capture failed: {ex.Message}", Theme.Current.Error));
+                    }
+                    finally
+                    {
+                        Interlocked.Exchange(ref busy, 0);
+                    }
+                }
+
+                try
+                {
+                    foreach (TriggeredCaptureResult capture in workspace.PollTriggeredSnapshots())
+                    {
+                        if (capture.Entry is { } entry)
+                        {
+                            app.Post(new Captured(entry, null, DateTimeOffset.Now));
+                        }
+                        if (capture.Error is { } error)
+                        {
+                            triggerFailed = true;
+                            app.Post(new Status(capture.Entry is null ? $"{capture.Probe} fired but capture failed: {error}" : error, Theme.Current.Error));
+                        }
+                    }
+                    foreach (Session session in workspace.PollExitedAllocationProfiles())
+                    {
+                        app.Post(new Status($"allocation profile captured for {session.Id}", Theme.Current.Success));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    app.Post(new Status($"capture failed: {ex.Message}", Theme.Current.Error));
+                }
+
+                try { await Task.Delay(150, liveCancellation); }
+                catch (OperationCanceledException) { break; }
             }
         }, liveCancellation);
 
@@ -446,9 +491,13 @@ public static class LiveDashboard
         finally
         {
             liveCts.Cancel();
-            try { producer.GetAwaiter().GetResult(); }
-            catch (OperationCanceledException) { }
+            foreach (Task loop in new[] { sampler, capturer })
+            {
+                try { loop.GetAwaiter().GetResult(); }
+                catch (OperationCanceledException) { }
+            }
         }
+        return !triggerFailed;
     }
 
     private static Rule Section(string name) => new(StyledText.Of(name).Bold().Fg(Theme.Current.Info))

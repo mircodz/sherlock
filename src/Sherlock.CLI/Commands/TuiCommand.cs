@@ -9,6 +9,6 @@ public sealed class TuiCommand : Command<TuiCommand.Settings>
 {
     public sealed class Settings : CommandSettings;
 
-    protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellation)
+    public override int Execute(CommandContext context, Settings settings, CancellationToken cancellation)
         => SnapshotExplorer.Run().GetAwaiter().GetResult();
 }

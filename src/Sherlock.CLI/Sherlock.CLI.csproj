@@ -17,6 +17,8 @@
     <ServerGarbageCollection>true</ServerGarbageCollection>
     <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
     <TieredPGO>true</TieredPGO>
+    <!-- One number format everywhere: counts must not use the machine's separators while sizes use invariant ones. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 
   <ItemGroup>
@@ -30,7 +32,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Sherlock.Core\Sherlock.Core.csproj" />
-    <ProjectReference Include="..\Sherlock.Mcp\Sherlock.Mcp.csproj" />
   </ItemGroup>
 
   <ItemGroup>

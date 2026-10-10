@@ -12,6 +12,7 @@ public sealed class ExceptionsReplCommand : IReplCommand
     public IReadOnlyList<string> Aliases => ["pe", "exc"];
     public string Summary => "List managed exceptions on threads and on the heap.";
     public string Usage => "exceptions";
+    public int MaxArgs => 0;
 
     public ReplResult Execute(ReplContext context, string[] args)
     {
@@ -20,25 +21,25 @@ public sealed class ExceptionsReplCommand : IReplCommand
 
         if (exceptions.Count == 0)
         {
-            context.Console.MarkupLine("[#AFFF00]No exception objects found.[/]");
+            context.Console.MarkupLine($"[{Palette.Hot}]No exception objects found.[/]");
             return ReplResult.Success;
         }
 
         foreach (ExceptionInfo ex in exceptions)
         {
             string thread = ex.ThreadId is int id
-                ? $" [#FFAF00](in-flight on thread {id})[/]"
+                ? $" [{Palette.Warning}](in-flight on thread {id})[/]"
                 : "";
-            context.Console.MarkupLineInterpolated($"[#00D7FF]{TypeNames.Short(ex.TypeName)}[/] [#808791]@[/] [#FFD75F]0x{ex.Address:x}[/]");
+            context.Console.MarkupLine($"{Styled.Type(ex.TypeName)} {Styled.Address(ex.Address)}");
             context.Console.MarkupInterpolated($"  {ex.Message ?? "<no message>"}");
             context.Console.MarkupLine(thread);
             if (ex.StackFrameCount > 0)
             {
-                context.Console.MarkupLineInterpolated($"  [#808791]{ex.StackFrameCount} stack frames[/]");
+                context.Console.MarkupLineInterpolated($"  [{Palette.Muted}]{ex.StackFrameCount} stack frames[/]");
             }
         }
 
-        context.Console.MarkupLine($"[#808791]{exceptions.Count} exception object(s).[/]");
+        context.Console.MarkupLine($"[{Palette.Muted}]{exceptions.Count} exception object(s).[/]");
         return ReplResult.Success;
     }
 }
