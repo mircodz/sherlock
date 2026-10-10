@@ -54,6 +54,18 @@ public sealed class RunTarget : IDisposable
     private string? _processSelectionError;
 
     public string? NameFor(int pid) => _names.TryGetValue(pid, out string? n) ? n : null;
+
+    /// <summary>The app a command runs: "dotnet Orders.Api.dll --port 80" is Orders.Api, not dotnet.</summary>
+    internal static string AppName(IReadOnlyList<string> command)
+    {
+        string host = Path.GetFileNameWithoutExtension(command[0]);
+        if (host.Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+            command.Skip(1).FirstOrDefault(arg => arg.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) is { } app)
+        {
+            return Path.GetFileNameWithoutExtension(app);
+        }
+        return Path.GetFileName(command[0]);
+    }
     public int IncludedProcessCount => _includedPids.Count;
     public string? ProcessSelectionError => Volatile.Read(ref _processSelectionError);
 
@@ -185,7 +197,7 @@ public sealed class RunTarget : IDisposable
         {
             AllocationPath = InsertPid(_allocationTemplate, _root.Id);
         }
-        Name = Path.GetFileName(options.Command[0]);
+        Name = AppName(options.Command);
         _names.TryAdd(_root.Id, Name);
         StartLog();
     }

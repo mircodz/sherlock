@@ -44,7 +44,7 @@ public sealed class ObjectsReplCommand : IReplCommand
                 $"[{Palette.Address}]0x{instance.Address:x}[/]",
                 $"[bold {Palette.Text}]{ByteSize.Format((long)instance.Size)}[/]",
                 Styled.Type(instance.TypeName),
-                instance.Preview is null ? "" : $"[{Palette.Text}]{Markup.Escape(instance.Preview)}[/]");
+                instance.Preview is null ? "" : $"[{Palette.Text}]{Markup.Escape(TextUtil.Preview(instance.Preview))}[/]");
         }
 
         context.Console.Write(table);

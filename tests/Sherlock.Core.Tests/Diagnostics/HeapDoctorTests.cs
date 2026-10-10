@@ -10,15 +10,17 @@ namespace Sherlock.Core.Tests.Diagnostics;
 
 public sealed class HeapDoctorTests
 {
+    private const ulong MB = 1 << 20;
+
     [Theory]
     [InlineData(99, null)]
     [InlineData(100, FindingSeverity.Warning)]
     [InlineData(499, FindingSeverity.Warning)]
     [InlineData(500, FindingSeverity.High)]
-    public void QuickFindings_RetentionUsesReachableBytesAndExistingThresholds(int retainedBytes, FindingSeverity? severity)
+    public void QuickFindings_RetentionUsesReachableBytesAndExistingThresholds(int retainedMegabytes, FindingSeverity? severity)
     {
-        DominatorTree tree = LargestRetainer((ulong)retainedBytes);
-        IReadOnlyList<Finding> findings = HeapDoctor.QuickFindings([new("App.Widget", 1, 1_000_000)], tree);
+        DominatorTree tree = LargestRetainer((ulong)retainedMegabytes * MB);
+        IReadOnlyList<Finding> findings = HeapDoctor.QuickFindings([new("App.Widget", 1, 1_000 * MB)], tree);
         if (severity is null)
         {
             Assert.Empty(findings);
@@ -30,7 +32,7 @@ public sealed class HeapDoctorTests
         Assert.Equal(severity, finding.Severity);
         Assert.Equal("App.Widget", finding.Type);
         Assert.Equal(0x1000UL, finding.Address);
-        Assert.Equal((long)retainedBytes, finding.Bytes);
+        Assert.Equal(retainedMegabytes * (long)MB, finding.Bytes);
         Assert.Equal("gcroot 0x1000", finding.NextCommand);
         Assert.StartsWith("Widget retains ", finding.Title);
     }
@@ -44,7 +46,7 @@ public sealed class HeapDoctorTests
     [InlineData("App.Widget[]")]
     public void QuickFindings_IdentifiesCollectionsAndKeepsGenericTypeNames(string type)
     {
-        Finding finding = Assert.Single(HeapDoctor.QuickFindings([], RootedTree((type, 100))));
+        Finding finding = Assert.Single(HeapDoctor.QuickFindings([], RootedTree((type, 100 * MB))));
 
         Assert.StartsWith($"{TypeNames.Short(type)} collection retains ", finding.Title);
         Assert.Equal(type, finding.Type);
@@ -53,13 +55,13 @@ public sealed class HeapDoctorTests
     [Fact]
     public void QuickFindings_ChoosesOnlyTheLargestRetainer()
     {
-        DominatorTree tree = RootedTree(("App.Small", 100), ("App.Large", 900));
+        DominatorTree tree = RootedTree(("App.Small", 100 * MB), ("App.Large", 900 * MB));
 
         Finding finding = Assert.Single(HeapDoctor.QuickFindings([], tree));
 
         Assert.Equal("App.Large", finding.Type);
         Assert.Equal(0x1100UL, finding.Address);
-        Assert.Equal(900L, finding.Bytes);
+        Assert.Equal(900 * (long)MB, finding.Bytes);
         Assert.Contains("(90% of the reachable heap)", finding.Title);
     }
 
@@ -68,12 +70,12 @@ public sealed class HeapDoctorTests
     [InlineData(249)]
     [InlineData(250)]
     [InlineData(1000)]
-    public void QuickFindings_FragmentationIncludesFreeSpaceInHeapTotal(int freeBytes)
+    public void QuickFindings_FragmentationIncludesFreeSpaceInHeapTotal(int freeMegabytes)
     {
-        HeapTypeStat[] histogram = [new("System.Byte[]", 1, (ulong)(1000 - freeBytes)), new("Free", 2, (ulong)freeBytes)];
+        HeapTypeStat[] histogram = [new("System.Byte[]", 1, (ulong)(1000 - freeMegabytes) * MB), new("Free", 2, (ulong)freeMegabytes * MB)];
 
         IReadOnlyList<Finding> findings = HeapDoctor.QuickFindings(histogram, RootedTree());
-        if (freeBytes < 250)
+        if (freeMegabytes < 250)
         {
             Assert.Empty(findings);
             return;
@@ -82,7 +84,7 @@ public sealed class HeapDoctorTests
         Finding finding = Assert.Single(findings);
         Assert.Equal("fragmentation", finding.Category);
         Assert.Equal(FindingSeverity.Warning, finding.Severity);
-        Assert.Equal((long)freeBytes, finding.Bytes);
+        Assert.Equal(freeMegabytes * (long)MB, finding.Bytes);
         Assert.Equal("segments", finding.NextCommand);
     }
 
@@ -124,13 +126,22 @@ public sealed class HeapDoctorTests
     [Fact]
     public void QuickFindings_OrdersSeverityAndPreservesRuleOrderForTies()
     {
-        HeapTypeStat[] histogram = [new("Free", 1, 250), new("App.Widget", 10_000, 750)];
+        HeapTypeStat[] histogram = [new("Free", 1, 250 * MB), new("App.Widget", 10_000, 750 * MB)];
 
-        IReadOnlyList<Finding> findings = HeapDoctor.QuickFindings(histogram, LargestRetainer(100));
+        IReadOnlyList<Finding> findings = HeapDoctor.QuickFindings(histogram, LargestRetainer(100 * MB));
 
         Assert.Equal(["retention", "fragmentation", "growth"], findings.Select(finding => finding.Category));
         Assert.Equal([FindingSeverity.Warning, FindingSeverity.Warning, FindingSeverity.Info],
             findings.Select(finding => finding.Severity));
+    }
+
+    [Fact]
+    public void QuickFindings_SmallHeapsHaveNoRetentionOrFragmentationFindings()
+    {
+        // The same shares that are findings on a 1,000 MB heap: a small heap is mostly one holder and free space.
+        HeapTypeStat[] histogram = [new("Free", 1, 300_000), new("App.Widget", 1, 700_000)];
+
+        Assert.Empty(HeapDoctor.QuickFindings(histogram, LargestRetainer(900_000)));
     }
 
     [Fact]
@@ -144,12 +155,14 @@ public sealed class HeapDoctorTests
         Assert.Equal(cancellation.Token, error.CancellationToken);
     }
 
+    // The largest of objects totalling 1,000 MB, or 1 MB when the retainer is smaller than that.
     private static DominatorTree LargestRetainer(ulong bytes)
     {
+        ulong total = bytes < MB ? MB : 1_000 * MB;
         var objects = new List<(string Type, ulong Bytes)> { ("App.Widget", bytes) };
-        for (ulong remaining = 1000 - bytes; remaining > 0;)
+        for (ulong remaining = total - bytes; remaining > 0;)
         {
-            ulong size = Math.Min(remaining, 50UL);
+            ulong size = Math.Min(remaining, total / 20);
             objects.Add(("System.Object", size));
             remaining -= size;
         }

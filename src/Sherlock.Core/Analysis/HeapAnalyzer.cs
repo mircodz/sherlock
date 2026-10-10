@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Threading;
 using Microsoft.Diagnostics.Runtime;
@@ -157,12 +158,15 @@ public sealed class HeapAnalyzer(Snapshot snapshot)
     private static ObjectInstance BuildInstance(ClrObject obj, ClrType type, string name) =>
         new(obj.Address, name, obj.Size, Preview(obj, type));
 
+    private const int PreviewLength = 256;
+
+    // Strings are escaped so control characters in the dump can't drive the terminal.
     private static string? Preview(ClrObject obj, ClrType? type)
     {
         if (type?.IsString == true)
         {
-            return obj.AsString(64);
+            return obj.AsString(PreviewLength) is { } text ? ObjectInspector.EscapePreview(text) : null;
         }
-        return type?.IsArray == true ? "[]" : null;
+        return type?.IsArray == true ? $"length {obj.AsArray().Length.ToString("N0", CultureInfo.InvariantCulture)}" : null;
     }
 }

@@ -10,6 +10,17 @@ namespace Sherlock.Core.Tests.Collection;
 
 public sealed class RunTargetTests : IDisposable
 {
+    [Theory]
+    [InlineData(new[] { "dotnet", "/apps/Orders.Api.dll", "--port", "80" }, "Orders.Api")]
+    [InlineData(new[] { "/usr/local/share/dotnet/dotnet", "exec", "Orders.Api.dll" }, "Orders.Api")]
+    [InlineData(new[] { "dotnet", "test" }, "dotnet")]
+    [InlineData(new[] { "./Orders.Api" }, "Orders.Api")]
+    [InlineData(new[] { "/bin/sh", "run.sh", "x.dll" }, "sh")]
+    public void AppNameIsTheEntryAssemblyOfADotnetHost(string[] command, string expected)
+    {
+        Assert.Equal(expected, RunTarget.AppName(command));
+    }
+
     private readonly TempDir _tmp = new();
 
     public void Dispose() => _tmp.Dispose();

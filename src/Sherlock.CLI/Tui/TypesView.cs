@@ -15,9 +15,10 @@ internal static class TypesView
 {
     public static Widget Create(IReadOnlyList<HeapTypeStat> histogram, Action<NavigationTarget> navigate)
     {
-        List<HeapTypeStat> types = histogram.OrderByDescending(s => s.TotalSize).ToList();
+        // Free space isn't a type; Health reports it.
+        List<HeapTypeStat> types = histogram.Where(s => s.TypeName != "Free").OrderByDescending(s => s.TotalSize).ToList();
         Table table = Table(("Type", Constraint.Fill(3), false), ("Count", Constraint.Length(11), true),
-            ("Bytes", Constraint.Length(11), true), ("%", Constraint.Length(6), true), ("share", Constraint.Length(14), false),
+            ("Bytes", Constraint.Length(11), true), ("%", Constraint.Length(6), true), ("Share", Constraint.Length(14), false),
             ("Namespace", Constraint.Fill(2), false));
 
         void Populate(string query)
@@ -30,7 +31,7 @@ internal static class TypesView
             SetRows(table, rows, row =>
             {
                 double percent = 100.0 * (long)row.TotalSize / total;
-                return [TypeNames.Short(row.TypeName), row.Count.ToString("N0", CultureInfo.InvariantCulture), ByteFormat.Human(row.TotalSize),
+                return [TypeNames.Short(row.TypeName), row.Count.ToString("N0", CultureInfo.InvariantCulture), ByteFormat.Column(row.TotalSize),
                     percent.ToString("0.0", CultureInfo.InvariantCulture), Bar(percent, 12), TypeNames.Namespace(row.TypeName)];
             }, row => navigate(new TypeTarget(row.TypeName)));
         }
@@ -44,10 +45,7 @@ internal static class TypesView
     {
         if (listing.Instances.Count == 0)
         {
-            string message = typeName == "Free"
-                ? "Free is unused space between objects on the GC heap, not a type with instances."
-                : $"No live instances of {TypeNames.Short(typeName)} in this snapshot.";
-            return Message(message, $" {TypeNames.Short(typeName)} ");
+            return Message($"No live instances of {TypeNames.Short(typeName)} in this snapshot.", $" {TypeNames.Short(typeName)} ");
         }
         string title = $" {TypeNames.Short(typeName)} \u2014 {listing.TotalMatched:N0} instances, {ByteFormat.Human(listing.TotalMatchedSize)} ";
         if (listing.Instances.Count < listing.TotalMatched)
@@ -57,7 +55,7 @@ internal static class TypesView
         Table table = Table(("Address", Constraint.Length(16), false), ("Size", Constraint.Length(10), true),
             ("Preview", Constraint.Fill(), false));
         SetRows(table, listing.Instances,
-            row => [Sherlock.CLI.Rendering.Addresses.Format(row.Address), ByteFormat.Human(row.Size), row.Preview ?? ""],
+            row => [Sherlock.CLI.Rendering.Addresses.Format(row.Address), ByteFormat.Column(row.Size), row.Preview ?? ""],
             row => navigate(new ObjTarget(row.Address)));
         return Hinted(new Panel(table, title) { BorderStyle = BorderStyle.Rounded }, "Enter inspect  \u00b7  s sort");
     }

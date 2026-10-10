@@ -24,6 +24,7 @@ public sealed class Snapshot : IDisposable
     private DumpInfo? _info;
     private IReadOnlyList<ModuleInfo>? _modules;
     private IReadOnlyList<SegmentInfo>? _segments;
+    private HeapGenerations? _generations;
     private IReadOnlyList<ThreadInfo>? _threads;
     private IReadOnlyList<ExceptionInfo>? _exceptions;
     private IReadOnlyList<HeapTypeStat>? _histogram;
@@ -80,6 +81,7 @@ public sealed class Snapshot : IDisposable
     public DumpInfo Info => _info ??= new DumpInspector(this).Inspect();
     public IReadOnlyList<ModuleInfo> Modules => _modules ??= new RuntimeAnalyzer(this).GetModules();
     public IReadOnlyList<SegmentInfo> Segments => _segments ??= new RuntimeAnalyzer(this).GetSegments();
+    public HeapGenerations Generations => _generations ??= new RuntimeAnalyzer(this).GetGenerations();
     public IReadOnlyList<ThreadInfo> Threads => _threads ??= new ThreadAnalyzer(this).GetThreads();
     public IReadOnlyList<ExceptionInfo> Exceptions => GetExceptions();
     public IReadOnlyList<HeapTypeStat> Histogram => _histogram ??= BuildHistogram();

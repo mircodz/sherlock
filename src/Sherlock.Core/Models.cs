@@ -83,6 +83,12 @@ public sealed record ModuleInfo(
     ulong Size,
     bool IsDynamic);
 
+/// <summary>Bytes of the GC heap in each generation, from the segment layout; free space is included.</summary>
+public sealed record HeapGenerations(ulong Gen0, ulong Gen1, ulong Gen2, ulong Large, ulong Pinned, ulong Frozen)
+{
+    public ulong Total => Gen0 + Gen1 + Gen2 + Large + Pinned + Frozen;
+}
+
 public sealed record SegmentInfo(
     ulong Start,
     ulong End,

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Cellar.Layout;
@@ -8,7 +9,6 @@ using Cellar.Theming;
 using Cellar.Widgets;
 using Sherlock.Core;
 using Sherlock.Core.Profiling;
-using Sherlock.Core.Diagnostics;
 using Sherlock.Core.Store;
 using static Sherlock.CLI.Tui.ViewFormatting;
 
@@ -53,8 +53,7 @@ public static class SnapshotExplorer
         {
             void Navigate(NavigationTarget target) => Follow(snapshot, target);
             Tabs tabs = new Tabs()
-                .AddBackgroundView("Health", cancellation => HealthView.Create(snapshot.Histogram,
-                    HeapDoctor.QuickFindings(snapshot.Histogram, snapshot.GetDominatorTree(cancellation)), entry.Id, Navigate))
+                .AddBackgroundView("Health", _ => HealthView.Create(Overview(snapshot, entry)))
                 .AddBackgroundView("Types", _ => TypesView.Create(snapshot.Histogram, Navigate))
                 .AddBackgroundView("Retention", cancellation => RetentionView.Create(snapshot.GetDominatorTree(cancellation), Navigate));
             if (!entry.HasAllocations)
@@ -67,14 +66,28 @@ public static class SnapshotExplorer
                 .AddBackgroundView("Hot methods", _ => AllocationsView.Hot(snapshot.Allocations, Navigate));
         }
 
-        Table table = Table(("Id", Constraint.Length(5), false), ("Process", Constraint.Fill(2), false),
-            ("When", Constraint.Length(14), false), ("Size", Constraint.Length(10), true), ("Captured", Constraint.Fill(2), false));
+        bool labelled = entries.Any(entry => entry.Snapshot.Label is not null);
+        var columns = new List<(string Header, Constraint Width, bool Right)>
+        {
+            ("Id", Constraint.Length(5), false), ("App", Constraint.Fill(2), false), ("When", Constraint.Length(12), false),
+        };
+        if (labelled)
+        {
+            columns.Add(("Label", Constraint.Fill(1), false));
+        }
+        columns.AddRange([("On disk", Constraint.Length(10), true), ("Contents", Constraint.Fill(2), false)]);
+        Table table = Table([.. columns]);
         SetRows(table, entries, entry =>
         {
             SnapshotEntry snapshot = entry.Snapshot;
-            string contents = snapshot.HasCorrelation ? "heap + alloc + corr" : snapshot.HasAllocations ? "heap + alloc" : "heap only";
-            return [snapshot.Id, entry.Process.Name ?? "?", snapshot.CreatedAt.LocalDateTime.ToString("MM-dd HH:mm"),
-                ByteFormat.Human(snapshot.TotalSizeBytes), snapshot.Reason is { } reason ? $"{contents} ({reason})" : contents];
+            string contents = snapshot.HasCorrelation ? "heap + allocations + whoalloc" : snapshot.HasAllocations ? "heap + allocations" : "heap";
+            var row = new List<string> { snapshot.Id, $"{entry.Process.Name ?? "?"} ({entry.Process.Pid})", snapshot.CreatedAt.LocalDateTime.ToString("MM-dd HH:mm") };
+            if (labelled)
+            {
+                row.Add(snapshot.Label ?? "");
+            }
+            row.AddRange([ByteFormat.Column(snapshot.TotalSizeBytes), snapshot.Reason is { } reason ? $"{contents} \u00b7 on {reason}" : contents]);
+            return [.. row];
         }, entry =>
         {
             Snapshot opened = store.Open(entry.Snapshot.Id);
@@ -98,6 +111,14 @@ public static class SnapshotExplorer
         {
             current?.Dispose();
         }
+    }
+
+    private static HeapOverview Overview(Snapshot snapshot, SnapshotEntry entry)
+    {
+        DumpInfo info = snapshot.Info;
+        string gc = info.ServerGc ? $"server GC, {info.HeapCount} heaps" : "workstation GC";
+        string captured = entry.CreatedAt.LocalDateTime.ToString("MM-dd HH:mm") + (entry.Reason is { } reason ? $" \u00b7 on {reason}" : "");
+        return new HeapOverview(entry.Id, snapshot.Histogram, snapshot.Generations, $"{info.ClrFlavor} {info.ClrVersion} \u00b7 {gc}", captured);
     }
 
     /// <summary>The focused view sees every key first, so the filter box can type 'q' and delete with Backspace;

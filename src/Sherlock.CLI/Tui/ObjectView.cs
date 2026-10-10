@@ -46,7 +46,7 @@ internal static class ObjectView
                 : new StyledText(node.Value.Text, Theme.Current.MutedStyle),
             ShowGuides = true,
             OnLinkClick = payload => navigate(NavigationTarget.FromLink(payload)),
-        };
+        }.KeepSelectionOnHover();
         if (paths.Count == 0)
         {
             tree.AddRoot(new RootRow("(not reachable from any GC root \u2014 collectable)", null));

@@ -26,6 +26,17 @@ public sealed class PresentationTests
         Assert.Equal(expected, ByteSize.Format(bytes));
     }
 
+    [Theory]
+    [InlineData(880, "880 B")]
+    [InlineData(1024, "1.00 KB")]
+    [InlineData(9830, "9.60 KB")]
+    [InlineData(46377, "45.29 KB")]
+    public void ColumnSizesKeepTwoDecimalsAndStillSort(long bytes, string expected)
+    {
+        Assert.Equal(expected, ByteFormat.Column(bytes));
+        Assert.Equal(bytes < 1024 ? bytes : Math.Round(bytes / 1024d, 2) * 1024, ViewFormatting.ParseNumber(ByteFormat.Column(bytes)), 6);
+    }
+
     [Fact]
     public void ByteFormattingAndTableSortingAreCultureIndependent()
     {
@@ -148,7 +159,7 @@ public sealed class PresentationTests
             new(["Other.Alpha.Run"], 512, 2, 0, 0),
         ]);
         NavigationTarget? activated = null;
-        Table table = AllocationsView.HotTable(profile, target => activated = target);
+        Table table = AllocationsView.HotTable(profile.HotMethods(), target => activated = target);
         table.SortBy(3, SortState.Ascending);
 
         ActivateFirst(table);

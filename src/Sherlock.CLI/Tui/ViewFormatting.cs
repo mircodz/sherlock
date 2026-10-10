@@ -63,6 +63,38 @@ internal static class ViewFormatting
         return true;
     });
 
+    /// <summary>Keeps the selection's colors when the mouse is over a link on the selected row. Cellar paints a hovered
+    /// link with the stripe background unless the link brings its own hover style, so the highlight flickered off.
+    /// Call after setting <c>RenderLabel</c>.</summary>
+    public static TreeView<T> KeepSelectionOnHover<T>(this TreeView<T> tree)
+    {
+        Func<TreeNode<T>, StyledText> render = tree.RenderLabel;
+        tree.RenderLabel = node => ReferenceEquals(node, tree.SelectedNode) ? WithHoverStyle(render(node), SelectedLinkHover) : render(node);
+        return tree;
+    }
+
+    private static Style SelectedLinkHover =>
+        new(Theme.Current.SelectionForeground, Theme.Current.SelectionBackground, TextAttributes.Bold | TextAttributes.Underline);
+
+    private static StyledText WithHoverStyle(StyledText text, Style hover)
+    {
+        if (!text.HasLinks)
+        {
+            return text;
+        }
+        StyledText result = StyledText.Empty();
+        foreach (Span span in text.Spans)
+        {
+            result.Append(span.Link switch
+            {
+                null => span,
+                LinkInfo link => span.WithLink(link with { HoverStyle = hover }),
+                object payload => span.WithLink(new LinkInfo(payload, hover)),
+            });
+        }
+        return result;
+    }
+
     public static void SetRows<T>(Table table, IEnumerable<T> values, Func<T, string[]> render, Action<T> activate)
     {
         var byRow = new Dictionary<string[], T>();
@@ -78,6 +110,10 @@ internal static class ViewFormatting
         table.SelectedIndex = table.Rows.Count > 0 ? 0 : -1;
         table.ScrollOffset = 0;
     }
+
+    /// <summary>"1 type", "3 types".</summary>
+    public static string Count(long count, string noun) =>
+        $"{count.ToString("N0", CultureInfo.InvariantCulture)} {noun}{(count == 1 ? "" : "s")}";
 
     public static string Bar(double percentage, int width)
     {

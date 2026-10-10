@@ -51,6 +51,10 @@ public sealed class HeapDoctor(Snapshot snapshot)
         }
     }
 
+    // A share alone isn't a problem: on a small heap, some object always holds most of it.
+    private const ulong MinRetainedBytes = 10 << 20;
+    private const ulong MinFreeBytes = 32 << 20;
+
     private static void Retention(List<Finding> findings, DominatorTree tree)
     {
         ulong total = tree.TotalReachableBytes;
@@ -60,7 +64,7 @@ public sealed class HeapDoctor(Snapshot snapshot)
         }
 
         double pct = 100.0 * node.RetainedSize / total;
-        if (pct < 10)
+        if (pct < 10 || node.RetainedSize < MinRetainedBytes)
         {
             return;
         }
@@ -146,7 +150,7 @@ public sealed class HeapDoctor(Snapshot snapshot)
         }
 
         double pct = 100.0 * free.TotalSize / heapBytes;
-        if (pct < 25)
+        if (pct < 25 || free.TotalSize < MinFreeBytes)
         {
             return;
         }

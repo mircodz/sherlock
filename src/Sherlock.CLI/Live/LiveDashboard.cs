@@ -14,6 +14,7 @@ using Cellar.Widgets;
 using Cellar.Widgets.Charts;
 using Cellar.Widgets.Charts.Trees;
 using Sherlock.CLI.Rendering;
+using Sherlock.CLI.Tui;
 using Sherlock.Core;
 using Sherlock.Core.Collection;
 using Sherlock.Core.Store;
@@ -79,7 +80,7 @@ public static class LiveDashboard
             ShowGuides = true,
             ShowHeader = false,
             HasFocus = true, // the tree ignores navigation keys without focus
-        };
+        }.KeepSelectionOnHover();
 
         var snapshots = new Table { ShowHeader = true, Striped = true, ShowScrollbar = true };
         snapshots.Columns.Add(new Column("Id", Constraint.Length(7)));

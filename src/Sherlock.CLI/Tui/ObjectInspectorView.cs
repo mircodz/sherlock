@@ -40,7 +40,7 @@ internal sealed class ObjectInspectorView : Widget
             Striped = true,
             OnSelect = _ => UpdatePath(),
             OnLinkClick = Follow,
-        };
+        }.KeepSelectionOnHover();
 
         TreeNode<Row> node = CreateNode(new Row(root));
         _tree.AddRoot(node);
@@ -200,7 +200,7 @@ internal sealed class ObjectInspectorView : Widget
         }
         if (ObjectAddress(value) is { } address)
         {
-            text.Append("  @").Fg(theme.Muted)
+            text.Append("  ").Fg(theme.Muted)
                 .Append($"0x{address:x}").Fg(Color.Hex(Palette.Address)).Underline().Link(new ObjTarget(address));
         }
         if (value.Kind is not (ObjectValueKind.Reference or ObjectValueKind.Struct))

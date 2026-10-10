@@ -4,34 +4,118 @@ using System.Linq;
 using Cellar.Layout;
 using Cellar.Primitives;
 using Cellar.Text;
-using Cellar.Theming;
 using Cellar.Widgets;
 using Cellar.Widgets.Charts;
-using Cellar.Widgets.Charts.Trees;
+using Sherlock.CLI.Rendering;
 using Sherlock.Core;
-using Sherlock.Core.Diagnostics;
 using static Sherlock.CLI.Tui.ViewFormatting;
+using Theme = Cellar.Theming.Theme;
 
 namespace Sherlock.CLI.Tui;
 
+/// <summary>What Health shows besides the findings. All of it is cheap to read when a snapshot opens.</summary>
+/// <param name="Runtime">The runtime and GC mode, e.g. "Core 10.0.326.7603 · workstation GC".</param>
+/// <param name="Captured">When and why the snapshot was taken, e.g. "10-10 00:59 · on exit".</param>
+internal sealed record HeapOverview(string Id, IReadOnlyList<HeapTypeStat> Histogram, HeapGenerations? Generations = null,
+    string? Runtime = null, string? Captured = null);
+
 internal static class HealthView
 {
-    public static Widget Create(IReadOnlyList<HeapTypeStat> histogram, IReadOnlyList<Finding> findings, string id,
-        Action<NavigationTarget> navigate)
+    private const int TypesInBar = 5;
+    private const int LegendNameWidth = 28;
+
+    public static Widget Create(HeapOverview overview)
     {
-        List<HeapTypeStat> types = histogram.OrderByDescending(s => s.TotalSize).ToList();
-        long total = Math.Max(1, types.Sum(s => (long)s.TotalSize));
-        Color[] palette = Rendering.Theme.ChartColors();
+        var body = new Stack(Direction.Vertical)
+            .Add(new Label(StyledText.Empty()), Constraint.Length(1))
+            .Add(new Label(Summary(overview.Histogram)), Constraint.Length(1));
+        if (overview.Runtime is { } runtime)
+        {
+            body.Add(new Label(new StyledText(runtime, Theme.Current.MutedStyle)), Constraint.Length(1));
+        }
+        if (overview.Generations is { Total: > 0 } generations)
+        {
+            Section(body, "Heap by generation", ByGeneration(generations));
+        }
+        if (overview.Histogram.Any(stat => stat.TypeName != FreeType && stat.TotalSize > 0))
+        {
+            Section(body, "Objects by type", ByType(overview.Histogram));
+        }
+
+        string title = overview.Captured is { } captured ? $" {overview.Id} \u00b7 {captured} " : $" {overview.Id} ";
+        return Hinted(new Panel(new Padding(body, new Thickness(1, 0)), title) { BorderStyle = BorderStyle.Rounded }, "");
+    }
+
+    private const string FreeType = "Free";
+
+    // Heap size counts free space, as the generations do; objects and types don't.
+    private static StyledText Summary(IReadOnlyList<HeapTypeStat> histogram)
+    {
+        long heap = histogram.Sum(stat => (long)stat.TotalSize);
+        long free = histogram.Where(stat => stat.TypeName == FreeType).Sum(stat => (long)stat.TotalSize);
+        List<HeapTypeStat> types = histogram.Where(stat => stat.TypeName != FreeType).ToList();
+        StyledText text = StyledText.Of("Heap ").Fg(Theme.Current.Muted).Append(ByteFormat.Human(heap)).Bold().Fg(Theme.Current.Foreground)
+            .Append($"   {types.Sum(stat => stat.Count):N0}").Fg(Theme.Current.Foreground).Append(" objects").Fg(Theme.Current.Muted)
+            .Append($"   {types.Count:N0}").Fg(Theme.Current.Foreground).Append(" types").Fg(Theme.Current.Muted);
+        if (heap > 0)
+        {
+            text.Append($"   {ByteFormat.Human(free)}").Fg(Theme.Current.Foreground)
+                .Append($" free ({100.0 * free / heap:0}%)").Fg(Theme.Current.Muted);
+        }
+        return text;
+    }
+
+    private static void Section(Stack body, string heading, (ProportionBar Bar, Legend Legend) chart) =>
+        body.Add(new Label(StyledText.Empty()), Constraint.Length(1))
+            .Add(new Label(StyledText.Of(heading).Bold().Fg(Theme.Current.Info)), Constraint.Length(1))
+            .Add(chart.Bar, Constraint.Length(1))
+            .Add(chart.Legend, Constraint.Length(1));
+
+    private static (ProportionBar, Legend) ByGeneration(HeapGenerations generations)
+    {
+        (string Name, ulong Bytes, string Color)[] parts =
+        [
+            ("gen0", generations.Gen0, Palette.Hot),
+            ("gen1", generations.Gen1, Palette.Name),
+            ("gen2", generations.Gen2, Palette.Heading),
+            ("LOH", generations.Large, Palette.Magenta),
+            ("POH", generations.Pinned, Palette.Address),
+            ("frozen", generations.Frozen, Palette.Muted),
+        ];
+        var bar = new ProportionBar();
+        var legend = new Legend { Horizontal = true };
+        foreach ((string name, ulong bytes, string hex) in parts)
+        {
+            if (name == "frozen" && bytes == 0)
+            {
+                continue;
+            }
+            Color color = Color.Hex(hex);
+            if (bytes > 0)
+            {
+                bar.Segments.Add(new Segment(name, (long)bytes, color));
+            }
+            legend.Items.Add(new LegendItem(name, color, ByteFormat.Human(bytes)));
+        }
+        return (bar, legend);
+    }
+
+    // Shares of the bytes in objects; free space isn't a type and has its own place in the summary.
+    private static (ProportionBar, Legend) ByType(IReadOnlyList<HeapTypeStat> histogram)
+    {
+        List<HeapTypeStat> types = histogram.Where(stat => stat.TypeName != FreeType).OrderByDescending(stat => stat.TotalSize).ToList();
+        long total = Math.Max(1, types.Sum(stat => (long)stat.TotalSize));
+        Color[] palette = Sherlock.CLI.Rendering.Theme.ChartColors();
         var bar = new ProportionBar();
         var legend = new Legend { Horizontal = true };
         long shown = 0;
-        for (int i = 0; i < Math.Min(6, types.Count); i++)
+        for (int i = 0; i < Math.Min(TypesInBar, types.Count); i++)
         {
             Color color = palette[i % palette.Length];
             long bytes = (long)types[i].TotalSize;
             string name = TypeNames.Short(types[i].TypeName);
             bar.Segments.Add(new Segment(name, bytes, color));
-            legend.Items.Add(new LegendItem(name, color, $"{100.0 * bytes / total:0}%"));
+            legend.Items.Add(new LegendItem(TextUtil.Preview(name, LegendNameWidth), color, $"{100.0 * bytes / total:0}%"));
             shown += bytes;
         }
         if (total > shown)
@@ -39,61 +123,6 @@ internal static class HealthView
             bar.Segments.Add(new Segment("other", total - shown, Theme.Current.Muted));
             legend.Items.Add(new LegendItem("other", Theme.Current.Muted, $"{100.0 * (total - shown) / total:0}%"));
         }
-
-        var rows = new TreeView<FindingRow>
-        {
-            RenderLabel = node => node.Value.Text,
-            OnLinkClick = payload => navigate(NavigationTarget.FromLink(payload)),
-        };
-        foreach (Finding finding in findings)
-        {
-            (string glyph, Color color) = finding.Severity switch
-            {
-                FindingSeverity.High => ("\u25cf", Theme.Current.Error),
-                FindingSeverity.Warning => ("\u25cf", Theme.Current.Warning),
-                _ => ("\u25cb", Theme.Current.Muted),
-            };
-            NavigationTarget? target = finding.Address is ulong address
-                ? new ObjTarget(address, finding.Category.Contains("event", StringComparison.OrdinalIgnoreCase) ? ObjectTab.Roots : ObjectTab.Inspect)
-                : finding.Type is { } type ? new TypeTarget(type) : null;
-
-            TreeNode<FindingRow> node = rows.AddRoot(new FindingRow(
-                StyledText.Of($"{glyph} ").Fg(color).Append(finding.Title).Fg(Theme.Current.Foreground), target));
-            node.AddChild(new FindingRow(new StyledText(finding.Detail, Theme.Current.MutedStyle), target));
-            if (finding.NextCommand is { } next)
-            {
-                StyledText text = StyledText.Of("\u2192 ").Fg(Theme.Current.Muted).Append(next).Fg(Theme.Current.Accent);
-                if (target is not null)
-                {
-                    text.Underline().Link(target);
-                }
-                node.AddChild(new FindingRow(text, target));
-            }
-            node.ExpandAll();
-        }
-        if (findings.Count == 0)
-        {
-            rows.AddRoot(new FindingRow(new StyledText("Nothing stands out.", Theme.Current.MutedStyle), null));
-        }
-        rows.MarkDirty();
-
-        var body = new Stack(Direction.Vertical)
-            .Add(new Label(StyledText.Empty()), Constraint.Length(1))
-            .Add(new Label(StyledText.Of("Heap composition").Bold().Fg(Theme.Current.Info)), Constraint.Length(1))
-            .Add(bar, Constraint.Length(1))
-            .Add(legend, Constraint.Length(1))
-            .Add(new Label(StyledText.Empty()), Constraint.Length(1))
-            .Add(new Label(StyledText.Of("What looks wrong").Bold().Fg(Theme.Current.Info)), Constraint.Length(1))
-            .Add(OpenOnEnter(rows, node =>
-            {
-                if (node.Value.Target is { } target)
-                {
-                    navigate(target);
-                }
-            }), Constraint.Fill());
-        return Hinted(new Panel(new Padding(body, new Thickness(1, 0)), $" {id} \u2014 {ByteFormat.Human(total)} on the heap ") { BorderStyle = BorderStyle.Rounded },
-            findings.Count > 0 ? "\u2191\u2193 move  \u00b7  Enter investigate" : "");
+        return (bar, legend);
     }
-
-    private sealed record FindingRow(StyledText Text, NavigationTarget? Target);
 }
