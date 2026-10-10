@@ -44,13 +44,6 @@ internal static class HealthView
         {
             RenderLabel = node => node.Value.Text,
             OnLinkClick = payload => navigate(NavigationTarget.FromLink(payload)),
-            OnActivate = node =>
-            {
-                if (node.Value.Target is { } target)
-                {
-                    navigate(target);
-                }
-            },
         };
         foreach (Finding finding in findings)
         {
@@ -91,7 +84,13 @@ internal static class HealthView
             .Add(legend, Constraint.Length(1))
             .Add(new Label(StyledText.Empty()), Constraint.Length(1))
             .Add(new Label(StyledText.Of("What looks wrong").Bold().Fg(Theme.Current.Info)), Constraint.Length(1))
-            .Add(rows, Constraint.Fill());
+            .Add(OpenOnEnter(rows, node =>
+            {
+                if (node.Value.Target is { } target)
+                {
+                    navigate(target);
+                }
+            }), Constraint.Fill());
         return Hinted(new Panel(new Padding(body, new Thickness(1, 0)), $" {id} \u2014 {ByteFormat.Human(total)} on the heap ") { BorderStyle = BorderStyle.Rounded },
             findings.Count > 0 ? "\u2191\u2193 move  \u00b7  Enter investigate" : "");
     }

@@ -4,7 +4,6 @@ using System.Threading.Tasks;
 using Cellar.Layout;
 using Cellar.Primitives;
 using Cellar.Terminal;
-using Cellar.Text;
 using Cellar.Theming;
 using Cellar.Widgets;
 using Sherlock.Core;
@@ -50,15 +49,22 @@ public static class SnapshotExplorer
             navigation.Push(page);
         }
 
-        Widget Workspace(Snapshot snapshot, string id)
+        Widget Workspace(Snapshot snapshot, SnapshotEntry entry)
         {
             void Navigate(NavigationTarget target) => Follow(snapshot, target);
-            return new Tabs()
-                .Add("Health", () => Lazy(() => HealthView.Create(snapshot.Histogram,
-                    HeapDoctor.QuickFindings(snapshot.Histogram, snapshot.Dominators), id, Navigate)))
-                .Add("Types", () => Lazy(() => TypesView.Create(snapshot.Histogram, Navigate)))
-                .Add("Retention", () => Lazy(() => RetentionView.Create(snapshot.Dominators, Navigate)))
-                .Add("Allocations", () => Lazy(() => AllocationsView.Create(snapshot.Allocations, Navigate)));
+            Tabs tabs = new Tabs()
+                .AddBackgroundView("Health", cancellation => HealthView.Create(snapshot.Histogram,
+                    HeapDoctor.QuickFindings(snapshot.Histogram, snapshot.GetDominatorTree(cancellation)), entry.Id, Navigate))
+                .AddBackgroundView("Types", _ => TypesView.Create(snapshot.Histogram, Navigate))
+                .AddBackgroundView("Retention", cancellation => RetentionView.Create(snapshot.GetDominatorTree(cancellation), Navigate));
+            if (!entry.HasAllocations)
+            {
+                return tabs.AddView("Allocations", () => AllocationsView.MissingProfile(" Allocations "));
+            }
+            return tabs
+                .AddBackgroundView("Allocations", _ => AllocationsView.ByType(snapshot.Allocations, Navigate))
+                .AddBackgroundView("Call tree", _ => AllocationsView.Flow(snapshot.Allocations))
+                .AddBackgroundView("Hot methods", _ => AllocationsView.Hot(snapshot.Allocations, Navigate));
         }
 
         Table table = Table(("Id", Constraint.Length(5), false), ("Process", Constraint.Fill(2), false),
@@ -74,7 +80,7 @@ public static class SnapshotExplorer
             Snapshot opened = store.Open(entry.Snapshot.Id);
             current?.Dispose();
             current = opened;
-            navigation.Push(new Page(entry.Snapshot.Id, Workspace(opened, entry.Snapshot.Id)));
+            navigation.Push(new Page(entry.Snapshot.Id, Workspace(opened, entry.Snapshot)));
         });
         navigation.Reset(new Page("Snapshots", Hinted(new Panel(table, " Snapshots ") { BorderStyle = BorderStyle.Rounded },
             "\u2191\u2193 move  \u00b7  Enter open", tabbed: false, canGoBack: false)));
@@ -115,13 +121,12 @@ public static class SnapshotExplorer
         return false;
     }
 
-    private static Widget Lazy(Func<Widget> build) => new LazyContent(_ => build());
-
     private static Widget TypePage(Snapshot snapshot, TypeTarget target, Action<NavigationTarget> navigate)
     {
-        var tabs = new Tabs()
-            .Add("Instances", () => new LazyContent(_ => TypesView.Instances(snapshot.Instances(target.Type, 200, exact: true), target.Type, navigate)))
-            .Add("Call tree", () => new LazyContent(_ => AllocationsView.ForType(snapshot.Allocations, target.Type, navigate)));
+        Tabs tabs = new Tabs()
+            .AddBackgroundView("Instances", cancellation =>
+                TypesView.Instances(snapshot.Instances(target.Type, 200, cancellation, exact: true), target.Type, navigate))
+            .AddBackgroundView("Call tree", _ => AllocationsView.ForType(snapshot.Allocations, target.Type, navigate));
         tabs.ActiveIndex = target.Tab == TypeTab.Allocations ? 1 : 0;
         return tabs;
     }

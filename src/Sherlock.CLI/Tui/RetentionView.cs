@@ -25,7 +25,6 @@ internal static class RetentionView
             ShowGuides = true,
             Striped = true,
             OnLinkClick = payload => navigate(NavigationTarget.FromLink(payload)),
-            OnActivate = node => navigate(new ObjTarget(node.Value.Address)),
         };
         tree.Columns.Add(new TreeColumn<DominatorNode>("Retained", 11,
             node => new StyledText(ByteFormat.Human(node.Value.RetainedSize), new Style(Theme.Current.Success, Color.Default))));
@@ -41,7 +40,8 @@ internal static class RetentionView
         {
             tree.AddRoot(node, parent => dominators.ImmediateChildren(parent.Address, 20));
         }
-        return Hinted(new Panel(tree, " Retention \u2014 what holds the memory ") { BorderStyle = BorderStyle.Rounded },
+        return Hinted(new Panel(OpenOnEnter(tree, node => navigate(new ObjTarget(node.Value.Address))), " Retention \u2014 what holds the memory ")
+            { BorderStyle = BorderStyle.Rounded },
             "\u2192\u2190 expand  \u00b7  Enter inspect");
     }
 }

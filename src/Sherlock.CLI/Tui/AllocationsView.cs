@@ -18,28 +18,41 @@ namespace Sherlock.CLI.Tui;
 
 internal static class AllocationsView
 {
-    public static Widget Create(AllocationProfile? profile, Action<NavigationTarget> navigate)
+    /// <summary>What the program allocated, by type.</summary>
+    public static Widget ByType(AllocationProfile? profile, Action<NavigationTarget> navigate)
+    {
+        const string title = " Allocations by type \u2014 what the program allocated ";
+        if (profile is null)
+        {
+            return MissingProfile(title);
+        }
+        if (!profile.HasTypes)
+        {
+            return Message("This profile doesn't record allocated types. Capture again to see them.", title);
+        }
+        return Hinted(new Panel(TypeTable(profile, name => new TypeTarget(name, TypeTab.Allocations), navigate), title) { BorderStyle = BorderStyle.Rounded },
+            "Enter call tree  \u00b7  s sort");
+    }
+
+    /// <summary>Every allocation's call stack as a flame graph.</summary>
+    public static Widget Flow(AllocationProfile? profile)
     {
         if (profile is null)
         {
-            return MissingProfile(" Allocations ");
+            return MissingProfile(" Call tree ");
         }
-        var tabs = new Tabs();
-        if (profile.HasTypes)
-        {
-            tabs.AddPane("By type", () => Hinted(new Panel(TypeTable(profile, name => new TypeTarget(name, TypeTab.Allocations), navigate),
-                " Allocations by type \u2014 what the program allocated ") { BorderStyle = BorderStyle.Rounded },
-                "Enter call tree  \u00b7  s sort"));
-        }
-        tabs.AddPane("Call tree", () =>
-        {
-            AllocationTreeNode root = AllocationTreeNode.Build(profile);
-            var flame = new FlameGraph<AllocationTreeNode> { LabelSelector = node => node.Label, Root = ToFlame(root, "all allocations") };
-            return FlamePanel(flame, root.AllocBytes);
-        });
-        tabs.AddPane("Hot methods", () => Hinted(new Panel(HotTable(profile, navigate), " Hot allocation sites ") { BorderStyle = BorderStyle.Rounded },
-            "Enter open method  \u00b7  s sort"));
-        return tabs;
+        AllocationTreeNode root = AllocationTreeNode.Build(profile);
+        var flame = new FlameGraph<AllocationTreeNode> { LabelSelector = node => node.Label, Root = ToFlame(root, "all allocations") };
+        return FlamePanel(flame, root.AllocBytes);
+    }
+
+    /// <summary>The methods that allocate the most.</summary>
+    public static Widget Hot(AllocationProfile? profile, Action<NavigationTarget> navigate)
+    {
+        const string title = " Hot allocation sites ";
+        return profile is null
+            ? MissingProfile(title)
+            : Hinted(new Panel(HotTable(profile, navigate), title) { BorderStyle = BorderStyle.Rounded }, "Enter open method  \u00b7  s sort");
     }
 
     public static Widget ForType(AllocationProfile? profile, string typeName, Action<NavigationTarget> navigate)
@@ -63,8 +76,7 @@ internal static class AllocationsView
         AllocationProfile through = profile.Through(method);
         if (through.Sites.Count == 0)
         {
-            return Hinted(new Panel(new Padding(new Label(new StyledText($"Nothing allocates through {FrameNames.ShortMethod(method)}.", Theme.Current.MutedStyle)),
-                new Thickness(1)), " Method ") { BorderStyle = BorderStyle.Rounded }, "");
+            return Message($"Nothing allocates through {FrameNames.ShortMethod(method)}.", " Method ");
         }
 
         StyledText summary = StyledText.Of(FrameNames.ShortMethod(method)).Bold().Fg(Theme.Current.Accent)
@@ -80,19 +92,18 @@ internal static class AllocationsView
         var tabs = new Tabs();
         if (through.HasTypes)
         {
-            tabs.AddPane("Allocated types", () => Hinted(new Panel(TypeTable(through, name => new TypeTarget(name), navigate),
+            tabs.AddView("Allocated types", () => Hinted(new Panel(TypeTable(through, name => new TypeTarget(name), navigate),
                 " What this method allocates, by type ") { BorderStyle = BorderStyle.Rounded },
                 "Enter instances  \u00b7  s sort"));
         }
-        tabs.AddPane("Callers", () =>
+        tabs.AddView("Callers", () =>
         {
             AllocationTreeNode callers = AllocationTreeNode.BuildCallers(profile, method);
             return callers.Children.Count > 0
                 ? Hinted(new Panel(CallTree(callers.Children, callers.AllocBytes, navigate),
                     " Who calls it \u2014 bytes allocated through each caller ") { BorderStyle = BorderStyle.Rounded },
                     "\u2192\u2190 expand  \u00b7  Enter open method")
-                : Hinted(new Panel(new Padding(new Label(new StyledText("This is a top-level frame \u2014 no callers.", Theme.Current.MutedStyle)),
-                    new Thickness(1)), " Callers ") { BorderStyle = BorderStyle.Rounded }, "");
+                : Message("This is a top-level frame \u2014 no callers.", " Callers ");
         });
         return new Stack(Direction.Vertical)
             .Add(new Padding(new Label(summary), new Thickness(1, 0)), Constraint.Length(1))
@@ -135,7 +146,6 @@ internal static class AllocationsView
             ShowGuides = true,
             Striped = true,
             OnLinkClick = payload => navigate(NavigationTarget.FromLink(payload)),
-            OnActivate = node => navigate(new MethodTarget(node.Value.Frame)),
         };
         tree.Columns.Add(new TreeColumn<AllocationTreeNode>("Allocated", 11,
             node => new StyledText(ByteFormat.Human(node.Value.AllocBytes), new Style(Theme.Current.Success, Color.Default))));
@@ -154,7 +164,7 @@ internal static class AllocationsView
             tree.AddRoot(node, parent => parent.Children).ExpandAll();
         }
         tree.MarkDirty();
-        return tree;
+        return OpenOnEnter(tree, node => navigate(new MethodTarget(node.Value.Frame)));
     }
 
     private static FlameNode<AllocationTreeNode> ToFlame(AllocationTreeNode node, string? label = null)
@@ -194,7 +204,7 @@ internal static class AllocationsView
         return new Stack(Direction.Vertical)
             .Add(new Padding(info, new Thickness(1, 0)), Constraint.Length(1))
             // The flame graph claims Backspace even when there is nothing to zoom out of; let it go back instead.
-            .Add(Hinted(new Panel(new Padding(new TabPane(flame, key => key.Key == Key.Backspace && IsZoomedOut(flame)), new Thickness(1, 0)),
+            .Add(Hinted(new Panel(new Padding(new KeyHook(flame, key => key.Key == Key.Backspace && IsZoomedOut(flame) ? false : null), new Thickness(1, 0)),
                 " Allocation flow \u2014 width = bytes ") { BorderStyle = BorderStyle.Rounded },
                 "\u2190\u2191\u2193\u2192 move  \u00b7  Enter zoom in  \u00b7  Esc zoom out"), Constraint.Fill());
     }
@@ -202,8 +212,6 @@ internal static class AllocationsView
     private static bool IsZoomedOut(FlameGraph<AllocationTreeNode> flame) =>
         flame.ZoomedFrame is null || ReferenceEquals(flame.ZoomedFrame, flame.Root);
 
-    private static Widget MissingProfile(string title) =>
-        Hinted(new Panel(new Padding(new Label(new StyledText(
-            "No allocation profile in this snapshot. Capture one with sl run --profile or --correlate.", Theme.Current.MutedStyle)),
-            new Thickness(1)), title) { BorderStyle = BorderStyle.Rounded }, "");
+    public static Widget MissingProfile(string title) =>
+        Message("No allocation profile in this snapshot. Capture one with sl run --profile or --correlate.", title);
 }

@@ -5,8 +5,6 @@ using System.Linq;
 using Cellar.Layout;
 using Cellar.Primitives;
 using Cellar.Terminal;
-using Cellar.Text;
-using Cellar.Theming;
 using Cellar.Widgets;
 using Sherlock.Core;
 using static Sherlock.CLI.Tui.ViewFormatting;
@@ -49,8 +47,7 @@ internal static class TypesView
             string message = typeName == "Free"
                 ? "Free is unused space between objects on the GC heap, not a type with instances."
                 : $"No live instances of {TypeNames.Short(typeName)} in this snapshot.";
-            return Hinted(new Panel(new Padding(new Label(new StyledText(message, Theme.Current.MutedStyle)), new Thickness(1)),
-                $" {TypeNames.Short(typeName)} ") { BorderStyle = BorderStyle.Rounded }, "");
+            return Message(message, $" {TypeNames.Short(typeName)} ");
         }
         string title = $" {TypeNames.Short(typeName)} \u2014 {listing.TotalMatched:N0} instances, {ByteFormat.Human(listing.TotalMatchedSize)} ";
         if (listing.Instances.Count < listing.TotalMatched)

@@ -2,11 +2,14 @@ using System;
 using System.Linq;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Threading;
 using Cellar.Layout;
 using Cellar.Primitives;
+using Cellar.Terminal;
 using Cellar.Text;
 using Cellar.Theming;
 using Cellar.Widgets;
+using Cellar.Widgets.Charts.Trees;
 
 namespace Sherlock.CLI.Tui;
 
@@ -34,8 +37,31 @@ internal static class ViewFormatting
 
     private const string HintSeparator = "  \u00b7  ";
 
-    /// <summary>Adds a tab whose content leaves Tab to the tabs (see <see cref="TabPane"/>).</summary>
-    public static Tabs AddPane(this Tabs tabs, string name, Func<Widget> build) => tabs.Add(name, () => new TabPane(build()));
+    /// <summary>A view that only explains something, such as why it's empty.</summary>
+    public static Widget Message(string text, string title) =>
+        Hinted(new Panel(new Padding(new Label(new StyledText(text, Theme.Current.MutedStyle)), new Thickness(1)), title)
+            { BorderStyle = BorderStyle.Rounded }, "");
+
+    /// <summary>Adds a view, built the first time it's shown. Every tab goes through here or
+    /// <see cref="AddBackgroundView"/>, which give all views the same keys (see <see cref="View"/>). A page has one row
+    /// of tabs: a view never contains tabs of its own.</summary>
+    public static Tabs AddView(this Tabs tabs, string name, Func<Widget> build) => tabs.Add(name, () => View.Of(build()));
+
+    /// <summary>Adds a view whose content is slow to build, so it's built in the background.</summary>
+    public static Tabs AddBackgroundView(this Tabs tabs, string name, Func<CancellationToken, Widget> build) =>
+        tabs.Add(name, () => View.Background(build));
+
+    /// <summary>Enter opens the selected node. Cellar's tree also toggles the node on Enter, so it would be collapsed
+    /// or expanded when you come back; ←/→ and Space still do that.</summary>
+    public static Widget OpenOnEnter<T>(TreeView<T> tree, Action<TreeNode<T>> open) => new KeyHook(tree, key =>
+    {
+        if (key.Key != Key.Enter || tree.SelectedNode is not { } node)
+        {
+            return null;
+        }
+        open(node);
+        return true;
+    });
 
     public static void SetRows<T>(Table table, IEnumerable<T> values, Func<T, string[]> render, Action<T> activate)
     {
