@@ -42,7 +42,7 @@ public static class SnapshotExplorer
             Page page = target switch
             {
                 ObjTarget obj => new Page($"0x{obj.Address:x}", ObjectView.Create(snapshot, obj.Address, obj.Tab, Navigate)),
-                TypeTarget type => new Page(TypeNames.Short(type.Type), TypePage(snapshot, type, Navigate)),
+                TypeTarget type => new Page(Rendering.DisplayNames.Type(type.Type), TypePage(snapshot, type, Navigate)),
                 MethodTarget method => new Page(method.Method.Label, AllocationsView.ForMethod(snapshot.Allocations, method.Method, Navigate)),
                 _ => throw new ArgumentException("Unknown explorer navigation target.", nameof(target)),
             };
@@ -81,7 +81,7 @@ public static class SnapshotExplorer
         {
             SnapshotEntry snapshot = entry.Snapshot;
             string contents = snapshot.HasCorrelation ? "heap + allocations + whoalloc" : snapshot.HasAllocations ? "heap + allocations" : "heap";
-            var row = new List<string> { snapshot.Id, $"{entry.Process.Name ?? "?"} ({entry.Process.Pid})", snapshot.CreatedAt.LocalDateTime.ToString("MM-dd HH:mm") };
+            var row = new List<string> { snapshot.Id, $"{(entry.Process.Name is { } name ? Printable.Escape(name) : "?")} ({entry.Process.Pid})", snapshot.CreatedAt.LocalDateTime.ToString("MM-dd HH:mm") };
             if (labelled)
             {
                 row.Add(snapshot.Label ?? "");

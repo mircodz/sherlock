@@ -154,6 +154,21 @@ public class ProvenanceTests : IDisposable
         Assert.Contains("unsupported version", Assert.Throws<InvalidDataException>(() => new ProvenanceReader(slab)).Message);
     }
 
+    [Theory]
+    [InlineData(ulong.MaxValue, 0ul)]
+    [InlineData((ulong)long.MaxValue, 1ul)]
+    public void RejectsAllocationTotalsTooLargeToCount(ulong first, ulong second)
+    {
+        var writer = new ProvenanceWriter();
+        uint stack = writer.InternStack(Stack("A"));
+        uint type = writer.InternType("T");
+        writer.AddAllocation(stack, type, first, 1, 0, 0);
+        writer.AddAllocation(stack, type, second, 1, 0, 0);
+        using SlabFile slab = Write(writer);
+
+        Assert.Contains("too large", Assert.Throws<InvalidDataException>(() => new ProvenanceReader(slab)).Message);
+    }
+
     [Fact]
     public void RejectsMissingStackTable()
     {

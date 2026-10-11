@@ -23,6 +23,7 @@ struct Fixture {
     std::vector<BYTE> spec;
     std::vector<std::string> typeParameters{"TKey", "TValue"};
     std::vector<std::string> methodParameters{"T"};
+    std::map<std::uint32_t, std::string> byref; // declared byref keywords by parameter sequence
 
     std::optional<signature::Signature> describe(const std::vector<BYTE>& blob, bool qualified) const {
         signature::Context context{
@@ -35,6 +36,7 @@ struct Fixture {
             },
             typeParameters,
             methodParameters,
+            [this](std::uint32_t sequence) { return byref.contains(sequence) ? byref.at(sequence) : std::string(); },
         };
         return signature::describe(blob, context, qualified);
     }
@@ -106,6 +108,20 @@ TEST(Signature, SkipsCustomModifiersAndExpandsTypeSpecs) {
     EXPECT_EQ(fixture.format({0x00, 0x02, ELEMENT_TYPE_VOID, ELEMENT_TYPE_CMOD_REQD, kOwnerCoded, ELEMENT_TYPE_I4,
                               ELEMENT_TYPE_CLASS, kSpecCoded}),
               "(int, string[])");
+}
+
+TEST(Signature, SpellsByrefParametersAsDeclared) {
+    Fixture fixture;
+    fixture.byref = {{0, "ref readonly"}, {1, "out"}, {2, "in"}, {3, "ref readonly"}};
+    // ref readonly int M(out int, in int, ref readonly int, ref int, delegate*<ref int, void>)
+    std::optional<signature::Signature> described = fixture.describe(
+        {0x00, 0x05, ELEMENT_TYPE_BYREF, ELEMENT_TYPE_I4, ELEMENT_TYPE_BYREF, ELEMENT_TYPE_I4, ELEMENT_TYPE_BYREF, ELEMENT_TYPE_I4,
+         ELEMENT_TYPE_BYREF, ELEMENT_TYPE_I4, ELEMENT_TYPE_BYREF, ELEMENT_TYPE_I4,
+         ELEMENT_TYPE_FNPTR, 0x00, 0x01, ELEMENT_TYPE_VOID, ELEMENT_TYPE_BYREF, ELEMENT_TYPE_I4},
+        false);
+    ASSERT_TRUE(described);
+    EXPECT_EQ(described->returnType, "ref readonly int");
+    EXPECT_EQ(described->parameters, "(out int, in int, ref readonly int, ref int, delegate*<ref int, void>)");
 }
 
 TEST(Signature, FormatsFunctionPointersAndVarargs) {

@@ -68,7 +68,7 @@ internal static class ObjectView
             TreeNode<RootRow> node = root;
             foreach (GcRootNode step in path.Path)
             {
-                node = node.AddChild(new RootRow(TypeNames.Short(step.TypeName), step.Address));
+                node = node.AddChild(new RootRow(Rendering.DisplayNames.Type(step.TypeName), step.Address));
             }
             root.ExpandAll();
         }

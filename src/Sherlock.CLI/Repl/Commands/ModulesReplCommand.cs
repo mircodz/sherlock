@@ -40,7 +40,7 @@ public sealed class ModulesReplCommand : IReplCommand
 
         foreach (ModuleInfo module in modules)
         {
-            string name = Markup.Escape(Path.GetFileName(module.Name));
+            string name = Styled.Text(Path.GetFileName(module.Name));
             table.AddRow(
                 module.IsDynamic ? $"{name} [{Palette.Muted}](dynamic)[/]" : name,
                 module.ImageBase == 0 ? "-" : $"[{Palette.Address}]0x{module.ImageBase:x}[/]",

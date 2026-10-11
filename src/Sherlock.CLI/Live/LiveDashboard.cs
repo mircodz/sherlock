@@ -72,7 +72,7 @@ public static class LiveDashboard
             {
                 RunProcess process = node.Value;
                 Color color = process.IsDotnet ? Theme.Current.Accent : Theme.Current.Muted;
-                return StyledText.Of(process.Name).Fg(color).Underline().Link(process.Pid)
+                return StyledText.Of(Printable.Escape(process.Name)).Fg(color).Underline().Link(process.Pid)
                     .Append($"  {process.Pid}").Fg(Theme.Current.Secondary)
                     .Append(process.IsDotnet ? "  .NET" : "  native").Fg(Theme.Current.Muted)
                     .Append(process.IsRoot ? "  root" : "").Fg(Theme.Current.Muted);
@@ -170,11 +170,11 @@ public static class LiveDashboard
         void SelectProcess(RunProcess process)
         {
             int previous = Interlocked.Exchange(ref selectedPid, process.Pid);
-            heapRule.Label = StyledText.Of($"HEAP - {process.Name} [{process.Pid}]").Bold().Fg(Theme.Current.Info);
+            heapRule.Label = StyledText.Of($"HEAP - {Printable.Escape(process.Name)} [{process.Pid}]").Bold().Fg(Theme.Current.Info);
             if (previous != process.Pid)
             {
                 ResetHeap();
-                AddEvent($"selected {process.Name} [{process.Pid}]", Theme.Current.Info);
+                AddEvent($"selected {Printable.Escape(process.Name)} [{process.Pid}]", Theme.Current.Info);
             }
         }
 
@@ -343,8 +343,8 @@ public static class LiveDashboard
 
                 case Capturing capture:
                     status.Content = StyledText.Of("snapshotting ").Fg(Theme.Current.Warning)
-                        .Append($"{capture.Name} [{capture.Pid}]").Fg(Theme.Current.Foreground);
-                    AddEvent($"snapshot started for {capture.Name} [{capture.Pid}]", Theme.Current.Warning, capture.At);
+                        .Append($"{Printable.Escape(capture.Name)} [{capture.Pid}]").Fg(Theme.Current.Foreground);
+                    AddEvent($"snapshot started for {Printable.Escape(capture.Name)} [{capture.Pid}]", Theme.Current.Warning, capture.At);
                     app.Invalidate();
                     break;
 

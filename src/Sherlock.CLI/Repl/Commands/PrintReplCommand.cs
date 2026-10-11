@@ -24,7 +24,7 @@ public sealed class PrintReplCommand : IReplCommand
         ObjectDetail detail = context.Snapshot.Inspect(address);
 
         context.Console.MarkupLine(Styled.Object(detail.TypeName, detail.Address, (long)detail.Size));
-        if (TypeNames.Namespace(detail.TypeName) is { Length: > 0 } ns)
+        if (DisplayNames.Namespace(detail.TypeName) is { Length: > 0 } ns)
         {
             context.Console.MarkupLineInterpolated($"  [{Palette.Muted}]namespace[/] {ns}");
         }
@@ -57,7 +57,7 @@ public sealed class PrintReplCommand : IReplCommand
         {
             table.AddRow(
                 $"[{Palette.Muted}]+0x{field.Offset:x}[/]",
-                Markup.Escape(field.Name),
+                Styled.Text(field.Name),
                 Styled.Type(field.TypeName),
                 Markup.Escape(field.Value));
         }

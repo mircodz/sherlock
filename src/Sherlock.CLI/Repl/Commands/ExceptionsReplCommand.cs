@@ -31,7 +31,7 @@ public sealed class ExceptionsReplCommand : IReplCommand
                 ? $" [{Palette.Warning}](in-flight on thread {id})[/]"
                 : "";
             context.Console.MarkupLine($"{Styled.Type(ex.TypeName)} {Styled.Address(ex.Address)}");
-            context.Console.MarkupInterpolated($"  {ex.Message ?? "<no message>"}");
+            context.Console.MarkupInterpolated($"  {(ex.Message is { } message ? Printable.Escape(message) : "<no message>")}");
             context.Console.MarkupLine(thread);
             if (ex.StackFrameCount > 0)
             {

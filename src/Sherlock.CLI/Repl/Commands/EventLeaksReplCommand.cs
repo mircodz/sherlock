@@ -40,11 +40,11 @@ public sealed class EventLeaksReplCommand : IReplCommand
         foreach (EventSubscription leak in leaks)
         {
             string subscribers = string.Join(", ",
-                leak.Targets.Take(3).Select(t => $"{Markup.Escape(TypeNames.Short(t.TypeName))} ×{t.Count}"));
+                leak.Targets.Take(3).Select(t => $"{Markup.Escape(DisplayNames.Type(t.TypeName))} ×{t.Count}"));
             table.AddRow(
                 $"[{Palette.Address}]0x{leak.DelegateAddress:x}[/]",
                 $"[bold]{Counts.Compact(leak.SubscriberCount)}[/]",
-                $"[{Palette.Name}]{Markup.Escape(TypeNames.Short(leak.DelegateType))}[/]",
+                Styled.Type(leak.DelegateType),
                 subscribers);
         }
 

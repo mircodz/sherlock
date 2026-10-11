@@ -70,7 +70,7 @@ public sealed class KillReplCommand : IReplCommand
         }
 
         target.Kill();
-        Output.Success(context.Console, $"Killed [{Palette.Name}]{target.Name}[/] · pid {target.Pid}");
+        Output.Success(context.Console, $"Killed [{Palette.Name}]{Printable.Escape(target.Name)}[/] · pid {target.Pid}");
         return result;
     }
 }

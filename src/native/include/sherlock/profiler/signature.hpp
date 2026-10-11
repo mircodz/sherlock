@@ -18,6 +18,9 @@ struct Context {
     std::function<std::span<const BYTE>(mdTypeSpec)> typeSpec;
     std::span<const std::string> typeParameters;
     std::span<const std::string> methodParameters;
+    // How a byref parameter of the described method was declared: "out", "in", or "ref readonly"; empty for "ref".
+    // By sequence: 0 is the return value, 1 the first parameter. Signatures alone spell all of them "ref".
+    std::function<std::string(std::uint32_t sequence)> byrefKeyword;
 };
 
 // "System.Collections.Generic.List`1" -> "List".

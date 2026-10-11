@@ -23,7 +23,7 @@ public sealed class ObjectsReplCommand : IReplCommand
         int limit = Args.Count(args, 1, DefaultLimit, Usage);
 
         InstanceListing listing = context.Console.Status()
-            .Start($"Scanning heap for '{filter}'…", _ =>
+            .Start($"Scanning heap for '{Markup.Escape(filter)}'…", _ =>
                 context.Snapshot.Instances(filter, limit, context.Cancellation));
 
         if (listing.TotalMatched == 0)

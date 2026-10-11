@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Sherlock.CLI.Rendering;
+using Sherlock.Core;
 using Sherlock.Core.Collection;
 using Spectre.Console;
 
@@ -38,11 +39,11 @@ public sealed class SnapshotOnReplCommand : IReplCommand
 
         int armPid = target.PrimaryPid; // the app (child under a launcher, if any)
         (bool ok, string detail) = context.Console.Status()
-            .Start($"Arming snapshot-on {spec}…", _ => target.ArmTrigger(armPid, spec, TimeSpan.FromSeconds(10)));
+            .Start($"Arming snapshot-on {Markup.Escape(spec)}…", _ => target.ArmTrigger(armPid, spec, TimeSpan.FromSeconds(10)));
 
         if (ok)
         {
-            Output.Success(context.Console, $"Armed [bold]{spec}[/] on [{Palette.Name}]{target.Name}[/] · pid {target.Pid}");
+            Output.Success(context.Console, $"Armed [bold]{spec}[/] on [{Palette.Name}]{Printable.Escape(target.Name)}[/] · pid {target.Pid}");
         }
         else
         {

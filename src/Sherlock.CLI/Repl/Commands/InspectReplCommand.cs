@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Sherlock.CLI.Rendering;
+using Sherlock.Core;
 using Sherlock.Core.Diagnostics;
 using Spectre.Console;
 
@@ -38,7 +39,7 @@ public sealed class InspectReplCommand : IReplCommand
             context.Console.MarkupLineInterpolated($"  [{Palette.Muted}]{finding.Detail}[/]");
             if (finding.NextCommand is { } next)
             {
-                context.Console.MarkupLineInterpolated($"  [{Palette.Muted}]→[/] [bold]{next}[/]");
+                context.Console.MarkupLineInterpolated($"  [{Palette.Muted}]→[/] [bold]{Printable.Escape(next)}[/]");
             }
         }
         return ReplResult.Success;

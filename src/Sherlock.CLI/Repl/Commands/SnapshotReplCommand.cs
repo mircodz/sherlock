@@ -53,7 +53,7 @@ public sealed class SnapshotReplCommand : IReplCommand
                     Output.Warning(context.Console, $"Multiple live .NET processes; use [bold]snapshot <pid>[/]:");
                     foreach (RunProcess p in live)
                     {
-                        context.Console.MarkupLineInterpolated($"    [{Palette.Address}]{p.Pid}[/]  [{Palette.Name}]{p.Name}[/]  [{Palette.Muted}]{(p.IsRoot ? "root" : "child")}[/]");
+                        context.Console.MarkupLineInterpolated($"    [{Palette.Address}]{p.Pid}[/]  [{Palette.Name}]{Printable.Escape(p.Name)}[/]  [{Palette.Muted}]{(p.IsRoot ? "root" : "child")}[/]");
                     }
                 }
                 return ReplResult.Failure;

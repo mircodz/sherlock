@@ -24,7 +24,7 @@ internal static class RetentionView
         var tree = new TreeView<Row>
         {
             RenderLabel = node => node.Value.Holder is { } holder
-                ? StyledText.Of(TypeNames.Short(holder.TypeName)).Fg(Theme.Current.Accent).Underline().Link(new TypeTarget(holder.TypeName))
+                ? StyledText.Of(Rendering.DisplayNames.Type(holder.TypeName)).Fg(Theme.Current.Accent).Underline().Link(new TypeTarget(holder.TypeName))
                     .Append(" ").Fg(Theme.Current.Muted)
                     .Append($"0x{holder.Address:x}").Fg(Theme.Current.Secondary).Underline().Link(new ObjTarget(holder.Address))
                 : new StyledText("\u2026 smaller holders", Theme.Current.MutedStyle),

@@ -1,4 +1,5 @@
 #include "sherlock/profiler/aggregator.hpp"
+#include "sherlock/profiler/utf8.hpp"
 
 #include "sherlock/common/logger.hpp"
 #include "sherlock/profiler/signature.hpp"
@@ -40,23 +41,42 @@ thread_local ThreadShard t_shard;
 
 std::atomic<std::uint64_t> g_nextAggregatorId{1};
 
-// FNV-1a over the frame ids.
-std::uint64_t hashFrames(std::span<const FrameId> frames) {
+// FNV-1a over the frame ids and the type: one call site can allocate several types.
+std::uint64_t siteHash(std::span<const FrameId> frames, ClassID classId) {
     std::uint64_t h = 1469598103934665603ull;
     for (FrameId frame : frames) {
         h ^= frame;
         h *= 1099511628211ull;
     }
-    return h;
+    return (h ^ static_cast<std::uint64_t>(classId)) * 1099511628211ull;
 }
 
-// Preserve ASCII type names; replace other UTF-16 units with '?' on Windows and PAL.
-std::string narrow(const WCHAR* s, ULONG len) {
-    std::string out;
-    out.reserve(len);
-    for (ULONG i = 0; i < len && s[i] != 0; ++i)
-        out.push_back(s[i] < 128 ? static_cast<char>(s[i]) : '?');
-    return out;
+// The site with exactly these frames and type, or null.
+Aggregator::Site* findSite(Aggregator::SiteMap& sites, std::uint64_t hash, std::span<const FrameId> frames, ClassID classId) {
+    auto [first, last] = sites.equal_range(hash);
+    for (auto it = first; it != last; ++it) {
+        if (it->second.classId == classId && std::ranges::equal(it->second.frames, frames)) {
+            return &it->second;
+        }
+    }
+    return nullptr;
+}
+
+// A TypeDef's metadata name as UTF-8, as ClrMD spells it; empty when it can't be read.
+std::string typeDefName(IMetaDataImport* md, mdTypeDef typeDef, DWORD& flags) {
+    std::vector<WCHAR> buffer(512);
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        ULONG length = 0;
+        if (FAILED(md->GetTypeDefProps(typeDef, buffer.data(), static_cast<ULONG>(buffer.size()), &length, &flags, nullptr)))
+            return {};
+        if (length <= buffer.size()) {
+            std::span<const WCHAR> units(buffer.data(), length);
+            units = units.first(static_cast<std::size_t>(std::ranges::find(units, WCHAR{0}) - units.begin()));
+            return utf8(units, /*replaceInvalid*/ true).value_or(std::string());
+        }
+        buffer.resize(length);
+    }
+    return {};
 }
 
 // ClrMD-compatible primitive names; other element types need ClassID resolution.
@@ -88,12 +108,11 @@ std::vector<std::string> typeDefSegments(IMetaDataImport* md, mdTypeDef typeDef)
     std::vector<std::string> segments;
     mdTypeDef cur = typeDef;
     for (;;) {
-        WCHAR buf[512];
-        ULONG len = 0;
         DWORD flags = 0;
-        if (FAILED(md->GetTypeDefProps(cur, buf, 512, &len, &flags, nullptr)))
+        std::string name = typeDefName(md, cur, flags);
+        if (name.empty())
             break;
-        segments.insert(segments.begin(), narrow(buf, len));
+        segments.insert(segments.begin(), std::move(name));
         if (!IsTdNested(flags))
             break;
         mdTypeDef enclosing = 0;
@@ -138,21 +157,16 @@ Aggregator::Shard& Aggregator::localShard() {
 }
 
 void Aggregator::record(std::span<const FrameId> frames, std::uint64_t bytes, ObjectID addr, ClassID classId) {
-    // Include type so one call site allocating different types gets separate sites.
-    std::uint64_t key = hashFrames(frames);
-    key = (key ^ static_cast<std::uint64_t>(classId)) * 1099511628211ull;
+    const std::uint64_t hash = siteHash(frames, classId);
     Shard& shard = localShard();
     std::lock_guard lock(shard.mutex);
 
-    auto it = shard.sites.find(key);
-    Site* site;
-    if (it == shard.sites.end()) {
+    Site* site = findSite(shard.sites, hash, frames, classId);
+    if (site == nullptr) {
         Site fresh;
         fresh.frames.assign(frames.begin(), frames.end());
         fresh.classId = classId;
-        site = &shard.sites.emplace(key, std::move(fresh)).first->second;
-    } else {
-        site = &it->second;
+        site = &shard.sites.emplace(hash, std::move(fresh))->second;
     }
 
     site->alloc.count += 1;
@@ -402,28 +416,24 @@ std::vector<Aggregator::Shard*> Aggregator::registeredShards() const {
     return result;
 }
 
-std::unordered_map<std::uint64_t, Aggregator::Site> Aggregator::mergeShards(
-    std::span<Shard* const> shards) {
-    std::unordered_map<std::uint64_t, Site> merged;
+Aggregator::SiteMap Aggregator::mergeShards(std::span<Shard* const> shards) {
+    SiteMap merged;
     for (Shard* shard : shards) {
-        for (auto& [key, site] : shard->sites) {
-            auto it = merged.find(key);
-            if (it == merged.end()) {
-                merged.emplace(key, site);
+        for (auto& [hash, site] : shard->sites) {
+            if (Site* existing = findSite(merged, hash, site.frames, site.classId)) {
+                existing->alloc.count += site.alloc.count;
+                existing->alloc.bytes += site.alloc.bytes;
+                existing->survived.count += site.survived.count;
+                existing->survived.bytes += site.survived.bytes;
             } else {
-                it->second.alloc.count += site.alloc.count;
-                it->second.alloc.bytes += site.alloc.bytes;
-                it->second.survived.count += site.survived.count;
-                it->second.survived.bytes += site.survived.bytes;
+                merged.emplace(hash, site);
             }
         }
     }
     return merged;
 }
 
-void Aggregator::captureState(
-    std::unordered_map<std::uint64_t, Site>& sites,
-    std::vector<LiveEntry>* live) {
+void Aggregator::captureState(SiteMap& sites, std::vector<LiveEntry>* live) {
     std::lock_guard snapshotLock(snapshotMutex_);
     std::vector<Shard*> shards = registeredShards();
 
@@ -477,8 +487,8 @@ private:
     std::vector<std::uint32_t> scratch_;
 };
 
-void Aggregator::writeProfile(storage::ProvenanceWriter& pw, ProfileMethods& methods, const std::unordered_map<std::uint64_t, Site>& sites) {
-    for (const auto& [key, site] : sites) {
+void Aggregator::writeProfile(storage::ProvenanceWriter& pw, ProfileMethods& methods, const SiteMap& sites) {
+    for (const auto& [hash, site] : sites) {
         const std::uint32_t stackId = methods.stack(site.frames);
         const std::uint32_t typeId = pw.internType(resolveTypeName(site.classId));
         pw.addAllocation(stackId, typeId, site.alloc.bytes, site.alloc.count, site.survived.bytes, site.survived.count);
@@ -489,7 +499,7 @@ void Aggregator::writeProfile(storage::ProvenanceWriter& pw, ProfileMethods& met
 // shared stack table. sl joins the correlation to a heap dump by address.
 bool Aggregator::emitCorrelation(const std::string& path) noexcept {
     try {
-        std::unordered_map<std::uint64_t, Site> merged;
+        SiteMap merged;
         std::vector<LiveEntry> live;
         captureState(merged, &live);
 
@@ -529,7 +539,7 @@ bool Aggregator::emitCorrelation(const std::string& path) noexcept {
 // Exit-time (or live-flush) allocation aggregate: allocations only, no correlation.
 bool Aggregator::dump(const std::string& path) noexcept {
     try {
-        std::unordered_map<std::uint64_t, Site> merged;
+        SiteMap merged;
         captureState(merged, nullptr);
         storage::ProvenanceWriter pw;
         ProfileMethods methods(methods_, pw);
@@ -644,12 +654,19 @@ std::string Aggregator::resolveTypeNameUncached(ClassID classId) {
     ULONG rank = 0;
     if (info_->IsArrayClass(classId, &elementType, &elementClass, &rank) == S_OK) {
         std::string element;
-        if (const char* prim = primitiveElementName(elementType); prim[0] != '\0')
-            element = prim;
-        else if (elementClass != 0)
-            element = resolveTypeName(elementClass);
-        else
-            element = "System.Object";
+        if (elementType == ELEMENT_TYPE_FNPTR) {
+            element = "System.IntPtr"; // ClrMD's name for function-pointer elements
+        } else if (elementType == ELEMENT_TYPE_PTR) {
+            element = "<pointer>"; // the profiling API doesn't expose the pointee, which ClrMD shows (System.Int32*)
+        } else {
+            // The element's own type first: an enum array reports its underlying primitive as the element type.
+            if (elementClass != 0)
+                element = resolveTypeName(elementClass);
+            if (element.empty() || element == "<unknown>") {
+                const char* primitive = primitiveElementName(elementType);
+                element = primitive[0] != '\0' ? primitive : elementClass != 0 ? element : "System.Object";
+            }
+        }
 
         std::string brackets = "[";
         for (ULONG i = 1; i < rank; ++i)

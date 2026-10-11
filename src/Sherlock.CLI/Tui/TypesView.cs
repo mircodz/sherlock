@@ -31,8 +31,8 @@ internal static class TypesView
             SetRows(table, rows, row =>
             {
                 double percent = 100.0 * (long)row.TotalSize / total;
-                return [TypeNames.Short(row.TypeName), row.Count.ToString("N0", CultureInfo.InvariantCulture), ByteFormat.Column(row.TotalSize),
-                    percent.ToString("0.0", CultureInfo.InvariantCulture), Bar(percent, 12), TypeNames.Namespace(row.TypeName)];
+                return [Rendering.DisplayNames.Type(row.TypeName), row.Count.ToString("N0", CultureInfo.InvariantCulture), ByteFormat.Column(row.TotalSize),
+                    percent.ToString("0.0", CultureInfo.InvariantCulture), Bar(percent, 12), Rendering.DisplayNames.Namespace(row.TypeName)];
             }, row => navigate(new TypeTarget(row.TypeName)));
         }
         Populate("");
@@ -45,9 +45,9 @@ internal static class TypesView
     {
         if (listing.Instances.Count == 0)
         {
-            return Message($"No live instances of {TypeNames.Short(typeName)} in this snapshot.", $" {TypeNames.Short(typeName)} ");
+            return Message($"No live instances of {Rendering.DisplayNames.Type(typeName)} in this snapshot.", $" {Rendering.DisplayNames.Type(typeName)} ");
         }
-        string title = $" {TypeNames.Short(typeName)} \u2014 {listing.TotalMatched:N0} instances, {ByteFormat.Human(listing.TotalMatchedSize)} ";
+        string title = $" {Rendering.DisplayNames.Type(typeName)} \u2014 {listing.TotalMatched:N0} instances, {ByteFormat.Human(listing.TotalMatchedSize)} ";
         if (listing.Instances.Count < listing.TotalMatched)
         {
             title += $"\u00b7 showing the first {listing.Instances.Count:N0} ";

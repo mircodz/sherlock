@@ -35,7 +35,23 @@ TEST(ShadowFrameIds, KeepsFullWidthCookiesInCallOrder) {
     EXPECT_EQ(shadow::storedDepth(), 0);
 }
 
-TEST(ShadowFrameIds, DepthOverflowStillBalancesWithoutChangingStoredFrames) {
+TEST(ShadowFrameIds, DeepStacksKeepTheirLeaf) {
+    StackScope stack;
+    constexpr std::size_t kDepth = shadow::kInitialShadow * 3 + 7;
+    for (std::size_t i = 0; i < kDepth; ++i) {
+        Sherlock_ShadowPush(static_cast<std::int64_t>(i + 1));
+    }
+
+    ASSERT_EQ(shadow::storedDepth(), kDepth);
+    EXPECT_EQ(shadow::frames()[0], 1u);
+    EXPECT_EQ(shadow::frames()[kDepth - 1], kDepth); // the allocating method, not frame 1,024
+    for (std::size_t i = 0; i < kDepth; ++i) {
+        Sherlock_ShadowPop();
+    }
+    EXPECT_EQ(shadow::storedDepth(), 0);
+}
+
+TEST(ShadowFrameIds, DepthPastTheLimitStillBalancesWithoutChangingStoredFrames) {
     StackScope stack;
     for (std::size_t i = 0; i < shadow::kMaxShadow + 5; ++i) {
         Sherlock_ShadowPush(static_cast<std::int64_t>(i + 1));

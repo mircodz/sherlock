@@ -2,6 +2,7 @@
 
 #include <charconv>
 #include <cstdint>
+#include <utility>
 
 #include "sherlock/profiler/il_writer.hpp"
 
@@ -83,6 +84,9 @@ public:
         if ((convention & IMAGE_CEE_CS_CALLCONV_GENERIC) != 0 && !reader.number(count)) {
             return false;
         }
+        // Only the described method's own parameters have declarations; a function pointer's are plain "ref".
+        const bool declared = depth == 0 && context_.byrefKeyword;
+        byrefKeyword_ = declared ? context_.byrefKeyword(0) : std::string();
         if (!reader.number(count) || !type(reader, returnType, depth + 1)) {
             return false;
         }
@@ -90,6 +94,7 @@ public:
             if (reader.p < reader.end && *reader.p == ELEMENT_TYPE_SENTINEL) {
                 ++reader.p; // call-site vararg marker inside a function pointer
             }
+            byrefKeyword_ = declared ? context_.byrefKeyword(i + 1) : std::string();
             if ((i > 0 && !append(parameters, ", ")) || !type(reader, parameters, depth + 1)) {
                 return false;
             }
@@ -121,8 +126,10 @@ private:
                 return token(reader, out, depth);
             case ELEMENT_TYPE_PTR:
                 return type(reader, out, depth + 1) && append(out, "*");
-            case ELEMENT_TYPE_BYREF:
-                return append(out, "ref ") && type(reader, out, depth + 1);
+            case ELEMENT_TYPE_BYREF: {
+                std::string keyword = byrefKeyword_.empty() ? "ref" : std::exchange(byrefKeyword_, std::string());
+                return append(out, keyword) && append(out, " ") && type(reader, out, depth + 1);
+            }
             case ELEMENT_TYPE_SZARRAY:
                 return type(reader, out, depth + 1) && append(out, "[]");
             case ELEMENT_TYPE_ARRAY: {
@@ -201,6 +208,7 @@ private:
 
     const Context& context_;
     bool qualified_;
+    std::string byrefKeyword_; // for the parameter being formatted
     std::size_t budget_ = kMaxLength;
 };
 

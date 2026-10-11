@@ -377,3 +377,32 @@ TEST(AggregatorSnapshot, MethodsAreWrittenByIdentityNotByName) {
     EXPECT_EQ(bytesByModule, (std::map<std::string, std::uint64_t>{{"LibA.dll", 48}, {"LibB.dll", 24}}));
     std::filesystem::remove(path);
 }
+
+// Sites are keyed by their whole stack and type: stacks whose hashes collide stay separate sites.
+TEST(AggregatorSnapshot, CollidingStackHashesKeepTheirSitesApart) {
+    // Built to collide under the aggregator's FNV-1a: hashing [0x1111, kCollider] reaches the same state as
+    // [0x2222]. If the hash changes, recompute this so the test still covers a collision.
+    constexpr std::uint64_t kOffset = 1469598103934665603ull;
+    constexpr std::uint64_t kPrime = 1099511628211ull;
+    constexpr FrameId kCollider = ((kOffset ^ 0x1111) * kPrime) ^ kOffset ^ 0x2222;
+    const FrameId shortStack[] = {0x2222};
+    const FrameId longStack[] = {0x1111, kCollider};
+
+    Agg aggregator;
+    aggregator.record(shortStack, 100, 0x1000, kClass);
+    aggregator.record(longStack, 200, 0x2000, kClass);
+    aggregator.record(longStack, 300, 0x3000, kClass);
+
+    const std::filesystem::path path = tempSlab("collision");
+    ASSERT_TRUE(aggregator.dump(path.string()));
+    const std::string bytes = readAll(path);
+    storage::ContainerReader container(std::as_bytes(std::span(bytes)));
+    ASSERT_TRUE(container.valid());
+    storage::ProvenanceReader profile(container);
+    std::map<std::size_t, std::uint64_t> bytesByDepth;
+    for (const storage::AllocationRecord& record : profile.allocations()) {
+        bytesByDepth[profile.symbols().stackFrames(record.stackId).size()] += record.allocBytes;
+    }
+    EXPECT_EQ(bytesByDepth, (std::map<std::size_t, std::uint64_t>{{1, 100}, {2, 500}}));
+    std::filesystem::remove(path);
+}

@@ -112,7 +112,7 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
         table.AddColumn("[bold]Process[/]");
         foreach (DotnetProcess process in processes)
         {
-            table.AddRow(process.Pid.ToString(), Markup.Escape(process.Name));
+            table.AddRow(process.Pid.ToString(), Styled.Text(process.Name));
         }
 
         console.Write(table);
@@ -143,13 +143,13 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
                 return false;
             case 1:
                 pid = matches[0].Pid;
-                Output.Info(console, $"Matched [{Palette.Name}]{matches[0].Name}[/] · pid {pid}");
+                Output.Info(console, $"Matched [{Palette.Name}]{Printable.Escape(matches[0].Name)}[/] · pid {pid}");
                 return true;
             default:
                 Output.Error(console, $"'{settings.Name}' is ambiguous ({matches.Count} matches). Use [bold]--pid[/]:");
                 foreach (DotnetProcess process in matches)
                 {
-                    console.MarkupLineInterpolated($"  [{Palette.Muted}]{process.Pid}[/]  {process.Name}");
+                    console.MarkupLineInterpolated($"  [{Palette.Muted}]{process.Pid}[/]  {Printable.Escape(process.Name)}");
                 }
 
                 return false;

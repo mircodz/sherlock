@@ -28,6 +28,7 @@ add_executable(SherlockTests
     frame_ids.cpp
     signature.cpp
     symbols.cpp
+    utf8.cpp
     ${CMAKE_SOURCE_DIR}/src/common/logger.cpp
     ${CMAKE_SOURCE_DIR}/src/control/channel.cpp
     ${CMAKE_SOURCE_DIR}/src/profiler/aggregator.cpp

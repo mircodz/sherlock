@@ -176,7 +176,8 @@ HRESULT STDMETHODCALLTYPE Profiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
     DWORD eventMask = COR_PRF_MONITOR_OBJECT_ALLOCATED |
                       COR_PRF_ENABLE_OBJECT_ALLOCATED |
                       COR_PRF_MONITOR_GC | // GC callbacks for survivor tracking + gc: triggers
-                      COR_PRF_ENABLE_REJIT | COR_PRF_MONITOR_MODULE_LOADS;
+                      COR_PRF_ENABLE_REJIT | COR_PRF_MONITOR_MODULE_LOADS |
+                      COR_PRF_MONITOR_JIT_COMPILATION; // dynamic and collectible modules are instrumented at JIT time
     if (triggersEnabled)
         // throw: triggers need exception callbacks.
         eventMask |= COR_PRF_MONITOR_EXCEPTIONS;
@@ -587,8 +588,9 @@ HRESULT STDMETHODCALLTYPE Profiler::Shutdown() {
         totalAllocations.load(), totalBytes.load());
     if (shadowInstr) {
         logger->trace(
-            "shadow-stack instrumentation: {} methods instrumented, {} skipped",
-            shadowInstr->instrumentedCount(), shadowInstr->skippedCount());
+            "shadow-stack instrumentation: {} methods instrumented, {} skipped{}{}",
+            shadowInstr->instrumentedCount(), shadowInstr->skippedCount(),
+            shadowInstr->skippedCount() > 0 ? ": " : "", shadowInstr->skipSummary());
     }
     if (aggregator) {
         aggregator->countPendingAsSurvived(); // anything uncollected at exit is still live
@@ -708,7 +710,22 @@ HRESULT STDMETHODCALLTYPE Profiler::ClassLoadFinished(ClassID, HRESULT) { return
 HRESULT STDMETHODCALLTYPE Profiler::ClassUnloadStarted(ClassID) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ClassUnloadFinished(ClassID, HRESULT) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::FunctionUnloadStarted(FunctionID) { return S_OK; }
-HRESULT STDMETHODCALLTYPE Profiler::JITCompilationStarted(FunctionID, BOOL) { return S_OK; }
+HRESULT STDMETHODCALLTYPE Profiler::JITCompilationStarted(FunctionID functionId, BOOL) {
+    try {
+        ClassID classId = 0;
+        ModuleID moduleId = 0;
+        mdToken token = mdTokenNil;
+        if (shadowInstr && SUCCEEDED(corProfilerInfo->GetFunctionInfo(functionId, &classId, &moduleId, &token))) {
+            ProbePlan probe = probes ? probes->planFor(moduleId, token) : ProbePlan{};
+            shadowInstr->onJitCompilationStarted(moduleId, token, probe);
+        }
+    } catch (const std::exception& ex) {
+        logger->error("JIT-time rewrite failed: {}", ex.what());
+    } catch (...) {
+        logger->error("JIT-time rewrite failed");
+    }
+    return S_OK;
+}
 HRESULT STDMETHODCALLTYPE Profiler::JITCompilationFinished(FunctionID, HRESULT, BOOL) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::JITCachedFunctionSearchStarted(FunctionID, BOOL*) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::JITCachedFunctionSearchFinished(FunctionID, COR_PRF_JIT_CACHE) { return S_OK; }

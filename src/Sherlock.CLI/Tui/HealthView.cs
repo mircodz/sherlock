@@ -113,7 +113,7 @@ internal static class HealthView
         {
             Color color = palette[i % palette.Length];
             long bytes = (long)types[i].TotalSize;
-            string name = TypeNames.Short(types[i].TypeName);
+            string name = DisplayNames.Type(types[i].TypeName);
             bar.Segments.Add(new Segment(name, bytes, color));
             legend.Items.Add(new LegendItem(TextUtil.Preview(name, LegendNameWidth), color, $"{100.0 * bytes / total:0}%"));
             shown += bytes;

@@ -16,6 +16,7 @@ public sealed class DotGraph(string name)
 
     /// <param name="heat">0..1 share of the whole, colour (grey to red).</param>
     /// <param name="size">0..1 relative self weight, font size.</param>
+    /// <param name="lines">Printable text (see <see cref="Sherlock.Core.Printable"/>); the renderer only escapes DOT quoting.</param>
     public void AddNode(string id, double heat, double size, params string[] lines) => _nodes.Add(new(id, heat, size, lines));
 
     /// <param name="heat">0..1 share of the whole, edge colour and thickness.</param>

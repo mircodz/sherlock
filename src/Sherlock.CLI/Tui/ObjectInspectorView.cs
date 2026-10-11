@@ -166,7 +166,7 @@ internal sealed class ObjectInspectorView : Widget
         if (row.Value.TypeName.Length > 0)
         {
             text.Append(" : ").Fg(Theme.Current.Muted)
-                .Append(row.Value.TypeName).Fg(Color.Hex(Palette.Name));
+                .Append(Printable.Escape(row.Value.TypeName)).Fg(Color.Hex(Palette.Name));
         }
         if (row.Value.Offset is { } offset && row.Kind == RowKind.Value)
         {
@@ -192,11 +192,11 @@ internal sealed class ObjectInspectorView : Widget
         }
 
         ObjectValue value = row.Value;
-        StyledText text = StyledText.Of(value.Name).Fg(theme.Foreground);
+        StyledText text = StyledText.Of(Printable.Escape(value.Name)).Fg(theme.Foreground);
         if (value.TypeName.Length > 0)
         {
             text.Append(" : ").Fg(theme.Muted)
-                .Append(TypeNames.Short(value.TypeName)).Fg(Color.Hex(Palette.Name)).Underline().Link(new TypeTarget(value.TypeName));
+                .Append(DisplayNames.Type(value.TypeName)).Fg(Color.Hex(Palette.Name)).Underline().Link(new TypeTarget(value.TypeName));
         }
         if (ObjectAddress(value) is { } address)
         {
@@ -284,7 +284,7 @@ internal sealed class ObjectInspectorView : Widget
                 {
                     if (row.Kind == RowKind.Value)
                     {
-                        parts.Add(row.Value.Name);
+                        parts.Add(Printable.Escape(row.Value.Name)); // the path is only shown
                     }
                 }
                 parts.Reverse();

@@ -51,10 +51,12 @@ public:
         Site* site;
     };
 
-    // A stack/type hash collision merges counts.
+    // Sites by a hash of their stack and type; equal hashes are compared in full, so a collision never merges sites.
+    using SiteMap = std::unordered_multimap<std::uint64_t, Site>;
+
     struct Shard {
         std::mutex mutex;
-        std::unordered_map<std::uint64_t, Site> sites;
+        SiteMap sites;
         std::vector<Pending> pending;   // sampled objects not yet judged by a GC
     };
 
@@ -108,14 +110,11 @@ private:
     bool writeSlab(const std::string& path, storage::ProvenanceWriter& pw);
 
     std::vector<Shard*> registeredShards() const;
-    std::unordered_map<std::uint64_t, Site> mergeShards(
-        std::span<Shard* const> shards);
-    void captureState(
-        std::unordered_map<std::uint64_t, Site>& sites,
-        std::vector<LiveEntry>* live);
+    SiteMap mergeShards(std::span<Shard* const> shards);
+    void captureState(SiteMap& sites, std::vector<LiveEntry>* live);
 
     class ProfileMethods; // one write's method indices; see aggregator.cpp
-    void writeProfile(storage::ProvenanceWriter& pw, ProfileMethods& methods, const std::unordered_map<std::uint64_t, Site>& sites);
+    void writeProfile(storage::ProvenanceWriter& pw, ProfileMethods& methods, const SiteMap& sites);
 
     ICorProfilerInfo10* info_;
     Logger* logger_;

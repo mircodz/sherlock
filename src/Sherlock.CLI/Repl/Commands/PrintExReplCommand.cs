@@ -41,7 +41,7 @@ public sealed class PrintExReplCommand : IReplCommand
         InspectionPage page = snapshot.InspectChildren(value, 0, MaxChildren);
         foreach (ObjectValue child in page.Items)
         {
-            string name = Markup.Escape(child.Name);
+            string name = Styled.Text(child.Name);
             if (child.Kind != ObjectValueKind.Reference || child.Address is not { } address)
             {
                 parent.AddNode($"{name} [{Palette.Muted}]=[/] {Scalar(child)}");

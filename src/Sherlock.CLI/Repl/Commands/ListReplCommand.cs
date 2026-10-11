@@ -59,7 +59,7 @@ public sealed class ListReplCommand : IReplCommand
                 ProcessRecord proc = s.Processes[processIndex];
                 bool lastProcess = processIndex == s.Processes.Count - 1;
                 string processBranch = lastProcess ? "└─" : "├─";
-                string name = proc.Name is { } n ? Markup.Escape(n) : "?";
+                string name = proc.Name is { } n ? Styled.Text(n) : "?";
                 string role = proc.IsRoot ? "" : " · child";
                 string profiled = proc.HasAllocations ? $" · [{Palette.Name}]allocations[/]" : "";
                 context.Console.MarkupLine(

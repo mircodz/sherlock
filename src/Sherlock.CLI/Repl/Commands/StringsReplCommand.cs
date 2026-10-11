@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Linq;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using Spectre.Console;
@@ -19,13 +18,7 @@ public sealed class StringsReplCommand : IReplCommand
 
     public ReplResult Execute(ReplContext context, string[] args)
     {
-        // Leading count sets the limit; `--dup`/`-d` accepted and ignored for backward compat.
-        int limit = DefaultLimit;
-        string? countArg = args.FirstOrDefault(a => !a.StartsWith('-'));
-        if (countArg is not null && !int.TryParse(countArg, out limit))
-        {
-            limit = DefaultLimit;
-        }
+        int limit = Args.Count(args, 0, DefaultLimit, Usage);
 
         IReadOnlyList<DuplicateString> duplicates = context.Console.Status()
             .Start("Hashing strings…", _ => context.Snapshot.DuplicateStrings(limit, context.Cancellation));
@@ -48,7 +41,7 @@ public sealed class StringsReplCommand : IReplCommand
             table.AddRow(
                 Counts.Format(dupString.Count),
                 $"[bold {Palette.Hot}]{ByteSize.Format((long)dupString.WastedBytes)}[/]",
-                $"[{Palette.Name}]{Markup.Escape(TextUtil.Preview(dupString.Value, 80))}[/]");
+                $"[{Palette.Name}]{Markup.Escape(Printable.Escape(dupString.Value, 80, '"'))}[/]");
         }
 
         context.Console.Write(table);

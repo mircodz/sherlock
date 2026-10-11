@@ -72,7 +72,7 @@ public sealed class HeapDoctor(Snapshot snapshot)
         string kind = IsCollection(node.TypeName) ? "collection " : "";
         findings.Add(new Finding(
             pct >= 50 ? FindingSeverity.High : FindingSeverity.Warning, "retention",
-            $"{TypeNames.Short(node.TypeName)} {kind}retains {ByteFormat.Human(node.RetainedSize)} ({pct:0}% of the reachable heap)",
+            $"{Name(node.TypeName)} {kind}retains {ByteFormat.Human(node.RetainedSize)} ({pct:0}% of the reachable heap)",
             "The biggest retained graph. See what holds it and what it holds.")
         {
             Address = node.Address,
@@ -89,11 +89,11 @@ public sealed class HeapDoctor(Snapshot snapshot)
             return;
         }
 
-        string targets = string.Join(", ", worst.Targets.Take(3).Select(t => $"{TypeNames.Short(t.TypeName)} x{t.Count}"));
+        string targets = string.Join(", ", worst.Targets.Take(3).Select(t => $"{Name(t.TypeName)} x{t.Count}"));
         findings.Add(new Finding(
             worst.SubscriberCount >= 256 ? FindingSeverity.High : FindingSeverity.Warning, "event-handlers",
             $"An event has {worst.SubscriberCount:N0} subscribers - likely an event-handler leak",
-            $"The {TypeNames.Short(worst.DelegateType)} delegate pins every subscriber until it unsubscribes (-=)."
+            $"The {Name(worst.DelegateType)} delegate pins every subscriber until it unsubscribes (-=)."
             + (targets.Length > 0 ? $" Subscribers: {targets}." : ""))
         {
             Address = worst.DelegateAddress,
@@ -111,7 +111,7 @@ public sealed class HeapDoctor(Snapshot snapshot)
             return;
         }
 
-        string top = string.Join(", ", report.ByType.Take(3).Select(s => $"{TypeNames.Short(s.TypeName)} x{s.Count:N0}"));
+        string top = string.Join(", ", report.ByType.Take(3).Select(s => $"{Name(s.TypeName)} x{s.Count:N0}"));
         findings.Add(new Finding(FindingSeverity.Warning, "finalizers",
             $"{report.TotalObjects:N0} finalizable objects awaiting finalization ({ByteFormat.Human(report.TotalBytes)})",
             $"A live finalizer that wasn't suppressed usually means a missing Dispose(). Most common: {top}.")
@@ -176,7 +176,7 @@ public sealed class HeapDoctor(Snapshot snapshot)
         }
 
         findings.Add(new Finding(FindingSeverity.Info, "growth",
-            $"{suspect.Count:N0} instances of {TypeNames.Short(suspect.TypeName)} ({ByteFormat.Human(suspect.TotalSize)})",
+            $"{suspect.Count:N0} instances of {Name(suspect.TypeName)} ({ByteFormat.Human(suspect.TotalSize)})",
             "A large population - check for unbounded growth (a cache or list that never shrinks).")
         {
             Type = suspect.TypeName,
@@ -194,11 +194,10 @@ public sealed class HeapDoctor(Snapshot snapshot)
     private static bool IsFramework(string type) =>
         type.StartsWith("System.", StringComparison.Ordinal) || type.StartsWith("Microsoft.", StringComparison.Ordinal);
 
-    private static string Preview(string value)
-    {
-        value = value.Replace('\n', ' ').Replace('\r', ' ');
-        return value.Length <= 48 ? value : value[..48] + "...";
-    }
+    // Findings are prose for display, so names from the dump are made printable here.
+    private static string Name(string typeName) => Printable.Escape(TypeNames.Short(typeName));
+
+    private static string Preview(string value) => Printable.Escape(value, 48, '"');
 
     private static string WithoutNamespace(string typeName)
     {

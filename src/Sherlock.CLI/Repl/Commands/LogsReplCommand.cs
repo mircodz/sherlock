@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using Sherlock.CLI.Rendering;
+using Sherlock.Core;
 using Sherlock.Core.Collection;
 using Spectre.Console;
 
@@ -60,7 +61,7 @@ public sealed class LogsReplCommand : IReplCommand
             return ReplResult.Success;
         }
 
-        context.Console.MarkupLineInterpolated($"[{Palette.Muted}]── {target.Name} (pid {target.Pid}), last {lines.Count} lines ──[/]");
+        context.Console.MarkupLineInterpolated($"[{Palette.Muted}]── {Printable.Escape(target.Name)} (pid {target.Pid}), last {lines.Count} lines ──[/]");
         foreach (string line in lines)
         {
             context.Console.WriteLine(line);

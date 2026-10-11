@@ -111,6 +111,8 @@ public sealed class ProvenanceReader
         Allocations = slab.GetColumn<AllocationRecord>(SectionType.Allocations);
         _corr = slab.GetColumn<CorrelationRecord>(SectionType.Correlation);
 
+        // Every sum Sherlock computes is part of these totals, so bounding them keeps all arithmetic exact.
+        ulong bytes = 0, count = 0, survivedBytes = 0, survivedCount = 0;
         for (long i = 0; i < Allocations.Length; i++)
         {
             AllocationRecord allocation = Allocations[i];
@@ -122,6 +124,10 @@ public sealed class ProvenanceReader
             {
                 throw new InvalidDataException("allocation references an unknown type");
             }
+            bytes = Total(bytes, allocation.AllocBytes);
+            count = Total(count, allocation.AllocCount);
+            survivedBytes = Total(survivedBytes, allocation.SurvivedBytes);
+            survivedCount = Total(survivedCount, allocation.SurvivedCount);
         }
 
         ulong previousAddress = 0;
@@ -139,6 +145,9 @@ public sealed class ProvenanceReader
             previousAddress = correlation.Address;
         }
     }
+
+    private static ulong Total(ulong total, ulong value) =>
+        value > (ulong)long.MaxValue - total ? throw new InvalidDataException("allocation totals are too large to count") : total + value;
 
     public static void ValidateFile(string path)
     {

@@ -67,7 +67,7 @@ internal static class AllocationsView
         }
         AllocationTreeNode root = AllocationTreeNode.Build(profile.OfType(typeName));
         return Hinted(new Panel(CallTree(root.Children, root.AllocBytes, navigate),
-            $" Where {TypeNames.Short(typeName)} came from \u2014 {ByteFormat.Human(root.AllocBytes)} ") { BorderStyle = BorderStyle.Rounded },
+            $" Where {Rendering.DisplayNames.Type(typeName)} came from \u2014 {ByteFormat.Human(root.AllocBytes)} ") { BorderStyle = BorderStyle.Rounded },
             "\u2192\u2190 expand  \u00b7  Enter open method");
     }
 
@@ -115,9 +115,9 @@ internal static class AllocationsView
             ("Survived GC", Constraint.Length(11), true), ("Count", Constraint.Length(10), true),
             ("Sites", Constraint.Length(6), true), ("Share", Constraint.Length(12), false), ("Namespace", Constraint.Fill(2), false));
         SetRows(table, profile.ByType(), row =>
-            [TypeNames.Short(row.TypeName), ByteFormat.Column(row.AllocBytes), ByteFormat.Column(row.SurvivedBytes),
+            [Rendering.DisplayNames.Type(row.TypeName), ByteFormat.Column(row.AllocBytes), ByteFormat.Column(row.SurvivedBytes),
                 row.AllocCount.ToString("N0", CultureInfo.InvariantCulture), row.SiteCount.ToString(CultureInfo.InvariantCulture),
-                Bar(100.0 * row.AllocBytes / total, 10), TypeNames.Namespace(row.TypeName)],
+                Bar(100.0 * row.AllocBytes / total, 10), Rendering.DisplayNames.Namespace(row.TypeName)],
             row => navigate(target(row.TypeName)));
         return table;
     }

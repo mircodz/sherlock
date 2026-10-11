@@ -165,7 +165,7 @@ public sealed class HeapAnalyzer(Snapshot snapshot)
     {
         if (type?.IsString == true)
         {
-            return obj.AsString(PreviewLength) is { } text ? ObjectInspector.EscapePreview(text) : null;
+            return obj.AsString(PreviewLength + 1) is { } text ? Printable.Escape(text, PreviewLength, '"') : null;
         }
         return type?.IsArray == true ? $"length {obj.AsArray().Length.ToString("N0", CultureInfo.InvariantCulture)}" : null;
     }

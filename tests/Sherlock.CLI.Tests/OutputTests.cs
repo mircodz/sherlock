@@ -66,6 +66,22 @@ public sealed class OutputTests
     }
 
     [Fact]
+    public void AllocationGraphsAccountForEveryByteAndCountRecursionOnce()
+    {
+        var profile = new AllocationProfile(
+        [
+            new(Sherlock.Tests.Frames.Stack("App.Main", "App.Walk", "App.Walk", "App.Walk"), "T", 600, 3, 0, 0),
+            new([], "T", 400, 2, 0, 0),
+        ]);
+
+        string dot = AllocationDot.Write(profile, nodeFraction: 0);
+
+        Assert.Contains("label=\"<no managed frame>\\n400 B (40.0%)\"", dot);
+        Assert.Contains("label=\"App.Walk()\\n600 B (60.0%)\"", dot);
+        Assert.Contains("n1 -> n1 [label=\"600 B\"", dot); // recursion counts once per stack, not 1,200 B
+    }
+
+    [Fact]
     public void FoldedStacksKeepTheFrameSeparatorOutOfLabelsAndKeepWeightsAndFrameOrder()
     {
         var profile = new AllocationProfile(

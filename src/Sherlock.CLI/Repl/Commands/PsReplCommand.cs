@@ -32,7 +32,7 @@ public sealed class PsReplCommand : IReplCommand
         {
             string role = process.IsRoot ? "[bold]root [/]" : "child";
             string net = process.IsDotnet ? $"[{Palette.Name}].NET   [/]" : $"[{Palette.Muted}]native[/]";
-            context.Console.MarkupLine($"  [{Palette.Muted}]{process.Pid,7}[/]  {role}  {net}  {Markup.Escape(process.Name)}");
+            context.Console.MarkupLine($"  [{Palette.Muted}]{process.Pid,7}[/]  {role}  {net}  {Styled.Text(process.Name)}");
         }
 
         context.Console.MarkupLine($"[{Palette.Muted}]snapshot <pid> to dump one into the library[/]");
