@@ -11,7 +11,7 @@ namespace Sherlock.Core.Profiling;
 public struct AllocationRecord
 {
     public uint StackId;
-    public uint TypeId;   // v2+: frameId of the allocated type name in the shared Frames table; 0 in v1 slabs
+    public uint TypeId;   // index into the Types section
     public ulong AllocBytes;
     public ulong AllocCount;
     public ulong SurvivedBytes;
@@ -30,30 +30,30 @@ public struct CorrelationRecord
 /// <summary>Version constant for the profile/correlation record sections (mirrors native <c>kProfileVersion</c>).</summary>
 public static class ProfileFormat
 {
-    public const ushort Version = 2;
+    public const ushort Version = 3;
 }
 
 /// <summary>
-/// Builds allocation and correlation sections sharing one interned stack table, matching the native writer.
+/// Builds allocation and correlation sections sharing one symbol table, as the native profiler writes them;
+/// Sherlock writes profiles only in tests.
 /// </summary>
 public sealed class ProvenanceWriter
 {
-    private readonly StackTableBuilder _stacks = new();
+    private readonly SymbolWriter _symbols = new();
     private readonly List<AllocationRecord> _allocs = [];
     private readonly List<CorrelationRecord> _corr = [];
 
-    public uint InternFrame(string name) => _stacks.InternFrame(name);
-    public uint InternType(string name) => _stacks.InternFrame(name);
+    public uint InternType(string name) => _symbols.InternType(name);
 
-    /// <summary>Interns a stack (its frames, then the sequence) and returns its shared id.</summary>
-    public uint InternStack(ReadOnlySpan<string> frames)
+    /// <summary>Interns a stack's methods, root to leaf, then the stack.</summary>
+    public uint InternStack(IEnumerable<MethodFrame> methods)
     {
-        Span<uint> ids = frames.Length <= 64 ? stackalloc uint[frames.Length] : new uint[frames.Length];
-        for (int i = 0; i < frames.Length; i++)
+        var ids = new List<uint>();
+        foreach (MethodFrame method in methods)
         {
-            ids[i] = _stacks.InternFrame(frames[i]);
+            ids.Add(_symbols.InternMethod(method));
         }
-        return _stacks.InternStack(ids);
+        return _symbols.InternStack(CollectionsMarshal.AsSpan(ids));
     }
 
     public void AddAllocation(uint stackId, uint typeId, ulong allocBytes, ulong allocCount, ulong survivedBytes, ulong survivedCount)
@@ -73,7 +73,7 @@ public sealed class ProvenanceWriter
 
     public void WriteTo(ContainerWriter w)
     {
-        _stacks.WriteTo(w);
+        _symbols.WriteTo(w);
         if (_allocs.Count > 0)
         {
             w.AddRecords(SectionType.Allocations, ProfileFormat.Version, CollectionsMarshal.AsSpan(_allocs));
@@ -87,40 +87,38 @@ public sealed class ProvenanceWriter
     }
 }
 
-/// <summary>Allocation and long-indexed correlation columns with shared stack metadata.
+/// <summary>Allocation and long-indexed correlation columns with their shared symbols.
 /// The supplied slab must remain open while reading its columns.</summary>
 public sealed class ProvenanceReader
 {
     private readonly Column<CorrelationRecord> _corr;
 
-    public StackTable Stacks { get; }
+    public SymbolTable Symbols { get; }
 
     /// <summary>The allocation sites (one per distinct call-stack + type), long-indexed.</summary>
     public Column<AllocationRecord> Allocations { get; }
 
-    /// <summary>Version of the Allocations section; >= 2 means each record carries a real <c>TypeId</c>.</summary>
-    public ushort AllocationsVersion { get; }
-
     public ProvenanceReader(SlabFile slab)
     {
-        Stacks = StackTable.Read(slab);
-        Allocations = slab.GetColumn<AllocationRecord>(SectionType.Allocations);
-        AllocationsVersion = slab.SectionVersion(SectionType.Allocations);
-        _corr = slab.GetColumn<CorrelationRecord>(SectionType.Correlation);
-        if (AllocationsVersion > 2 ||
-            slab.Has(SectionType.Correlation) && slab.SectionVersion(SectionType.Correlation) > 2)
+        Symbols = SymbolTable.Read(slab);
+        foreach (SectionType section in new[] { SectionType.Allocations, SectionType.Correlation })
         {
-            throw new InvalidDataException("unsupported provenance section version");
+            if (slab.Has(section) && slab.SectionVersion(section) != ProfileFormat.Version)
+            {
+                throw new InvalidDataException($"The profile's {section} section has unsupported version {slab.SectionVersion(section)}.");
+            }
         }
+        Allocations = slab.GetColumn<AllocationRecord>(SectionType.Allocations);
+        _corr = slab.GetColumn<CorrelationRecord>(SectionType.Correlation);
 
         for (long i = 0; i < Allocations.Length; i++)
         {
             AllocationRecord allocation = Allocations[i];
-            if (allocation.StackId >= Stacks.StackCount)
+            if (allocation.StackId >= Symbols.StackCount)
             {
                 throw new InvalidDataException("allocation references an unknown stack");
             }
-            if (AllocationsVersion >= 2 && allocation.TypeId >= Stacks.FrameCount)
+            if (allocation.TypeId >= Symbols.Types.Count)
             {
                 throw new InvalidDataException("allocation references an unknown type");
             }
@@ -130,7 +128,7 @@ public sealed class ProvenanceReader
         for (long i = 0; i < _corr.Length; i++)
         {
             CorrelationRecord correlation = _corr[i];
-            if (correlation.StackId >= Stacks.StackCount)
+            if (correlation.StackId >= Symbols.StackCount)
             {
                 throw new InvalidDataException("correlation references an unknown stack");
             }
@@ -178,12 +176,11 @@ public sealed class ProvenanceReader
         return false;
     }
 
-    /// <summary>Resolves an object address directly to its allocation stack string, or null if untracked.</summary>
     /// <summary>Explains an empty <see cref="FramesFor"/> stack.</summary>
     public const string NoManagedFrames =
         "Allocated by the runtime with no managed code on the stack (startup, statics, or a runtime helper).";
 
     /// <summary>The allocation stack of a live object, root->leaf; empty when it was allocated without managed frames,
     /// null when the object is untracked.</summary>
-    public string[]? FramesFor(ulong address) => TryGetStack(address, out uint stackId) ? Stacks.FrameNames(stackId) : null;
+    public IReadOnlyList<MethodFrame>? FramesFor(ulong address) => TryGetStack(address, out uint stackId) ? Symbols.Stack(stackId) : null;
 }

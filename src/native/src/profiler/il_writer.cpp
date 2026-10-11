@@ -96,6 +96,85 @@ bool uncompress(const BYTE*& p, const BYTE* end, std::uint32_t& out) {
     return false;
 }
 
+namespace {
+
+constexpr int kMaxTypeNesting = 64;
+
+bool skipType(const BYTE*& p, const BYTE* end, int depth);
+
+bool skipTypes(const BYTE*& p, const BYTE* end, std::uint32_t count, int depth) {
+    for (std::uint32_t i = 0; i < count; ++i) {
+        if (!skipType(p, end, depth)) return false;
+    }
+    return true;
+}
+
+// MethodDefSig/MethodRefSig of a function pointer: callconv [genericCount] paramCount RetType Param*.
+bool skipMethodSignature(const BYTE*& p, const BYTE* end, int depth) {
+    if (p >= end) return false;
+    const BYTE callingConvention = *p++;
+    std::uint32_t count = 0;
+    if ((callingConvention & IMAGE_CEE_CS_CALLCONV_GENERIC) && !uncompress(p, end, count)) return false;
+    if (!uncompress(p, end, count)) return false;
+    if (!skipType(p, end, depth)) return false;
+    for (std::uint32_t i = 0; i < count; ++i) {
+        if (p < end && *p == ELEMENT_TYPE_SENTINEL) ++p; // vararg parameters follow
+        if (!skipType(p, end, depth)) return false;
+    }
+    return true;
+}
+
+bool skipType(const BYTE*& p, const BYTE* end, int depth) {
+    if (depth > kMaxTypeNesting) return false;
+    std::uint32_t value = 0;
+    while (p < end && (*p == ELEMENT_TYPE_CMOD_OPT || *p == ELEMENT_TYPE_CMOD_REQD)) {
+        ++p;
+        if (!uncompress(p, end, value)) return false;
+    }
+    if (p >= end) return false;
+    switch (*p++) {
+        case ELEMENT_TYPE_VOID: case ELEMENT_TYPE_BOOLEAN: case ELEMENT_TYPE_CHAR:
+        case ELEMENT_TYPE_I1: case ELEMENT_TYPE_U1: case ELEMENT_TYPE_I2: case ELEMENT_TYPE_U2:
+        case ELEMENT_TYPE_I4: case ELEMENT_TYPE_U4: case ELEMENT_TYPE_I8: case ELEMENT_TYPE_U8:
+        case ELEMENT_TYPE_R4: case ELEMENT_TYPE_R8: case ELEMENT_TYPE_I: case ELEMENT_TYPE_U:
+        case ELEMENT_TYPE_STRING: case ELEMENT_TYPE_OBJECT: case ELEMENT_TYPE_TYPEDBYREF:
+            return true;
+        case ELEMENT_TYPE_CLASS: case ELEMENT_TYPE_VALUETYPE:
+        case ELEMENT_TYPE_VAR: case ELEMENT_TYPE_MVAR:
+            return uncompress(p, end, value);
+        case ELEMENT_TYPE_PTR: case ELEMENT_TYPE_BYREF: case ELEMENT_TYPE_SZARRAY: case ELEMENT_TYPE_PINNED:
+            return skipType(p, end, depth + 1);
+        case ELEMENT_TYPE_ARRAY: {
+            // Type rank numSizes size* numLoBounds loBound*
+            std::uint32_t rank = 0, sizes = 0, bounds = 0;
+            if (!skipType(p, end, depth + 1) || !uncompress(p, end, rank) || !uncompress(p, end, sizes)) return false;
+            for (std::uint32_t i = 0; i < sizes; ++i) {
+                if (!uncompress(p, end, value)) return false;
+            }
+            if (!uncompress(p, end, bounds)) return false;
+            for (std::uint32_t i = 0; i < bounds; ++i) {
+                if (!uncompress(p, end, value)) return false; // signed, but encoded with the same widths
+            }
+            return true;
+        }
+        case ELEMENT_TYPE_GENERICINST: {
+            // (CLASS | VALUETYPE) TypeDefOrRefOrSpecEncoded argCount Type*
+            std::uint32_t arguments = 0;
+            if (p >= end || (*p != ELEMENT_TYPE_CLASS && *p != ELEMENT_TYPE_VALUETYPE)) return false;
+            ++p;
+            return uncompress(p, end, value) && uncompress(p, end, arguments) && skipTypes(p, end, arguments, depth + 1);
+        }
+        case ELEMENT_TYPE_FNPTR:
+            return skipMethodSignature(p, end, depth + 1);
+        default:
+            return false;
+    }
+}
+
+} // namespace
+
+bool skipType(const BYTE*& p, const BYTE* end) { return skipType(p, end, 0); }
+
 bool parseMethodHeader(const BYTE* p, MethodHeader& h) {
     BYTE fmt = p[0] & CorILMethod_FormatMask;
     if ((p[0] & 0x03) == CorILMethod_TinyFormat) {

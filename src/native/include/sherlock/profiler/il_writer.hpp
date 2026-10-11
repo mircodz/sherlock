@@ -139,6 +139,10 @@ bool uncompress(const BYTE*& p, const BYTE* end, std::uint32_t& out);
 
 BYTE shortToLong(BYTE op); // short branch opcode -> its long (4-byte-operand) equivalent
 
+// Advances p past one Type of a signature blob (ECMA-335 II.23.2.12), custom modifiers included.
+// Returns false on malformed, truncated, or implausibly nested encodings.
+bool skipType(const BYTE*& p, const BYTE* end);
+
 // Parse a method body header (tiny or fat). Returns false on an unknown format we won't touch.
 bool parseMethodHeader(const BYTE* p, MethodHeader& h);
 

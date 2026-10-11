@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using Cellar.Layout;
 using Cellar.Primitives;
 using Cellar.Text;
@@ -23,9 +24,19 @@ internal static class ObjectView
                 target => navigate(new ObjTarget(target)), type => navigate(new TypeTarget(type))))
             .AddBackgroundView("GC roots", cancellation => Roots(snapshot.Roots(address, cancellation), navigate));
 
-        if (snapshot.HasCorrelation && snapshot.WhoAllocated(address) is { } frames)
+        if (snapshot.HasCorrelation)
         {
-            tabs.AddView("whoalloc", () => AllocationStack(frames, navigate));
+            try
+            {
+                if (snapshot.WhoAllocated(address) is { } frames)
+                {
+                    tabs.AddView("whoalloc", () => AllocationStack(frames, navigate));
+                }
+            }
+            catch (InvalidDataException ex)
+            {
+                tabs.AddView("whoalloc", () => Message(ex.Message, " Allocation stack "));
+            }
         }
         tabs.ActiveIndex = tab switch
         {
@@ -72,16 +83,16 @@ internal static class ObjectView
         return Hinted(new Panel(keys, " Why it's alive ") { BorderStyle = BorderStyle.Rounded }, "Enter inspect");
     }
 
-    private static Widget AllocationStack(IReadOnlyList<string> stack, Action<NavigationTarget> navigate)
+    private static Widget AllocationStack(IReadOnlyList<MethodFrame> stack, Action<NavigationTarget> navigate)
     {
         if (stack.Count == 0)
         {
             return Message(ProvenanceReader.NoManagedFrames, " Allocation stack ");
         }
-        string[] frames = [.. stack];
+        MethodFrame[] frames = [.. stack];
         Array.Reverse(frames);
         Table table = Table(("Method", Constraint.Fill(3), false), ("Namespace", Constraint.Fill(2), false));
-        SetRows(table, frames, frame => [FrameNames.ShortMethod(frame), TypeNames.Namespace(FrameNames.Split(frame).Type)],
+        SetRows(table, frames, frame => [frame.Label, Printable.Escape(frame.Namespace)],
             frame => navigate(new MethodTarget(frame)));
         table.Sortable = false;
         return Hinted(new Panel(table, " Allocation stack ") { BorderStyle = BorderStyle.Rounded }, "Enter open method");

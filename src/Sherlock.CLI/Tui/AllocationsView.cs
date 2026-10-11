@@ -26,10 +26,6 @@ internal static class AllocationsView
         {
             return MissingProfile(title);
         }
-        if (!profile.HasTypes)
-        {
-            return Message("This profile doesn't record allocated types. Capture again to see them.", title);
-        }
         return Hinted(new Panel(TypeTable(profile, name => new TypeTarget(name, TypeTab.Allocations), navigate), title) { BorderStyle = BorderStyle.Rounded },
             "Enter call tree  \u00b7  s sort");
     }
@@ -75,38 +71,32 @@ internal static class AllocationsView
             "\u2192\u2190 expand  \u00b7  Enter open method");
     }
 
-    public static Widget ForMethod(AllocationProfile? profile, string method, Action<NavigationTarget> navigate)
+    public static Widget ForMethod(AllocationProfile? profile, MethodFrame method, Action<NavigationTarget> navigate)
     {
         if (profile is null)
         {
             return MissingProfile(" Method ");
         }
-        AllocationProfile through = profile.Through(method);
+        AllocationProfile through = profile.Through([method]);
         if (through.Sites.Count == 0)
         {
-            return Message($"Nothing allocates through {FrameNames.ShortMethod(method)}.", " Method ");
+            return Message($"Nothing allocates through {method.Label}.", " Method ");
         }
 
-        StyledText summary = StyledText.Of(FrameNames.ShortMethod(method)).Bold().Fg(Theme.Current.Accent)
+        StyledText summary = StyledText.Of(method.Label).Bold().Fg(Theme.Current.Accent)
             .Append($"   {ByteFormat.Human(through.TotalAllocBytes)} allocated").Fg(Theme.Current.Success)
             .Append($"   {ByteFormat.Human(through.TotalSurvivedBytes)} survived").Fg(Theme.Current.Foreground)
             .Append($"   {Count(through.Sites.Sum(s => s.AllocCount), "object")}").Fg(Theme.Current.Muted)
-            .Append($"   \u00b7   {Count(through.Sites.Count, "call path")}").Fg(Theme.Current.Muted);
-        if (through.HasTypes)
-        {
-            summary.Append($"   \u00b7   {Count(through.ByType().Count, "type")}").Fg(Theme.Current.Muted);
-        }
+            .Append($"   \u00b7   {Count(through.Sites.Count, "call path")}").Fg(Theme.Current.Muted)
+            .Append($"   \u00b7   {Count(through.ByType().Count, "type")}").Fg(Theme.Current.Muted);
 
         var tabs = new Tabs();
-        if (through.HasTypes)
-        {
-            tabs.AddView("Allocated types", () => Hinted(new Panel(TypeTable(through, name => new TypeTarget(name), navigate),
-                " What this method allocates, by type ") { BorderStyle = BorderStyle.Rounded },
-                "Enter instances  \u00b7  s sort"));
-        }
+        tabs.AddView("Allocated types", () => Hinted(new Panel(TypeTable(through, name => new TypeTarget(name), navigate),
+            " What this method allocates, by type ") { BorderStyle = BorderStyle.Rounded },
+            "Enter instances  \u00b7  s sort"));
         tabs.AddView("Callers", () =>
         {
-            AllocationTreeNode callers = AllocationTreeNode.BuildCallers(profile, method);
+            AllocationTreeNode callers = AllocationTreeNode.BuildCallers(profile, [method]);
             return callers.Children.Count > 0
                 ? Hinted(new Panel(CallTree(callers.Children, callers.AllocBytes, navigate),
                     " Who calls it \u2014 bytes allocated through each caller ") { BorderStyle = BorderStyle.Rounded },
@@ -138,8 +128,7 @@ internal static class AllocationsView
             ("Count", Constraint.Length(9), true), ("Method", Constraint.Fill(3), false), ("Namespace", Constraint.Fill(2), false));
         SetRows(table, methods, row =>
             [ByteFormat.Column(row.SelfBytes), ByteFormat.Column(row.InclusiveBytes),
-                row.AllocCount.ToString("N0", CultureInfo.InvariantCulture), FrameNames.ShortMethod(row.Method),
-                TypeNames.Namespace(FrameNames.Split(row.Method).Type)],
+                row.AllocCount.ToString("N0", CultureInfo.InvariantCulture), row.Method.Label, Printable.Escape(row.Method.Namespace)],
             row => navigate(new MethodTarget(row.Method)));
         return table;
     }
@@ -149,7 +138,7 @@ internal static class AllocationsView
         long denominator = Math.Max(1, total);
         var tree = new TreeView<AllocationTreeNode>
         {
-            RenderLabel = node => StyledText.Of(FrameNames.ShortMethod(node.Value.Frame)).Fg(Theme.Current.Accent).Underline().Link(new MethodTarget(node.Value.Frame)),
+            RenderLabel = node => StyledText.Of(node.Value.Frame!.Label).Fg(Theme.Current.Accent).Underline().Link(new MethodTarget(node.Value.Frame)),
             ShowHeader = true,
             ShowGuides = true,
             Striped = true,
@@ -172,12 +161,12 @@ internal static class AllocationsView
             tree.AddRoot(node, parent => parent.Children).ExpandAll();
         }
         tree.MarkDirty();
-        return OpenOnEnter(tree, node => navigate(new MethodTarget(node.Value.Frame)));
+        return OpenOnEnter(tree, node => navigate(new MethodTarget(node.Value.Frame!)));
     }
 
     private static FlameNode<AllocationTreeNode> ToFlame(AllocationTreeNode node, string? label = null)
     {
-        var frame = new FlameNode<AllocationTreeNode>(node, label ?? FrameNames.ShortMethod(node.Frame), Math.Max(1, node.AllocBytes));
+        var frame = new FlameNode<AllocationTreeNode>(node, label ?? node.Frame!.Label, Math.Max(1, node.AllocBytes));
         foreach (AllocationTreeNode child in node.Children)
         {
             frame.Add(ToFlame(child));

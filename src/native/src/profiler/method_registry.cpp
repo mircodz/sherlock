@@ -1,9 +1,11 @@
 #include "sherlock/profiler/method_registry.hpp"
 
 #include <charconv>
+#include <cstring>
 #include <cstdint>
 #include <format>
 #include <map>
+#include <optional>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -20,9 +22,6 @@ namespace {
 constexpr ULONG kMaxNameUnits = 1024 * 1024;
 constexpr ULONG kMaxGenericParameters = 65536;
 constexpr unsigned kMaxNesting = 128;
-// Comparing labels is quadratic in the overload count; larger groups fall back to a token suffix.
-constexpr std::size_t kMaxOverloads = 64;
-
 struct EnumGuard {
     IMetaDataImport2* metadata;
     HCORENUM handle = nullptr;
@@ -33,28 +32,27 @@ struct EnumGuard {
     }
 };
 
-std::string safeLabel(std::string_view text) {
+struct MetadataFailure {
+    HRESULT status;
+    std::string stage;
+};
+
+// Log lines escape what they quote; stored names stay as metadata spells them.
+std::string printable(std::string_view text) {
     constexpr char hex[] = "0123456789abcdef";
     std::string result;
     result.reserve(text.size());
     for (unsigned char byte : text) {
-        if (byte < 0x20 || byte == 0x7f || byte == ';') {
+        if (byte < 0x20 || byte == 0x7f) {
             result += "\\x";
             result += hex[byte >> 4];
             result += hex[byte & 0xf];
-        } else if (byte == '\\') {
-            result += "\\\\";
         } else {
             result += static_cast<char>(byte);
         }
     }
     return result;
 }
-
-struct MetadataFailure {
-    HRESULT status;
-    std::string stage;
-};
 
 void check(HRESULT status, std::string_view stage) {
     if (FAILED(status)) {
@@ -180,8 +178,9 @@ std::string genericSuffix(std::span<const std::string> names) {
     return result + ">";
 }
 
-// typeParameters receives the innermost type's full generic parameter list, which VAR indices address.
-std::string declaringType(IMetaDataImport2* metadata, mdTypeDef type, std::vector<std::string>& typeParameters) {
+// "Dictionary<TKey, TValue>+Entry" in namespace "System.Collections.Generic". typeParameters receives the
+// innermost type's full generic parameter list, which VAR indices address.
+std::string declaringType(IMetaDataImport2* metadata, mdTypeDef type, std::string& ns, std::vector<std::string>& typeParameters) {
     std::string result;
     for (unsigned depth = 0; depth < kMaxNesting; ++depth) {
         if (TypeFromToken(type) != mdtTypeDef || IsNilToken(type)) {
@@ -205,6 +204,12 @@ std::string declaringType(IMetaDataImport2* metadata, mdTypeDef type, std::vecto
                 ownArity = arity;
                 part.resize(marker);
             }
+        }
+        // Metadata spells an outermost type with its namespace and a nested one without.
+        if (!IsTdNested(flags)) {
+            std::size_t dot = part.rfind('.');
+            ns = dot == std::string::npos ? std::string() : part.substr(0, dot);
+            part = dot == std::string::npos ? part : part.substr(dot + 1);
         }
         // Nested metadata repeats the enclosing type's parameters; the name's arity
         // counts only the trailing parameters introduced by this declaration.
@@ -259,89 +264,14 @@ std::string typeName(IMetaDataImport2* metadata, mdToken type, bool qualified) {
     throw MetadataFailure{E_INVALIDARG, "typeName/nesting-limit"};
 }
 
-struct Overload {
-    std::span<const BYTE> signature;
-    std::vector<std::string> methodParameters;
-};
-
-// Formats parameter lists, as detailed as needed to keep every same-named method on the type distinct.
-std::string parameterList(IMetaDataImport2* metadata, mdTypeDef type, mdMethodDef token, std::string_view name,
-                          std::span<const std::string> typeParameters) {
-    std::vector<mdMethodDef> tokens;
-    {
-        std::u16string wide;
-        for (unsigned char byte : name) {
-            if (byte >= 0x80) {
-                wide.clear(); // non-ASCII names: list every method on the type and compare names below
-                break;
-            }
-            wide.push_back(static_cast<char16_t>(byte));
-        }
-        EnumGuard enumeration{metadata};
-        for (;;) {
-            mdMethodDef batch[32];
-            ULONG count = 0;
-            HRESULT status = wide.empty()
-                ? metadata->EnumMethods(&enumeration.handle, type, batch, 32, &count)
-                : metadata->EnumMethodsWithName(&enumeration.handle, type, reinterpret_cast<LPCWSTR>(wide.c_str()), batch, 32, &count);
-            check(status, "EnumMethodsWithName");
-            if (count == 0) {
-                break;
-            }
-            // A metadata table holds at most 2^24 rows; anything more is a broken enumerator.
-            if (count > 32 || tokens.size() + count > 0x00ffffff) {
-                throw MetadataFailure{E_INVALIDARG, "EnumMethodsWithName/count"};
-            }
-            tokens.insert(tokens.end(), batch, batch + count);
-        }
-    }
-
-    std::vector<Overload> overloads;
-    std::size_t self = SIZE_MAX;
-    for (mdMethodDef candidate : tokens) {
-        PCCOR_SIGNATURE blob = nullptr;
-        ULONG length = 0;
-        std::string candidateName = metadataName("GetMethodProps", [&](WCHAR* buffer, ULONG capacity, ULONG* written) {
-            return metadata->GetMethodProps(candidate, nullptr, buffer, capacity, written, nullptr, &blob, &length, nullptr, nullptr);
-        });
-        if (candidateName != name) {
-            continue;
-        }
-        if (candidate == token) {
-            self = overloads.size();
-        }
-        overloads.push_back({{blob, length}, genericParameterNames(metadata, candidate)});
-    }
-    if (self == SIZE_MAX) {
-        throw MetadataFailure{E_INVALIDARG, "EnumMethodsWithName/missing-self"};
-    }
-
-    auto label = [&](std::size_t index, signature::Detail detail) -> std::optional<std::string> {
-        signature::Context context{
-            [metadata](mdToken type, bool qualified) { return typeName(metadata, type, qualified); },
-            [metadata](mdTypeSpec spec) {
-                PCCOR_SIGNATURE data = nullptr;
-                ULONG length = 0;
-                check(metadata->GetTypeSpecFromToken(spec, &data, &length), "GetTypeSpecFromToken");
-                return std::span<const BYTE>(data, length);
-            },
-            typeParameters,
-            overloads[index].methodParameters,
-        };
-        try {
-            return signature::format(overloads[index].signature, context, detail);
-        } catch (const MetadataFailure&) {
-            return std::nullopt;
-        }
-    };
-    std::optional<std::string> distinct =
-        overloads.size() <= kMaxOverloads ? signature::distinctLabel(self, overloads.size(), label) : std::nullopt;
-    if (distinct) {
-        return *distinct;
-    }
-    // Unformattable or indistinguishable (e.g. overloads differing only in custom modifiers).
-    std::string fallback = label(self, {}).value_or("(?)");
-    return std::format("{} [{:08x}]", fallback, static_cast<std::uint32_t>(token));
+// The module's file name and version id, which with a method token identifies the method.
+void describeModule(IMetaDataImport2* metadata, MethodName& name) {
+    GUID mvid{};
+    name.module = metadataName("GetScopeProps", [&](WCHAR* buffer, ULONG capacity, ULONG* length) {
+        return metadata->GetScopeProps(buffer, capacity, length, &mvid);
+    });
+    static_assert(sizeof(mvid) == sizeof(name.mvid));
+    std::memcpy(name.mvid.data(), &mvid, sizeof(mvid));
 }
 
 MethodRegistry::Resolution resolveDefinition(ICorProfilerInfo10* info, ModuleID module, mdMethodDef token) {
@@ -356,17 +286,58 @@ MethodRegistry::Resolution resolveDefinition(ICorProfilerInfo10* info, ModuleID 
         return {{}, FAILED(status) ? status : E_POINTER, "GetModuleMetaData"};
     }
 
+    MethodName name;
     try {
-        mdTypeDef type = mdTypeDefNil;
-        std::string method = metadataName("GetMethodProps", [&](WCHAR* buffer, ULONG capacity, ULONG* length) {
-            return metadata->GetMethodProps(token, &type, buffer, capacity, length, nullptr, nullptr, nullptr, nullptr, nullptr);
-        });
-        std::vector<std::string> methodParameters = genericParameterNames(metadata.get(), token);
-        std::vector<std::string> typeParameters;
-        std::string symbol = declaringType(metadata.get(), type, typeParameters) + "." + method + genericSuffix(methodParameters);
-        return {symbol + parameterList(metadata.get(), type, token, method, typeParameters), S_OK, {}};
+        describeModule(metadata.get(), name);
     } catch (const MetadataFailure& failure) {
         return {{}, failure.status, failure.stage};
+    }
+    // From here on a failure still knows the module, so the method keeps its identity.
+    auto failed = [&](HRESULT status, std::string stage) {
+        MethodName identity;
+        identity.mvid = name.mvid;
+        identity.module = std::move(name.module);
+        return MethodRegistry::Resolution{std::move(identity), status, std::move(stage)};
+    };
+    try {
+        mdTypeDef type = mdTypeDefNil;
+        PCCOR_SIGNATURE blob = nullptr;
+        ULONG length = 0;
+        name.name = metadataName("GetMethodProps", [&](WCHAR* buffer, ULONG capacity, ULONG* written) {
+            return metadata->GetMethodProps(token, &type, buffer, capacity, written, nullptr, &blob, &length, nullptr, nullptr);
+        });
+        // Metadata reports the parent of a global method, <Module>, as nil.
+        if (IsNilToken(type)) {
+            type = TokenFromRid(1, mdtTypeDef);
+        }
+        std::vector<std::string> methodParameters = genericParameterNames(metadata.get(), token);
+        std::vector<std::string> typeParameters;
+        name.type = declaringType(metadata.get(), type, name.ns, typeParameters);
+        name.genericParameters = genericSuffix(methodParameters);
+
+        signature::Context context{
+            [&](mdToken referenced, bool qualified) { return typeName(metadata.get(), referenced, qualified); },
+            [&](mdTypeSpec spec) {
+                PCCOR_SIGNATURE data = nullptr;
+                ULONG size = 0;
+                check(metadata->GetTypeSpecFromToken(spec, &data, &size), "GetTypeSpecFromToken");
+                return std::span<const BYTE>(data, size);
+            },
+            typeParameters,
+            methodParameters,
+        };
+        std::optional<signature::Signature> brief = signature::describe({blob, length}, context, false);
+        std::optional<signature::Signature> qualified = signature::describe({blob, length}, context, true);
+        if (!brief || !qualified) {
+            return failed(E_INVALIDARG, "signature");
+        }
+        name.parameters = std::move(brief->parameters);
+        name.returnType = std::move(brief->returnType);
+        name.qualifiedParameters = std::move(qualified->parameters);
+        name.qualifiedReturnType = std::move(qualified->returnType);
+        return {std::move(name), S_OK, {}};
+    } catch (const MetadataFailure& failure) {
+        return failed(failure.status, failure.stage);
     }
 }
 
@@ -401,14 +372,10 @@ void MethodRegistry::moduleUnloaded(ModuleID module) {
     modules_.erase(module);
 }
 
-std::string MethodRegistry::identity(ModuleID module, mdMethodDef token, std::uint64_t generation) {
-    return std::format("[module=0x{:x} token=0x{:08x} lifetime={}]", static_cast<std::uint64_t>(module),
-                       static_cast<std::uint32_t>(token), generation);
-}
-
-std::string MethodRegistry::unresolved(FrameId frame, const Entry& entry, HRESULT status, const std::string& stage) {
-    return std::format("<unresolved method frame={} {} stage={} HRESULT=0x{:08x}>", frame,
-                       identity(entry.module, entry.token, entry.generation), safeLabel(stage), static_cast<std::uint32_t>(status));
+std::string MethodRegistry::problem(const Entry& entry, HRESULT status, const std::string& stage) {
+    return std::format("{} failed with HRESULT 0x{:08x} (module 0x{:x}, token 0x{:08x}, lifetime {})", stage,
+                       static_cast<std::uint32_t>(status), static_cast<std::uint64_t>(entry.module),
+                       static_cast<std::uint32_t>(entry.token), entry.generation);
 }
 
 FrameId MethodRegistry::intern(ModuleID module, mdMethodDef token) {
@@ -431,8 +398,8 @@ FrameId MethodRegistry::intern(ModuleID module, mdMethodDef token) {
                 throw std::overflow_error("MethodRegistry frame IDs exhausted");
             }
             frame = nextFrame_++;
-            Entry entry{module, token, generation, {}};
-            entry.name = unresolved(frame, entry, E_PENDING, "resolution-pending");
+            Entry entry{module, token, generation, {}, {}};
+            entry.problem = problem(entry, E_PENDING, "resolution");
             entries_.emplace(frame, std::move(entry));
             active->second.methods.emplace(token, frame);
         } else {
@@ -454,9 +421,9 @@ FrameId MethodRegistry::intern(ModuleID module, mdMethodDef token) {
         entries_.at(frame).resolving = false;
         throw;
     }
-    if (SUCCEEDED(resolution.status) && resolution.symbol.empty()) {
+    if (SUCCEEDED(resolution.status) && resolution.name.name.empty()) {
         resolution.status = E_FAIL;
-        resolution.stage = "resolver/empty-symbol";
+        resolution.stage = "resolver/empty-name";
     }
     if (FAILED(resolution.status) && resolution.stage.empty()) {
         resolution.stage = "resolver";
@@ -469,33 +436,39 @@ FrameId MethodRegistry::intern(ModuleID module, mdMethodDef token) {
         entry.resolving = false;
         auto active = modules_.find(module);
         if (active == modules_.end() || active->second.generation != generation) {
-            entry.name = unresolved(frame, entry, E_FAIL, "module-lifetime-ended-during-resolution");
+            entry.problem = problem(entry, E_FAIL, "module-lifetime-ended-during-resolution");
             return frame;
         }
         if (SUCCEEDED(resolution.status)) {
-            entry.name = safeLabel(resolution.symbol);
+            entry.name = std::move(resolution.name);
+            entry.problem.clear();
             entry.resolved = true;
         } else {
-            std::string failed = unresolved(frame, entry, resolution.status, resolution.stage);
-            if (failed != entry.name) {
+            // An unresolved method keeps only its module's identity, never a partial name.
+            entry.name = MethodName{};
+            entry.name.mvid = resolution.name.mvid;
+            entry.name.module = std::move(resolution.name.module);
+            std::string failed = problem(entry, resolution.status, resolution.stage);
+            if (failed != entry.problem) {
                 warning = failed;
-                entry.name = std::move(failed);
+                entry.problem = std::move(failed);
             }
         }
     }
     if (logger_ != nullptr && !warning.empty()) {
-        logger_->warn("{}", warning);
+        logger_->warn("unresolved method: {}", printable(warning));
     }
     return frame;
 }
 
-std::string MethodRegistry::name(FrameId frame) const {
+MethodRegistry::Method MethodRegistry::describe(FrameId frame) const {
     std::lock_guard lock(mutex_);
     auto found = entries_.find(frame);
     if (found == entries_.end()) {
-        return std::format("<unregistered method frame={}>", frame);
+        return {0, {}, std::format("frame {} was never registered", frame)};
     }
-    return found->second.name;
+    const Entry& entry = found->second;
+    return {entry.token, entry.name, entry.problem};
 }
 
 } // namespace Sherlock

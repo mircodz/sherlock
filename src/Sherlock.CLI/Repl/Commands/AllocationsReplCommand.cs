@@ -98,9 +98,21 @@ public sealed class AllocationsReplCommand : IReplCommand
 
         switch (mode)
         {
-            case "hot": RenderHot(context.Console, profile, limit); break;
-            case "callers": RenderCallers(context.Console, profile, method!); break;
-            default: RenderTree(context.Console, profile); break;
+            case "hot":
+                RenderHot(context.Console, profile, limit);
+                break;
+            case "callers":
+                IReadOnlySet<MethodFrame> methods = profile.MethodsMatching(method!);
+                if (methods.Count == 0)
+                {
+                    Output.Error(context.Console, $"No method in the profile is called {method}. See the names with allocations hot.");
+                    return ReplResult.Failure;
+                }
+                RenderCallers(context.Console, profile, methods, method!);
+                break;
+            default:
+                RenderTree(context.Console, profile);
+                break;
         }
 
         context.Console.MarkupLineInterpolated(
@@ -138,25 +150,22 @@ public sealed class AllocationsReplCommand : IReplCommand
                 $"[{Palette.Text}]{ByteSize.Format(method.InclusiveBytes)}[/]",
                 $"[{Palette.Muted}]{Counts.Compact(method.AllocCount)}×[/]",
                 Styled.Method(method.Method),
-                Styled.Namespace(FrameNames.Split(method.Method).Type));
+                Styled.Namespace(method.Method));
         }
 
         console.Write(table);
     }
 
-    private static void RenderCallers(IAnsiConsole console, AllocationProfile profile, string method)
+    /// <summary>Callers of every method <paramref name="query"/> names: one method, or every method with that name.</summary>
+    private static void RenderCallers(IAnsiConsole console, AllocationProfile profile, IReadOnlySet<MethodFrame> methods, string query)
     {
-        AllocationTreeNode root = AllocationTreeNode.BuildCallers(profile, method);
-        if (root.AllocBytes == 0)
-        {
-            console.MarkupLineInterpolated(
-                $"[{Palette.Warning}]No allocations flow through[/] {method}[{Palette.Warning}].[/] [{Palette.Muted}]Check the name with[/] allocations hot[{Palette.Muted}].[/]");
-            return;
-        }
-
-        long total = root.AllocBytes;
+        AllocationTreeNode root = AllocationTreeNode.BuildCallers(profile, methods);
+        long total = Math.Max(1, root.AllocBytes);
+        string heading = methods.Count == 1
+            ? Styled.Method(methods.First())
+            : $"[{Palette.Name}]{Markup.Escape(Printable.Escape(query))}[/] [{Palette.Muted}]({methods.Count} methods)[/]";
         var tree = new Tree(
-            $"[{Palette.Name}]{Markup.Escape(FrameNames.ShortMethod(method))}[/] [{Palette.Muted}]— callers ·[/] [bold {Palette.Hot}]{ByteSize.Format(total)}[/] [{Palette.Muted}]allocated through it[/]")
+            $"{heading} [{Palette.Muted}]— callers ·[/] [bold {Palette.Hot}]{ByteSize.Format(root.AllocBytes)}[/] [{Palette.Muted}]allocated through {(methods.Count == 1 ? "it" : "them")}[/]")
         {
             Style = new Style(foreground: Theme.MutedColor),
         };
@@ -174,7 +183,7 @@ public sealed class AllocationsReplCommand : IReplCommand
             double pct = 100.0 * child.AllocBytes / total;
             double survPct = child.AllocBytes == 0 ? 0 : 100.0 * child.SurvivedBytes / child.AllocBytes;
             TreeNode tn = parent.AddNode(
-                $"{Styled.Method(child.Frame)}  [bold {Palette.Hot}]{ByteSize.Format(child.AllocBytes)}[/] " +
+                $"{Styled.Method(child.Frame!)}  [bold {Palette.Hot}]{ByteSize.Format(child.AllocBytes)}[/] " +
                 $"[{Palette.Muted}]· {Counts.Percent(pct)} · {Counts.Compact(child.AllocCount)}× · {Counts.Percent(survPct, 0)} surv[/]");
             AddChildren(tn, child, total, minFraction);
         }

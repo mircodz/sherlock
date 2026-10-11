@@ -202,7 +202,7 @@ public sealed class SnapshotStoreTests : IDisposable
     private string WriteProvenance(string name)
     {
         var provenance = new ProvenanceWriter();
-        uint stack = provenance.InternStack(["Program.Main", "App.Query"]);
+        uint stack = provenance.InternStack(Sherlock.Tests.Frames.Stack("Program.Main", "App.Query"));
         provenance.AddAllocation(stack, provenance.InternType("MyApp.Query"), 128, 2, 64, 1);
         var container = new ContainerWriter();
         provenance.WriteTo(container);

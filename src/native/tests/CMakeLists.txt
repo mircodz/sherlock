@@ -18,6 +18,7 @@ add_executable(SherlockTests
     control_channel.cpp
     entrypoint.cpp
     exit_capture.cpp
+    il_writer.cpp
     intervals.cpp
     method_registry.cpp
     probes.cpp

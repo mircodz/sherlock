@@ -114,9 +114,8 @@ private:
         std::unordered_map<std::uint64_t, Site>& sites,
         std::vector<LiveEntry>* live);
 
-    std::uint32_t internSiteStack(storage::ProvenanceWriter& pw, const Site& site);
-
-    void writeProfile(storage::ProvenanceWriter& pw, const std::unordered_map<std::uint64_t, Site>& sites);
+    class ProfileMethods; // one write's method indices; see aggregator.cpp
+    void writeProfile(storage::ProvenanceWriter& pw, ProfileMethods& methods, const std::unordered_map<std::uint64_t, Site>& sites);
 
     ICorProfilerInfo10* info_;
     Logger* logger_;

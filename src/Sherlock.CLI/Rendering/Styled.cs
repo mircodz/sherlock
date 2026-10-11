@@ -15,9 +15,11 @@ public static class Styled
     /// <summary>The namespace column of a per-type table, which keeps same-named types apart.</summary>
     public static string Namespace(string typeName) => Muted(TypeNames.Namespace(typeName));
 
-    /// <summary>A profiler frame without its namespace (see <see cref="FrameNames.ShortMethod"/>); pair it with a
-    /// <see cref="Namespace"/> column of the frame's declaring type.</summary>
-    public static string Method(string frame) => $"[{Palette.Name}]{Markup.Escape(FrameNames.ShortMethod(frame))}[/]";
+    /// <summary>The namespace column of a per-method table: the declaring type's namespace.</summary>
+    public static string Namespace(MethodFrame method) => Muted(Printable.Escape(method.Namespace));
+
+    /// <summary>A method by its label (see <see cref="MethodFrame.Label"/>); pair it with a <see cref="Namespace(MethodFrame)"/> column.</summary>
+    public static string Method(MethodFrame method) => $"[{Palette.Name}]{Markup.Escape(method.Label)}[/]";
 
     public static string Address(ulong address) => $"[{Palette.Address}]{Addresses.Format(address)}[/]";
 

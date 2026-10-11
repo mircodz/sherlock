@@ -52,6 +52,19 @@ const char* keyword(BYTE element) {
     }
 }
 
+// C#'s spelling of a function pointer's calling convention. Conventions given as modifiers on the return type
+// (unmanaged[SuppressGCTransition]) show as plain "unmanaged".
+const char* functionPointerConvention(BYTE convention) {
+    switch (convention & IMAGE_CEE_CS_CALLCONV_MASK) {
+        case IMAGE_CEE_CS_CALLCONV_C: return " unmanaged[Cdecl]";
+        case IMAGE_CEE_CS_CALLCONV_STDCALL: return " unmanaged[Stdcall]";
+        case IMAGE_CEE_CS_CALLCONV_THISCALL: return " unmanaged[Thiscall]";
+        case IMAGE_CEE_CS_CALLCONV_FASTCALL: return " unmanaged[Fastcall]";
+        case IMAGE_CEE_CS_CALLCONV_UNMANAGED: return " unmanaged";
+        default: return "";
+    }
+}
+
 class Formatter {
 public:
     Formatter(const Context& context, bool qualified) : context_(context), qualified_(qualified) {}
@@ -155,9 +168,10 @@ private:
             case ELEMENT_TYPE_FNPTR: {
                 std::string parameters;
                 std::string returnType;
-                return method(reader, parameters, returnType, depth + 1) && append(out, "delegate*<") &&
-                       append(out, parameters) && (parameters.empty() || append(out, ", ")) &&
-                       append(out, returnType) && append(out, ">");
+                const char* convention = reader.p < reader.end ? functionPointerConvention(*reader.p) : "";
+                return method(reader, parameters, returnType, depth + 1) && append(out, "delegate*") &&
+                       append(out, convention) && append(out, "<") && append(out, parameters) &&
+                       (parameters.empty() || append(out, ", ")) && append(out, returnType) && append(out, ">");
             }
             case ELEMENT_TYPE_CMOD_REQD:
             case ELEMENT_TYPE_CMOD_OPT: {
@@ -240,38 +254,15 @@ std::optional<std::string> constructedTypeName(std::span<const std::string> segm
     return name;
 }
 
-std::optional<std::string> format(std::span<const BYTE> methodSignature, const Context& context, Detail detail) {
+std::optional<Signature> describe(std::span<const BYTE> methodSignature, const Context& context, bool qualified) {
     Reader reader{methodSignature.data(), methodSignature.data() + methodSignature.size()};
-    Formatter formatter(context, detail.qualifiedTypes);
-    std::string parameters;
-    std::string returnType;
-    if (!formatter.method(reader, parameters, returnType, 0)) {
+    Formatter formatter(context, qualified);
+    Signature signature;
+    if (!formatter.method(reader, signature.parameters, signature.returnType, 0)) {
         return std::nullopt;
     }
-    std::string result = "(" + parameters + ")";
-    if (detail.returnType) {
-        result += ":" + returnType;
-    }
-    return result;
-}
-
-std::optional<std::string> distinctLabel(
-    std::size_t self, std::size_t count, const std::function<std::optional<std::string>(std::size_t, Detail)>& label) {
-    static constexpr Detail kLevels[] = {{false, false}, {true, false}, {false, true}, {true, true}};
-    for (Detail detail : kLevels) {
-        std::optional<std::string> mine = label(self, detail);
-        if (!mine) {
-            return std::nullopt;
-        }
-        bool shared = false;
-        for (std::size_t other = 0; other < count && !shared; ++other) {
-            shared = other != self && label(other, detail) == mine;
-        }
-        if (!shared) {
-            return mine;
-        }
-    }
-    return std::nullopt;
+    signature.parameters = "(" + signature.parameters + ")";
+    return signature;
 }
 
 } // namespace Sherlock::signature

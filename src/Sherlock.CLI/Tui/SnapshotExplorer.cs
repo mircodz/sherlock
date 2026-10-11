@@ -43,7 +43,7 @@ public static class SnapshotExplorer
             {
                 ObjTarget obj => new Page($"0x{obj.Address:x}", ObjectView.Create(snapshot, obj.Address, obj.Tab, Navigate)),
                 TypeTarget type => new Page(TypeNames.Short(type.Type), TypePage(snapshot, type, Navigate)),
-                MethodTarget method => new Page(FrameNames.ShortMethod(method.Method), AllocationsView.ForMethod(snapshot.Allocations, method.Method, Navigate)),
+                MethodTarget method => new Page(method.Method.Label, AllocationsView.ForMethod(snapshot.Allocations, method.Method, Navigate)),
                 _ => throw new ArgumentException("Unknown explorer navigation target.", nameof(target)),
             };
             navigation.Push(page);

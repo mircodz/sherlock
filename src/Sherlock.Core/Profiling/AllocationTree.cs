@@ -5,11 +5,14 @@ namespace Sherlock.Core.Profiling;
 
 /// <summary>Top-down allocation call tree folded from an <see cref="AllocationProfile"/>: each node
 /// holds the inclusive alloc/survived bytes of every call path through it.</summary>
-public sealed class AllocationTreeNode(string frame)
+public sealed class AllocationTreeNode
 {
-    private readonly Dictionary<string, AllocationTreeNode> _children = new();
+    private readonly Dictionary<MethodFrame, AllocationTreeNode> _children = [];
 
-    public string Frame { get; } = frame;
+    private AllocationTreeNode(MethodFrame? frame) => Frame = frame;
+
+    /// <summary>The node's method; null for the root, which stands for the whole tree.</summary>
+    public MethodFrame? Frame { get; }
     public long AllocBytes { get; private set; }
     public long SurvivedBytes { get; private set; }
     public long AllocCount { get; private set; }
@@ -18,7 +21,7 @@ public sealed class AllocationTreeNode(string frame)
     public IReadOnlyList<AllocationTreeNode> Children =>
         _children.Values.OrderByDescending(c => c.AllocBytes).ToList();
 
-    private AllocationTreeNode Descend(string frame)
+    private AllocationTreeNode Descend(MethodFrame frame)
     {
         if (!_children.TryGetValue(frame, out AllocationTreeNode? child))
         {
@@ -28,17 +31,25 @@ public sealed class AllocationTreeNode(string frame)
         return child;
     }
 
-    /// <summary>Folds an inverted caller tree rooted at <paramref name="method"/>: children are its
-    /// immediate callers, weighted by what allocated while passing through it.</summary>
-    public static AllocationTreeNode BuildCallers(AllocationProfile profile, string method)
+    private void Add(AllocationSite site)
     {
-        var root = new AllocationTreeNode(method);
+        AllocBytes += site.AllocBytes;
+        SurvivedBytes += site.SurvivedBytes;
+        AllocCount += site.AllocCount;
+    }
+
+    /// <summary>Folds an inverted caller tree of <paramref name="methods"/>: the root stands for them, its
+    /// children are their immediate callers, weighted by what allocated while passing through them.</summary>
+    public static AllocationTreeNode BuildCallers(AllocationProfile profile, IReadOnlyCollection<MethodFrame> methods)
+    {
+        HashSet<MethodFrame> set = [.. methods];
+        var root = new AllocationTreeNode(null);
         foreach (AllocationSite site in profile.Sites)
         {
             int at = -1;
             for (int i = site.Frames.Count - 1; i >= 0; i--) // deepest occurrence first
             {
-                if (FrameNames.Matches(site.Frames[i], method)) { at = i; break; }
+                if (set.Contains(site.Frames[i])) { at = i; break; }
             }
             if (at < 0)
             {
@@ -46,36 +57,28 @@ public sealed class AllocationTreeNode(string frame)
             }
 
             AllocationTreeNode node = root;
-            node.AllocBytes += site.AllocBytes;
-            node.SurvivedBytes += site.SurvivedBytes;
-            node.AllocCount += site.AllocCount;
+            node.Add(site);
             for (int i = at - 1; i >= 0; i--) // walk up: immediate caller first
             {
                 node = node.Descend(site.Frames[i]);
-                node.AllocBytes += site.AllocBytes;
-                node.SurvivedBytes += site.SurvivedBytes;
-                node.AllocCount += site.AllocCount;
+                node.Add(site);
             }
         }
         return root;
     }
 
-    /// <summary>Folds a profile into a call tree rooted at a synthetic node.</summary>
+    /// <summary>Folds a profile into a call tree whose root stands for every stack.</summary>
     public static AllocationTreeNode Build(AllocationProfile profile)
     {
-        var root = new AllocationTreeNode("(roots)");
+        var root = new AllocationTreeNode(null);
         foreach (AllocationSite site in profile.Sites)
         {
             AllocationTreeNode node = root;
-            node.AllocBytes += site.AllocBytes;
-            node.SurvivedBytes += site.SurvivedBytes;
-            node.AllocCount += site.AllocCount;
-            foreach (string frame in site.Frames) // stored root -> leaf
+            node.Add(site);
+            foreach (MethodFrame frame in site.Frames) // stored root -> leaf
             {
                 node = node.Descend(frame);
-                node.AllocBytes += site.AllocBytes;
-                node.SurvivedBytes += site.SurvivedBytes;
-                node.AllocCount += site.AllocCount;
+                node.Add(site);
             }
         }
         return root;

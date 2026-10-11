@@ -33,7 +33,7 @@ public sealed class WhoAllocReplCommand : IReplCommand
             ? Styled.Object(t.Name ?? "<unknown>", address, (long)obj.Size)
             : $"{Styled.Address(address)}  [{Palette.Muted}]<not a live object in this dump>[/]");
 
-        IReadOnlyList<string>? frames = context.Snapshot.WhoAllocated(address);
+        IReadOnlyList<MethodFrame>? frames = context.Snapshot.WhoAllocated(address);
         if (frames is null)
         {
             context.Console.MarkupLine(
@@ -53,8 +53,8 @@ public sealed class WhoAllocReplCommand : IReplCommand
         var stack = new Grid().AddColumn(new GridColumn().Padding(2, 0, 2, 0).NoWrap()).AddColumn().AddColumn();
         for (int i = 0; i < frames.Count; i++)
         {
-            string frame = frames[frames.Count - 1 - i];
-            stack.AddRow(Styled.Muted($"#{i}"), Styled.Method(frame), Styled.Namespace(FrameNames.Split(frame).Type));
+            MethodFrame frame = frames[frames.Count - 1 - i];
+            stack.AddRow(Styled.Muted($"#{i}"), Styled.Method(frame), Styled.Namespace(frame));
         }
         context.Console.Write(stack);
         return ReplResult.Success;

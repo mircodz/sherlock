@@ -17,9 +17,9 @@ public static class AllocationDot
             return new DotGraph("allocations").Render();
         }
 
-        var flat = new Dictionary<string, long>(StringComparer.Ordinal);
-        var cum = new Dictionary<string, long>(StringComparer.Ordinal);
-        var edges = new Dictionary<(string From, string To), long>();
+        var flat = new Dictionary<MethodFrame, long>();
+        var cum = new Dictionary<MethodFrame, long>();
+        var edges = new Dictionary<(MethodFrame From, MethodFrame To), long>();
 
         foreach (AllocationSite site in profile.Sites)
         {
@@ -30,50 +30,56 @@ public static class AllocationDot
             }
 
             flat[site.Frames[^1]] = flat.GetValueOrDefault(site.Frames[^1]) + bytes;
-            foreach (string frame in site.Frames.Distinct()) // cum counts a method once per stack
+            foreach (MethodFrame frame in site.Frames.Distinct()) // cum counts a method once per stack
             {
                 cum[frame] = cum.GetValueOrDefault(frame) + bytes;
             }
             for (int i = 0; i + 1 < site.Frames.Count; i++)
             {
-                (string, string) edge = (site.Frames[i], site.Frames[i + 1]);
+                (MethodFrame, MethodFrame) edge = (site.Frames[i], site.Frames[i + 1]);
                 edges[edge] = edges.GetValueOrDefault(edge) + bytes;
             }
         }
 
         // Prune nodes and their incident edges together.
         long cutoff = (long)(total * nodeFraction);
-        HashSet<string> kept = cum
+        List<MethodFrame> ranked = cum
             .Where(kv => kv.Value >= cutoff)
             .OrderByDescending(kv => kv.Value)
             .Take(maxNodes)
             .Select(kv => kv.Key)
-            .ToHashSet(StringComparer.Ordinal);
+            .ToList();
+        // Node ids are ranks, so they can't collide.
+        var kept = new Dictionary<MethodFrame, string>();
+        for (int i = 0; i < ranked.Count; i++)
+        {
+            kept[ranked[i]] = $"n{i}";
+        }
 
-        double maxFlat = kept.Count > 0 ? Math.Max(1, kept.Max(m => flat.GetValueOrDefault(m))) : 1;
+        double maxFlat = ranked.Count > 0 ? Math.Max(1, ranked.Max(m => flat.GetValueOrDefault(m))) : 1;
 
         var dot = new DotGraph("allocations");
-        foreach (string method in kept.OrderByDescending(m => cum[m]))
+        foreach (MethodFrame method in ranked)
         {
             long self = flat.GetValueOrDefault(method);
             long through = cum[method];
-            dot.AddNode(Id(method), heat: (double)through / total, size: self / maxFlat, Label(method, self, through, total));
+            dot.AddNode(kept[method], heat: (double)through / total, size: self / maxFlat, Label(method, self, through, total));
         }
 
-        foreach (((string from, string to), long bytes) in edges.OrderByDescending(e => e.Value))
+        foreach (((MethodFrame from, MethodFrame to), long bytes) in edges.OrderByDescending(e => e.Value))
         {
-            if (kept.Contains(from) && kept.Contains(to))
+            if (kept.TryGetValue(from, out string? fromId) && kept.TryGetValue(to, out string? toId))
             {
-                dot.AddEdge(Id(from), Id(to), (double)bytes / total, ByteSize.Format(bytes));
+                dot.AddEdge(fromId, toId, (double)bytes / total, ByteSize.Format(bytes));
             }
         }
 
         return dot.Render();
     }
 
-    private static string[] Label(string method, long flat, long cum, long total)
+    private static string[] Label(MethodFrame method, long flat, long cum, long total)
     {
-        string name = FrameNames.ShortMethod(method);
+        string name = method.Label;
         if (flat == cum)
         {
             return [name, $"{ByteSize.Format(cum)} ({100.0 * cum / total:0.0}%)"];
@@ -84,7 +90,4 @@ public static class AllocationDot
         }
         return [name, $"cum {ByteSize.Format(cum)} ({100.0 * cum / total:0.0}%)"];
     }
-
-    /// <summary>DOT-safe ID within this process.</summary>
-    private static string Id(string method) => $"n{(uint)StringComparer.Ordinal.GetHashCode(method):x}";
 }

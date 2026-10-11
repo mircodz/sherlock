@@ -66,15 +66,15 @@ public sealed class OutputTests
     }
 
     [Fact]
-    public void FoldedStacksKeepLegacyEscapingWeightsAndFrameOrder()
+    public void FoldedStacksKeepTheFrameSeparatorOutOfLabelsAndKeepWeightsAndFrameOrder()
     {
         var profile = new AllocationProfile(
         [
-            new(["Root;Literal", "Leaf"], 256, 2, 64, 1),
-            new(["Empty"], 0, 0, 0, 0),
+            new(Sherlock.Tests.Frames.Stack("App.Root;Literal", "App.Leaf"), "T", 256, 2, 64, 1),
+            new(Sherlock.Tests.Frames.Stack("App.Empty"), "T", 0, 0, 0, 0),
         ]);
 
-        Assert.Equal("Root:Literal;Leaf 256\n", FoldedStacks.Write(profile));
-        Assert.Equal("Root:Literal;Leaf 64\n", FoldedStacks.Write(profile, survived: true));
+        Assert.Equal("App.Root:Literal();App.Leaf() 256\n", FoldedStacks.Write(profile));
+        Assert.Equal("App.Root:Literal();App.Leaf() 64\n", FoldedStacks.Write(profile, survived: true));
     }
 }

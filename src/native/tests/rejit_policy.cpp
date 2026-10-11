@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <string>
+#include <utility>
 
 using namespace Sherlock;
 
@@ -19,10 +20,35 @@ TEST(RejitPolicy, ExcludesOnlyTheCoreLibArrayEntryHelpers) {
     }
 }
 
+TEST(RejitPolicy, ExcludesTheMethodsTheJitCallsAsHelpers) {
+    for (const auto& [type, method] : {
+             std::pair{"System.Runtime.CompilerServices.CastHelpers", "ChkCastClass"},
+             std::pair{"System.Runtime.CompilerServices.CastHelpers", "Box"},
+             std::pair{"System.Math", "ConvertToInt32Checked"},
+             std::pair{"System.SpanHelpers", "Memmove"},
+             std::pair{"Internal.Runtime.CompilerHelpers.ThrowHelpers", "ThrowAmbiguousResolutionException"},
+             std::pair{"System.Runtime.CompilerServices.StaticsHelpers", "GetOptimizedNonGCThreadStaticBase"},
+             std::pair{"System.Threading.Monitor", "Enter"},
+         }) {
+        const char* reason = rejit::rejection("System.Private.CoreLib", type, method);
+        ASSERT_NE(reason, nullptr) << type << "." << method;
+        EXPECT_NE(std::string(reason).find("JIT helper"), std::string::npos);
+        EXPECT_EQ(rejit::rejection("Application", type, method), nullptr);
+    }
+}
+
+TEST(RejitPolicy, ExcludesRuntimeAsyncMethods) {
+    EXPECT_NE(rejit::rejection(DWORD{0x2000}), nullptr);
+    EXPECT_NE(rejit::rejection(DWORD{0x2008}), nullptr);
+    EXPECT_EQ(rejit::rejection(DWORD{0x0008}), nullptr); // NoInlining alone
+    EXPECT_EQ(rejit::rejection(DWORD{0}), nullptr);
+}
+
 TEST(RejitPolicy, KeepsOrdinaryFrameworkAndUserMethodsEligible) {
     EXPECT_EQ(rejit::rejection("System.Private.CoreLib", "System.Collections.Generic.List`1", "Add"), nullptr);
-    EXPECT_EQ(rejit::rejection("System.Private.CoreLib", "System.Runtime.CompilerServices.CastHelpers", "ChkCastClass"), nullptr);
+    EXPECT_EQ(rejit::rejection("System.Private.CoreLib", "System.Math", "Abs"), nullptr);
     EXPECT_EQ(rejit::rejection("System.Private.CoreLib", "System.Environment", "InitializeCommandLineArgs"), nullptr);
+    EXPECT_EQ(rejit::rejection("System.Private.CoreLib", "Application.Monitor", "Enter"), nullptr);
     EXPECT_EQ(rejit::rejection("Application", "Application.Program", "Main"), nullptr);
 }
 

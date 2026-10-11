@@ -24,7 +24,7 @@ public sealed class SnapshotCaptureTests : IDisposable
         File.WriteAllBytes(dump, [1, 2, 3]);
         string provenance = _tmp.File();
         var writer = new ProvenanceWriter();
-        uint stack = writer.InternStack(["Program.Main"]);
+        uint stack = writer.InternStack(Sherlock.Tests.Frames.Stack("Program.Main"));
         writer.AddAllocation(stack, writer.InternType("Example"), 64, 1, 64, 1);
         var container = new ContainerWriter();
         writer.WriteTo(container);

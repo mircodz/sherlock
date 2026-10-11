@@ -44,7 +44,7 @@ struct RetType {
     std::vector<BYTE> blob; // non-void RetType bytes for the return-value local
 };
 
-// Reject byref, typedref and unsupported return shapes. Void needs no return-value local.
+// Any return type a local can hold is supported; byref and typedref returns are not. Void needs no return-value local.
 bool parseReturnType(ICorProfilerInfo10* info, ModuleID moduleId, mdMethodDef methodToken, RetType& rt) {
     rt = {};
     IMetaDataImport* md = nullptr;
@@ -74,46 +74,21 @@ bool parseReturnType(ICorProfilerInfo10* info, ModuleID moduleId, mdMethodDef me
         }
 
         const BYTE* rtStart = sp;
-        while (sp < send && (*sp == ELEMENT_TYPE_CMOD_OPT || *sp == ELEMENT_TYPE_CMOD_REQD)) {
-            sp++;
-            std::uint32_t token;
-            if (!il::uncompress(sp, send, token)) {
+        const BYTE* type = sp;
+        std::uint32_t token;
+        while (type < send && (*type == ELEMENT_TYPE_CMOD_OPT || *type == ELEMENT_TYPE_CMOD_REQD)) {
+            ++type;
+            if (!il::uncompress(type, send, token)) {
                 return false;
             }
         }
-        if (sp >= send) {
+        if (type >= send || *type == ELEMENT_TYPE_BYREF || *type == ELEMENT_TYPE_TYPEDBYREF) {
             return false;
         }
-
-        BYTE elementType = *sp++;
-        if (elementType == ELEMENT_TYPE_VOID) {
+        if (*type == ELEMENT_TYPE_VOID) {
             return true;
         }
-        if (elementType == ELEMENT_TYPE_BYREF || elementType == ELEMENT_TYPE_TYPEDBYREF) {
-            return false;
-        }
-
-        bool supported = false;
-        switch (elementType) {
-            case ELEMENT_TYPE_BOOLEAN: case ELEMENT_TYPE_CHAR:
-            case ELEMENT_TYPE_I1: case ELEMENT_TYPE_U1: case ELEMENT_TYPE_I2: case ELEMENT_TYPE_U2:
-            case ELEMENT_TYPE_I4: case ELEMENT_TYPE_U4: case ELEMENT_TYPE_I8: case ELEMENT_TYPE_U8:
-            case ELEMENT_TYPE_R4: case ELEMENT_TYPE_R8: case ELEMENT_TYPE_I: case ELEMENT_TYPE_U:
-            case ELEMENT_TYPE_STRING: case ELEMENT_TYPE_OBJECT:
-                supported = true;
-                break;
-            case ELEMENT_TYPE_CLASS: case ELEMENT_TYPE_VALUETYPE: {
-                std::uint32_t token;
-                if (!il::uncompress(sp, send, token)) {
-                    return false;
-                }
-                supported = true;
-                break;
-            }
-            default:
-                break;
-        }
-        if (!supported) {
+        if (!il::skipType(sp, send)) {
             return false;
         }
 

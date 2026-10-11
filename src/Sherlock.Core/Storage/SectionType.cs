@@ -2,12 +2,16 @@ namespace Sherlock.Core.Storage;
 
 public enum SectionType : uint
 {
+    // Profile symbols: methods by identity, allocated types, and stacks of method indices.
     Strings = 1,
-    Frames = 2,
+    Frames = 2,           // retired: names interned without identities; readers reject profiles that have it
     Stacks = 3,
     StackFrames = 4,
     Allocations = 5,
     Correlation = 6,
+    Modules = 25,
+    Methods = 26,
+    Types = 27,
 
     // Heap columns use dense object ids; the last node is the synthetic root.
     // Its successors are rooted objects; GraphRoots preserves each root's CLR metadata.

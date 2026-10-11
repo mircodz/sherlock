@@ -11,6 +11,10 @@
     <PackageReference Include="xunit.runner.visualstudio" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="../Shared/*.cs" LinkBase="Shared" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="../../src/Sherlock.CLI/Sherlock.CLI.csproj" />
   </ItemGroup>
 </Project>

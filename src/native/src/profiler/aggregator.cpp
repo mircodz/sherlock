@@ -445,21 +445,41 @@ void Aggregator::captureState(
     }
 }
 
-std::uint32_t Aggregator::internSiteStack(storage::ProvenanceWriter& pw, const Site& site) {
-    std::vector<std::string> names;
-    names.reserve(site.frames.size());
-    for (FrameId frame : site.frames)
-        names.push_back(methods_.name(frame));
-    std::vector<std::string_view> views;
-    views.reserve(names.size());
-    for (const std::string& name : names)
-        views.push_back(name);
-    return pw.internStack(views);
-}
+// The methods of one profile write. Each frame is described once, and the writer keeps methods apart by
+// identity (module MVID and token), so two different methods never share a record whatever their names.
+class Aggregator::ProfileMethods {
+public:
+    ProfileMethods(const MethodRegistry& registry, storage::ProvenanceWriter& writer) : registry_(registry), writer_(writer) {}
 
-void Aggregator::writeProfile(storage::ProvenanceWriter& pw, const std::unordered_map<std::uint64_t, Site>& sites) {
+    std::uint32_t stack(std::span<const FrameId> frames) {
+        scratch_.clear();
+        for (FrameId frame : frames) {
+            scratch_.push_back(method(frame));
+        }
+        return writer_.internStack(scratch_);
+    }
+
+private:
+    std::uint32_t method(FrameId frame) {
+        auto [it, inserted] = indices_.try_emplace(frame, 0u);
+        if (inserted) {
+            const MethodRegistry::Method m = registry_.describe(frame);
+            it->second = writer_.internMethod({m.name.mvid, m.token, m.name.module, m.name.ns, m.name.type, m.name.name,
+                                               m.name.genericParameters, m.name.parameters, m.name.qualifiedParameters,
+                                               m.name.returnType, m.name.qualifiedReturnType, m.problem});
+        }
+        return it->second;
+    }
+
+    const MethodRegistry& registry_;
+    storage::ProvenanceWriter& writer_;
+    std::unordered_map<FrameId, std::uint32_t> indices_;
+    std::vector<std::uint32_t> scratch_;
+};
+
+void Aggregator::writeProfile(storage::ProvenanceWriter& pw, ProfileMethods& methods, const std::unordered_map<std::uint64_t, Site>& sites) {
     for (const auto& [key, site] : sites) {
-        const std::uint32_t stackId = internSiteStack(pw, site);
+        const std::uint32_t stackId = methods.stack(site.frames);
         const std::uint32_t typeId = pw.internType(resolveTypeName(site.classId));
         pw.addAllocation(stackId, typeId, site.alloc.bytes, site.alloc.count, site.survived.bytes, site.survived.count);
     }
@@ -474,14 +494,15 @@ bool Aggregator::emitCorrelation(const std::string& path) noexcept {
         captureState(merged, &live);
 
         storage::ProvenanceWriter pw;
-        writeProfile(pw, merged);
+        ProfileMethods methods(methods_, pw);
+        writeProfile(pw, methods, merged);
 
         // Site frames and class IDs are immutable, so resolve them outside shard locks.
         std::unordered_map<const Site*, std::uint32_t> siteStack;
         for (const LiveEntry& lv : live) {
             auto [it, inserted] = siteStack.try_emplace(lv.site, 0u);
             if (inserted) {
-                it->second = internSiteStack(pw, *lv.site);
+                it->second = methods.stack(lv.site->frames);
             }
             pw.addObject(static_cast<std::uint64_t>(lv.addr), it->second);
         }
@@ -511,7 +532,8 @@ bool Aggregator::dump(const std::string& path) noexcept {
         std::unordered_map<std::uint64_t, Site> merged;
         captureState(merged, nullptr);
         storage::ProvenanceWriter pw;
-        writeProfile(pw, merged);
+        ProfileMethods methods(methods_, pw);
+        writeProfile(pw, methods, merged);
 
         if (!writeSlab(path, pw)) {
             return false;

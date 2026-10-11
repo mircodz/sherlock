@@ -155,8 +155,8 @@ public sealed class PresentationTests
     {
         var profile = new AllocationProfile(
         [
-            new(["App.Zeta.Run"], 2048, 8, 0, 0),
-            new(["Other.Alpha.Run"], 512, 2, 0, 0),
+            new(Sherlock.Tests.Frames.Stack("App.Zeta.Run"), "T", 2048, 8, 0, 0),
+            new(Sherlock.Tests.Frames.Stack("Other.Alpha.Run"), "T", 512, 2, 0, 0),
         ]);
         NavigationTarget? activated = null;
         Table table = AllocationsView.HotTable(profile.HotMethods(), target => activated = target);
@@ -164,7 +164,7 @@ public sealed class PresentationTests
 
         ActivateFirst(table);
 
-        Assert.Equal(new MethodTarget("Other.Alpha.Run"), activated);
+        Assert.Equal(new MethodTarget(Sherlock.Tests.Frames.Method("Other.Alpha.Run")), activated);
     }
 
     [Fact]
@@ -172,8 +172,8 @@ public sealed class PresentationTests
     {
         var profile = new AllocationProfile(
         [
-            new(["Method"], 2048, 8, 0, 0, "App.Zeta"),
-            new(["Method"], 512, 2, 0, 0, "Other.Alpha"),
+            new(Sherlock.Tests.Frames.Stack("Method"), "App.Zeta", 2048, 8, 0, 0),
+            new(Sherlock.Tests.Frames.Stack("Method"), "Other.Alpha", 512, 2, 0, 0),
         ]);
         NavigationTarget? activated = null;
         Table table = AllocationsView.TypeTable(profile, name => new TypeTarget(name, TypeTab.Allocations), target => activated = target);

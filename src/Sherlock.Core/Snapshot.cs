@@ -19,8 +19,10 @@ public sealed class Snapshot : IDisposable
     private readonly SnapshotEntry? _entry;
     private HeapGraphProvider? _heapGraph;
     private DominatorTree? _dominators;
+    private readonly Lock _provenanceLock = new();
     private SlabFile? _slab;
     private ProvenanceReader? _provenance;
+    private Exception? _provenanceFailure;
     private DumpInfo? _info;
     private IReadOnlyList<ModuleInfo>? _modules;
     private IReadOnlyList<SegmentInfo>? _segments;
@@ -99,12 +101,17 @@ public sealed class Snapshot : IDisposable
         return _dominators ??= new DominatorAnalyzer(this).Build(cancellationToken);
     }
 
+    /// <summary>The snapshot's allocation profile, built once; views on several threads share it. Throws
+    /// <see cref="InvalidDataException"/> when the profile can't be read.</summary>
     public AllocationProfile? Allocations
     {
         get
         {
-            ProvenanceReader? provenance = GetProvenance();
-            return provenance is null ? null : _allocations ??= AllocationProfileReader.From(provenance);
+            lock (_provenanceLock)
+            {
+                ProvenanceReader? provenance = GetProvenance();
+                return provenance is null ? null : _allocations ??= AllocationProfileReader.From(provenance);
+            }
         }
     }
 
@@ -153,25 +160,53 @@ public sealed class Snapshot : IDisposable
         return _diagnosis ??= new HeapDoctor(this).Diagnose(cancellationToken);
     }
 
-    /// <summary>See <see cref="Profiling.ProvenanceReader.FramesFor"/>.</summary>
-    public IReadOnlyList<string>? WhoAllocated(ulong address) => HasCorrelation ? GetProvenance()?.FramesFor(address) : null;
+    /// <summary>See <see cref="Profiling.ProvenanceReader.FramesFor"/>. Throws <see cref="InvalidDataException"/> when the
+    /// profile can't be read.</summary>
+    public IReadOnlyList<MethodFrame>? WhoAllocated(ulong address)
+    {
+        if (!HasCorrelation)
+        {
+            return null;
+        }
+        lock (_provenanceLock)
+        {
+            return GetProvenance()?.FramesFor(address);
+        }
+    }
 
     internal HeapGraph GetHeapGraph(CancellationToken cancellationToken = default) => (_heapGraph ??= new HeapGraphProvider(this)).Get(cancellationToken);
     internal HeapGraph? TryGetCachedHeapGraph() => (_heapGraph ??= new HeapGraphProvider(this)).TryGetCachedOrOnDisk();
 
+    // Callers hold _provenanceLock. A profile that can't be read fails the same way every time, without reopening it.
     private ProvenanceReader? GetProvenance()
     {
         if (_provenance is not null)
         {
             return _provenance;
         }
+        if (_provenanceFailure is not null)
+        {
+            throw new InvalidDataException(_provenanceFailure.Message, _provenanceFailure);
+        }
         string? path = _entry?.ProvenancePath;
         if (path is null)
         {
             return null;
         }
-        _slab = SlabFile.Open(path);
-        return _provenance = new ProvenanceReader(_slab);
+        SlabFile? slab = null;
+        try
+        {
+            slab = SlabFile.Open(path);
+            _provenance = new ProvenanceReader(slab);
+            _slab = slab;
+            return _provenance;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException)
+        {
+            slab?.Dispose();
+            _provenanceFailure = ex;
+            throw new InvalidDataException(ex.Message, ex);
+        }
     }
 
     private IReadOnlyList<HeapTypeStat> BuildHistogram()
