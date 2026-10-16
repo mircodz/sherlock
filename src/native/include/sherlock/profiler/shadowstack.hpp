@@ -35,6 +35,7 @@ struct ThreadStack {
 extern thread_local ThreadStack* t_stack;
 
 ThreadStack* ensureStack() noexcept; // allocate-on-first-use for the current thread; null when out of memory
+std::size_t liveStacks() noexcept;   // threads holding a stack; each is freed when its thread exits
 
 inline std::uint32_t storedDepth() {
     if (t_stack == nullptr) return 0;

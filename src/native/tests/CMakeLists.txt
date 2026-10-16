@@ -26,6 +26,7 @@ add_executable(SherlockTests
     process_filter.cpp
     rejit_policy.cpp
     frame_ids.cpp
+    shadowstack.cpp
     signature.cpp
     symbols.cpp
     triggers.cpp
