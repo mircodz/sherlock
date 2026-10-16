@@ -152,6 +152,15 @@ public sealed class HeapGraph : IDisposable
         return (_index ??= new AddressIndex(Addresses)).IndexOf(address);
     }
 
+    private Predecessors? _predecessors;
+
+    /// <summary>Who references each object, built on first use and kept with the graph.</summary>
+    internal Predecessors GetPredecessors(CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        return _predecessors ??= Predecessors.Build(this, cancellationToken);
+    }
+
     /// <summary>Returns an object's type name when stored in the graph.</summary>
     public string? TypeNameOf(int objectId)
     {
