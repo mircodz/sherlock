@@ -1,4 +1,4 @@
-// Allocation and correlation records resolve through the same interned stack table.
+// Allocation and correlation records resolve through the same symbol table.
 
 #include "sherlock/storage/profile.hpp"
 
@@ -8,6 +8,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <initializer_list>
 #include <span>
 #include <string>
 #include <string_view>
@@ -19,13 +21,33 @@ namespace {
 std::span<const std::byte> asBytes(const std::string& s) {
     return {reinterpret_cast<const std::byte*>(s.data()), s.size()};
 }
-std::span<const std::string_view> frames(const std::vector<std::string_view>& v) { return {v.data(), v.size()}; }
+// Interns "Type.Method" names as methods of one module, then their stack; equal names are one method.
+std::uint32_t stack(ProvenanceWriter& w, std::initializer_list<std::string_view> names) {
+    std::vector<std::uint32_t> methods;
+    for (std::string_view name : names) {
+        MethodDescription m;
+        m.mvid = {0x42};
+        m.token = 0x06000000u | static_cast<std::uint32_t>(std::hash<std::string_view>{}(name) & 0xffffff);
+        m.module = "App.dll";
+        std::size_t dot = name.rfind('.');
+        m.type = dot == std::string_view::npos ? std::string_view() : name.substr(0, dot);
+        m.name = dot == std::string_view::npos ? name : name.substr(dot + 1);
+        m.parameters = m.qualifiedParameters = "()";
+        methods.push_back(w.internMethod(m));
+    }
+    return w.internStack(methods);
+}
+
+std::string method(const SymbolTable& symbols, std::uint32_t index) {
+    const MethodRecord& m = symbols.method(index);
+    return std::string(symbols.text(m.type)) + "." + std::string(symbols.text(m.name));
+}
 } // namespace
 
 TEST(Profile, RoundTripsRecordsAndStacks) {
     ProvenanceWriter w;
-    const std::uint32_t s1 = w.internStack(frames({"Program.Main", "Registry.Add"}));
-    const std::uint32_t s2 = w.internStack(frames({"Program.Main", "List.Resize"}));
+    const std::uint32_t s1 = stack(w, {"Program.Main", "Registry.Add"});
+    const std::uint32_t s2 = stack(w, {"Program.Main", "List.Resize"});
     const std::uint32_t t1 = w.internType("Sherlock.Demo.Customer");
     const std::uint32_t t2 = w.internType("System.Byte[]");
     w.addAllocation(s1, t1, /*allocBytes*/ 2000, /*allocCount*/ 50, /*survivedBytes*/ 1600, /*survivedCount*/ 40);
@@ -54,26 +76,26 @@ TEST(Profile, RoundTripsRecordsAndStacks) {
     EXPECT_EQ(recs[1].allocBytes, 512u);
 
     // Types and frames share the symbol table.
-    EXPECT_EQ(r.stacks().frame(recs[0].typeId), "Sherlock.Demo.Customer");
-    EXPECT_EQ(r.stacks().frame(recs[1].typeId), "System.Byte[]");
+    EXPECT_EQ(r.symbols().type(recs[0].typeId), "Sherlock.Demo.Customer");
+    EXPECT_EQ(r.symbols().type(recs[1].typeId), "System.Byte[]");
 
-    std::span<const std::uint32_t> f1 = r.stacks().stackFrames(recs[0].stackId);
+    std::span<const std::uint32_t> f1 = r.symbols().stackFrames(recs[0].stackId);
     ASSERT_EQ(f1.size(), 2u);
-    EXPECT_EQ(r.stacks().frame(f1[0]), "Program.Main");
-    EXPECT_EQ(r.stacks().frame(f1[1]), "Registry.Add");
+    EXPECT_EQ(method(r.symbols(), f1[0]), "Program.Main");
+    EXPECT_EQ(method(r.symbols(), f1[1]), "Registry.Add");
 }
 
 TEST(Profile, SharesOneStackAcrossSites) {
     ProvenanceWriter w;
-    const std::uint32_t a = w.internStack(frames({"A", "B"}));
-    const std::uint32_t b = w.internStack(frames({"A", "B"}));
+    const std::uint32_t a = stack(w, {"A", "B"});
+    const std::uint32_t b = stack(w, {"A", "B"});
     EXPECT_EQ(a, b);
 }
 
 TEST(Profile, CorrelationIsSortedAndBinarySearchable) {
     ProvenanceWriter w;
-    const std::uint32_t s1 = w.internStack(frames({"Program.Main", "Registry.Add"}));
-    const std::uint32_t s2 = w.internStack(frames({"Program.Main", "List.Resize"}));
+    const std::uint32_t s1 = stack(w, {"Program.Main", "Registry.Add"});
+    const std::uint32_t s2 = stack(w, {"Program.Main", "List.Resize"});
     // Insert out of address order; the writer must sort so the reader can binary-search.
     w.addObject(0x3000, s2);
     w.addObject(0x1000, s1);
@@ -97,9 +119,9 @@ TEST(Profile, CorrelationIsSortedAndBinarySearchable) {
     auto sid = r.stackForAddress(0x2000);
     ASSERT_TRUE(sid.has_value());
     EXPECT_EQ(*sid, s1);
-    std::span<const std::uint32_t> f = r.stacks().stackFrames(*sid);
+    std::span<const std::uint32_t> f = r.symbols().stackFrames(*sid);
     ASSERT_EQ(f.size(), 2u);
-    EXPECT_EQ(r.stacks().frame(f[1]), "Registry.Add");
+    EXPECT_EQ(method(r.symbols(), f[1]), "Registry.Add");
 
     EXPECT_EQ(r.stackForAddress(0x3000).value(), s2);
     EXPECT_FALSE(r.stackForAddress(0x1500).has_value()); // untracked address
@@ -108,7 +130,7 @@ TEST(Profile, CorrelationIsSortedAndBinarySearchable) {
 TEST(Profile, NoCorrelationSectionWhenAggregateOnly) {
     // The exit-time aggregate has allocations but no per-object correlation.
     ProvenanceWriter w;
-    w.addAllocation(w.internStack(frames({"A"})), w.internType("T"), 100, 1, 100, 1);
+    w.addAllocation(stack(w, {"A"}), w.internType("T"), 100, 1, 100, 1);
     ContainerWriter cw;
     w.writeTo(cw);
     const std::string bytes = cw.finish();
@@ -122,8 +144,8 @@ TEST(Profile, NoCorrelationSectionWhenAggregateOnly) {
 // Tiny chunks force address lookups across section boundaries.
 TEST(Profile, ChunkedCorrelationBinarySearchesAcrossChunks) {
     ProvenanceWriter w;
-    const std::uint32_t s1 = w.internStack(frames({"A.M", "B.N"}));
-    const std::uint32_t s2 = w.internStack(frames({"A.M", "C.O"}));
+    const std::uint32_t s1 = stack(w, {"A.M", "B.N"});
+    const std::uint32_t s2 = stack(w, {"A.M", "C.O"});
     // 12 objects, inserted out of order; sorted then chunked.
     for (std::uint64_t i = 12; i >= 1; --i) w.addObject(i * 0x1000, (i % 2 == 0) ? s1 : s2);
     ASSERT_EQ(w.objectCount(), 12u);

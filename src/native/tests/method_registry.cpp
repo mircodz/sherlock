@@ -21,8 +21,33 @@ namespace {
 constexpr ModuleID kModule = 0x1000;
 constexpr mdMethodDef kMethod = 0x06000001;
 
-MethodRegistry::Resolution resolved(std::string symbol = "Example.Owner.Method") {
-    return {std::move(symbol), S_OK, {}};
+MethodName named(std::string type = "Owner", std::string method = "Method", std::string parameters = "()") {
+    MethodName name;
+    name.mvid = {0x5e};
+    name.module = "Example.dll";
+    name.ns = "Example";
+    name.type = std::move(type);
+    name.name = std::move(method);
+    name.parameters = name.qualifiedParameters = std::move(parameters);
+    name.returnType = name.qualifiedReturnType = "void";
+    return name;
+}
+
+MethodRegistry::Resolution resolved(MethodName name = named()) {
+    return {std::move(name), S_OK, {}};
+}
+
+// "Example.Owner.Method()" when resolved, otherwise the problem.
+std::string text(const MethodRegistry::Method& method) {
+    if (!method.problem.empty()) {
+        return "problem: " + method.problem;
+    }
+    return method.name.ns + "." + method.name.type + "." + method.name.name + method.name.genericParameters +
+           method.name.parameters;
+}
+
+std::string text(const MethodRegistry& registry, FrameId frame) {
+    return text(registry.describe(frame));
 }
 
 } // namespace
@@ -41,11 +66,13 @@ TEST(MethodRegistry, RepeatedRegistrationAndModuleLoadKeepOneCookie) {
     registry.moduleLoaded(kModule);
     EXPECT_EQ(registry.intern(kModule, kMethod), frame);
     EXPECT_EQ(calls, 1);
-    EXPECT_EQ(registry.name(frame), "Example.Owner.Method [m1:06000001]");
+    EXPECT_EQ(text(registry, frame), "Example.Owner.Method()");
 }
 
-TEST(MethodRegistry, ModulesAndOverloadTokensHaveDistinctCookiesAndNames) {
-    MethodRegistry registry([](ModuleID, mdMethodDef) { return resolved(); });
+TEST(MethodRegistry, ModulesAndOverloadTokensHaveDistinctCookies) {
+    MethodRegistry registry([](ModuleID, mdMethodDef token) {
+        return resolved(named("Owner", "Method", token == kMethod ? "(int)" : "(string)"));
+    });
     registry.moduleLoaded(kModule);
     registry.moduleLoaded(kModule + 1);
     FrameId first = registry.intern(kModule, kMethod);
@@ -53,32 +80,30 @@ TEST(MethodRegistry, ModulesAndOverloadTokensHaveDistinctCookiesAndNames) {
     FrameId otherModule = registry.intern(kModule + 1, kMethod);
     EXPECT_LT(first, overload);
     EXPECT_LT(overload, otherModule);
-    EXPECT_NE(registry.name(first), registry.name(overload));
-    EXPECT_NE(registry.name(first), registry.name(otherModule));
-    EXPECT_EQ(registry.name(first), "Example.Owner.Method [m1:06000001]");
-    EXPECT_EQ(registry.name(overload), "Example.Owner.Method [m1:06000002]");
-    EXPECT_EQ(registry.name(otherModule), "Example.Owner.Method [m2:06000001]");
+    EXPECT_EQ(text(registry, first), "Example.Owner.Method(int)");
+    EXPECT_EQ(text(registry, overload), "Example.Owner.Method(string)");
+    EXPECT_EQ(text(registry, otherModule), "Example.Owner.Method(int)");
 }
 
 TEST(MethodRegistry, ReloadedModuleRetainsHistoricalNamesAndGetsFreshCookies) {
-    std::string symbol = "Original.Type.Method";
-    MethodRegistry registry([&](ModuleID, mdMethodDef) { return resolved(symbol); });
+    std::string type = "Original";
+    MethodRegistry registry([&](ModuleID, mdMethodDef) { return resolved(named(type)); });
     registry.moduleLoaded(kModule);
     FrameId original = registry.intern(kModule, kMethod);
-    std::string originalName = registry.name(original);
+    std::string originalName = text(registry, original);
     registry.moduleUnloaded(kModule);
-    EXPECT_EQ(registry.name(original), originalName);
+    EXPECT_EQ(text(registry, original), originalName);
     EXPECT_THROW(registry.intern(kModule, kMethod), std::logic_error);
 
-    symbol = "Replacement.Type.Method";
+    type = "Replacement";
     registry.moduleLoaded(kModule);
     FrameId replacement = registry.intern(kModule, kMethod);
     EXPECT_GT(replacement, original);
-    EXPECT_EQ(registry.name(original), originalName);
-    EXPECT_TRUE(registry.name(replacement).starts_with(symbol));
+    EXPECT_EQ(text(registry, original), originalName);
+    EXPECT_EQ(text(registry, replacement), "Example.Replacement.Method()");
 }
 
-TEST(MethodRegistry, SameNamedDefinitionInReloadedModuleDoesNotAliasOldName) {
+TEST(MethodRegistry, ReloadedDefinitionGetsFreshCookieButKeepsItsName) {
     MethodRegistry registry([](ModuleID, mdMethodDef) { return resolved(); });
     registry.moduleLoaded(kModule);
     FrameId old = registry.intern(kModule, kMethod);
@@ -86,9 +111,8 @@ TEST(MethodRegistry, SameNamedDefinitionInReloadedModuleDoesNotAliasOldName) {
     registry.moduleLoaded(kModule);
     FrameId current = registry.intern(kModule, kMethod);
     EXPECT_NE(old, current);
-    EXPECT_NE(registry.name(old), registry.name(current));
-    EXPECT_TRUE(registry.name(old).ends_with("[m1:06000001]"));
-    EXPECT_TRUE(registry.name(current).ends_with("[m2:06000001]"));
+    EXPECT_EQ(text(registry, old), "Example.Owner.Method()");
+    EXPECT_EQ(text(registry, current), "Example.Owner.Method()");
 }
 
 TEST(MethodRegistry, FailedResolutionRetriesSameCookieAndReturnsIndependentCopies) {
@@ -101,14 +125,14 @@ TEST(MethodRegistry, FailedResolutionRetriesSameCookieAndReturnsIndependentCopie
     });
     registry.moduleLoaded(kModule);
     FrameId frame = registry.intern(kModule, kMethod);
-    std::string failure = registry.name(frame);
-    EXPECT_TRUE(failure.starts_with("<unresolved method "));
+    std::string failure = text(registry, frame);
+    EXPECT_TRUE(failure.starts_with("problem: "));
     EXPECT_NE(failure.find("GetModuleMetaData"), std::string::npos);
-    EXPECT_NE(failure.find("HRESULT=0x80004005"), std::string::npos);
+    EXPECT_NE(failure.find("HRESULT 0x80004005"), std::string::npos);
     EXPECT_EQ(registry.intern(kModule, kMethod), frame);
     EXPECT_EQ(calls, 2);
-    EXPECT_TRUE(registry.name(frame).starts_with("Example.Owner.Method "));
-    EXPECT_TRUE(failure.starts_with("<unresolved method "));
+    EXPECT_EQ(text(registry, frame), "Example.Owner.Method()");
+    EXPECT_TRUE(failure.starts_with("problem: "));
     EXPECT_EQ(registry.intern(kModule, kMethod), frame);
     EXPECT_EQ(calls, 2);
 }
@@ -122,14 +146,14 @@ TEST(MethodRegistry, FailedDefinitionsRemainDistinctAndSerializationDoesNotRetry
     registry.moduleLoaded(kModule);
     FrameId first = registry.intern(kModule, kMethod);
     FrameId second = registry.intern(kModule, kMethod + 1);
-    std::string firstName = registry.name(first);
-    EXPECT_NE(firstName, registry.name(second));
+    std::string firstName = text(registry, first);
+    EXPECT_NE(firstName, text(registry, second));
     registry.moduleUnloaded(kModule);
-    EXPECT_EQ(registry.name(first), firstName);
+    EXPECT_EQ(text(registry, first), firstName);
     EXPECT_EQ(calls, 2);
     registry.moduleLoaded(kModule);
     FrameId third = registry.intern(kModule, kMethod);
-    EXPECT_NE(firstName, registry.name(third));
+    EXPECT_NE(firstName, text(registry, third));
     EXPECT_EQ(calls, 3);
 }
 
@@ -138,16 +162,17 @@ TEST(MethodRegistry, MissingProfilerProducesAttributableDistinctFailures) {
     registry.moduleLoaded(kModule);
     FrameId first = registry.intern(kModule, kMethod);
     FrameId second = registry.intern(kModule, kMethod + 1);
-    EXPECT_NE(registry.name(first), registry.name(second));
-    EXPECT_NE(registry.name(first).find("GetModuleMetaData/profiler"), std::string::npos);
-    EXPECT_NE(registry.name(first).find("module=0x1000"), std::string::npos);
+    EXPECT_NE(text(registry, first), text(registry, second));
+    EXPECT_NE(text(registry, first).find("GetModuleMetaData/profiler"), std::string::npos);
+    EXPECT_NE(text(registry, first).find("module 0x1000"), std::string::npos);
+    EXPECT_EQ(registry.describe(first).name.mvid, (std::array<std::uint8_t, 16>{}));
 }
 
 TEST(MethodRegistry, UnregisteredFramesIncludingZeroNeverShareSilentUnknown) {
     MethodRegistry registry([](ModuleID, mdMethodDef) { return resolved(); });
-    EXPECT_EQ(registry.name(0), "<unregistered method frame=0>");
-    EXPECT_NE(registry.name(0), registry.name(1));
-    EXPECT_NE(registry.name(1), registry.name(2));
+    EXPECT_EQ(text(registry, 0), "problem: frame 0 was never registered");
+    EXPECT_NE(text(registry, 0), text(registry, 1));
+    EXPECT_NE(text(registry, 1), text(registry, 2));
     EXPECT_THROW(registry.intern(kModule, kMethod), std::logic_error);
     EXPECT_THROW(registry.moduleLoaded(0), std::invalid_argument);
     registry.moduleLoaded(kModule);
@@ -155,80 +180,72 @@ TEST(MethodRegistry, UnregisteredFramesIncludingZeroNeverShareSilentUnknown) {
     EXPECT_THROW(registry.intern(kModule, 0x02000001), std::invalid_argument);
 }
 
-TEST(MethodRegistry, GenericDeclarationsAndOverloadSymbolsArePreserved) {
+TEST(MethodRegistry, DescribesEveryNamePartAndTheIdentity) {
     MethodRegistry registry([](ModuleID, mdMethodDef token) {
-        return resolved(token == kMethod
-            ? "Example.Outer<T>+Inner<U>.Allocate<TValue>(System.Int32)"
-            : "Example.Outer<T>+Inner<U>.Allocate<TValue>(System.String)");
+        MethodName name = named("Outer<T>+Inner<U>", "Allocate", token == kMethod ? "(int)" : "(string)");
+        name.genericParameters = "<TValue>";
+        name.qualifiedParameters = token == kMethod ? "(System.Int32)" : "(System.String)";
+        return resolved(std::move(name));
     });
     registry.moduleLoaded(kModule);
-    FrameId first = registry.intern(kModule, kMethod);
-    FrameId second = registry.intern(kModule, kMethod + 1);
-    EXPECT_TRUE(registry.name(first).starts_with("Example.Outer<T>+Inner<U>.Allocate<TValue>(System.Int32) "));
-    EXPECT_TRUE(registry.name(second).starts_with("Example.Outer<T>+Inner<U>.Allocate<TValue>(System.String) "));
-    EXPECT_NE(registry.name(first), registry.name(second));
+    MethodRegistry::Method first = registry.describe(registry.intern(kModule, kMethod));
+    MethodRegistry::Method second = registry.describe(registry.intern(kModule, kMethod + 1));
+    EXPECT_EQ(text(first), "Example.Outer<T>+Inner<U>.Allocate<TValue>(int)");
+    EXPECT_EQ(first.token, kMethod);
+    EXPECT_EQ(second.token, kMethod + 1);
+    EXPECT_EQ(first.name.mvid, (std::array<std::uint8_t, 16>{0x5e}));
+    EXPECT_EQ(first.name.module, "Example.dll");
+    EXPECT_EQ(first.name.qualifiedParameters, "(System.Int32)");
+    EXPECT_EQ(second.name.parameters, "(string)");
+    EXPECT_TRUE(first.problem.empty());
 }
 
-TEST(MethodRegistry, LongUnicodeSymbolsAreOwnedAndNotTruncated) {
-    std::string symbol = "名字.外側<T>+内側.割り当て🚀" + std::string(4096, 'x');
-    MethodRegistry registry([&](ModuleID, mdMethodDef) { return resolved(symbol); });
+TEST(MethodRegistry, LongUnicodeNamesAreOwnedAndNotTruncated) {
+    std::string type = "外側<T>+内側" + std::string(4096, 'x');
+    MethodRegistry registry([&](ModuleID, mdMethodDef) { return resolved(named(type, "割り当て🚀")); });
     registry.moduleLoaded(kModule);
     FrameId frame = registry.intern(kModule, kMethod);
-    EXPECT_TRUE(registry.name(frame).starts_with(symbol + " "));
-    std::string original = registry.name(frame);
-    symbol.assign("changed");
-    EXPECT_EQ(registry.name(frame), original);
+    EXPECT_EQ(registry.describe(frame).name.type, type);
+    std::string original = text(registry, frame);
+    type.assign("changed");
+    EXPECT_EQ(text(registry, frame), original);
 }
 
-TEST(MethodRegistry, EscapesControlsAndSemicolonsWithoutIntroducingFoldedFrames) {
-    std::string symbol = "Example.Type.Method;\n\r\t\x1b[31m\\literal";
-    symbol.push_back('\0');
-    symbol += "end";
-    MethodRegistry registry([&](ModuleID, mdMethodDef) { return resolved(symbol); });
+TEST(MethodRegistry, KeepsMetadataBytesUnescaped) {
+    std::string method = "Method;\n\r\t\x1b[31m\\literal";
+    method.push_back('\0');
+    method += "end";
+    MethodRegistry registry([&](ModuleID, mdMethodDef) { return resolved(named("Type", method)); });
     registry.moduleLoaded(kModule);
-    FrameId frame = registry.intern(kModule, kMethod);
-    std::string label = registry.name(frame);
-    EXPECT_EQ(label, "Example.Type.Method\\x3b\\x0a\\x0d\\x09\\x1b[31m\\\\literal\\x00end [m1:06000001]");
-
-    std::string folded = "root;" + label + ";leaf 1\n";
-    EXPECT_EQ(std::count(folded.begin(), folded.end(), ';'), 2);
-    EXPECT_EQ(std::count(folded.begin(), folded.end(), '\n'), 1);
+    EXPECT_EQ(registry.describe(registry.intern(kModule, kMethod)).name.name, method);
 }
 
-TEST(MethodRegistry, EscapesEveryAsciiControlButPreservesUnicode) {
-    std::string symbol = "名字.外側.Method";
-    for (unsigned char byte = 0; byte < 0x20; ++byte) {
-        symbol.push_back(static_cast<char>(byte));
-    }
-    symbol.push_back(0x7f);
-    MethodRegistry registry([&](ModuleID, mdMethodDef) { return resolved(symbol); });
-    registry.moduleLoaded(kModule);
-    std::string label = registry.name(registry.intern(kModule, kMethod));
-    EXPECT_TRUE(label.starts_with("名字.外側.Method\\x00\\x01"));
-    EXPECT_NE(label.find("\\x1f\\x7f"), std::string::npos);
-    for (unsigned char byte : label) {
-        EXPECT_GE(byte, 0x20);
-        EXPECT_NE(byte, 0x7f);
-    }
-}
-
-TEST(MethodRegistry, EscapedMetadataDoesNotLookLikeLiteralEscapeSequences) {
-    MethodRegistry registry([](ModuleID, mdMethodDef token) {
-        return resolved(token == kMethod ? "Example.Type.Method;" : "Example.Type.Method\\x3b");
-    });
-    registry.moduleLoaded(kModule);
-    EXPECT_EQ(registry.name(registry.intern(kModule, kMethod)), "Example.Type.Method\\x3b [m1:06000001]");
-    EXPECT_EQ(registry.name(registry.intern(kModule, kMethod + 1)), "Example.Type.Method\\\\x3b [m1:06000002]");
-}
-
-TEST(MethodRegistry, UnresolvedDiagnosticsEscapeUntrustedStagesAndKeepFullIdentity) {
+TEST(MethodRegistry, UnresolvedProblemsNameTheStageAndTheMethod) {
     MethodRegistry registry([](ModuleID, mdMethodDef) {
-        return MethodRegistry::Resolution{{}, E_FAIL, "GetMethodProps;\n\x1b"};
+        return MethodRegistry::Resolution{{}, E_FAIL, "GetMethodProps"};
     });
     registry.moduleLoaded(kModule);
-    std::string label = registry.name(registry.intern(kModule, kMethod));
-    EXPECT_EQ(label, "<unresolved method frame=1 [module=0x1000 token=0x06000001 lifetime=1] "
-                     "stage=GetMethodProps\\x3b\\x0a\\x1b HRESULT=0x80004005>");
+    MethodRegistry::Method method = registry.describe(registry.intern(kModule, kMethod));
+    EXPECT_EQ(method.problem, "GetMethodProps failed with HRESULT 0x80004005 (module 0x1000, token 0x06000001, lifetime 1)");
+    EXPECT_EQ(method.token, kMethod);
+    EXPECT_TRUE(method.name.name.empty());
+    EXPECT_EQ(method.name.mvid, (std::array<std::uint8_t, 16>{}));
+}
+
+TEST(MethodRegistry, UnresolvedMethodsKeepTheirModulesIdentityButNoPartialName) {
+    MethodRegistry registry([](ModuleID, mdMethodDef) {
+        MethodName partial = named();
+        return MethodRegistry::Resolution{std::move(partial), E_FAIL, "signature"};
+    });
+    registry.moduleLoaded(kModule);
+    MethodRegistry::Method method = registry.describe(registry.intern(kModule, kMethod));
+    EXPECT_FALSE(method.problem.empty());
+    EXPECT_EQ(method.name.mvid, named().mvid);
+    EXPECT_EQ(method.name.module, "Example.dll");
+    EXPECT_TRUE(method.name.ns.empty());
+    EXPECT_TRUE(method.name.type.empty());
+    EXPECT_TRUE(method.name.name.empty());
+    EXPECT_TRUE(method.name.parameters.empty());
 }
 
 TEST(MethodRegistry, EmptySuccessfulResolutionIsAnExplicitRetryableFailure) {
@@ -239,9 +256,9 @@ TEST(MethodRegistry, EmptySuccessfulResolutionIsAnExplicitRetryableFailure) {
     });
     registry.moduleLoaded(kModule);
     FrameId frame = registry.intern(kModule, kMethod);
-    EXPECT_NE(registry.name(frame).find("resolver/empty-symbol"), std::string::npos);
+    EXPECT_NE(text(registry, frame).find("resolver/empty-name"), std::string::npos);
     EXPECT_EQ(registry.intern(kModule, kMethod), frame);
-    EXPECT_TRUE(registry.name(frame).starts_with("Example.Owner.Method "));
+    EXPECT_EQ(text(registry, frame), "Example.Owner.Method()");
 }
 
 TEST(MethodRegistry, ResolverExceptionsPropagateAndDoNotPreventRetry) {
@@ -256,7 +273,7 @@ TEST(MethodRegistry, ResolverExceptionsPropagateAndDoNotPreventRetry) {
     EXPECT_THROW(registry.intern(kModule, kMethod), std::runtime_error);
     FrameId frame = registry.intern(kModule, kMethod);
     EXPECT_EQ(frame, 1);
-    EXPECT_TRUE(registry.name(frame).starts_with("Example.Owner.Method "));
+    EXPECT_EQ(text(registry, frame), "Example.Owner.Method()");
     EXPECT_EQ(calls, 2);
 }
 
@@ -268,7 +285,7 @@ TEST(MethodRegistry, ResolverMayReenterRegistryWithoutDeadlockingOrRecursing) {
         ++calls;
         active->moduleLoaded(module);
         reentered = active->intern(module, token);
-        EXPECT_TRUE(active->name(reentered).starts_with("<unresolved method "));
+        EXPECT_TRUE(text(*active, reentered).starts_with("problem: "));
         return resolved();
     });
     active = &registry;
@@ -276,7 +293,7 @@ TEST(MethodRegistry, ResolverMayReenterRegistryWithoutDeadlockingOrRecursing) {
     FrameId frame = registry.intern(kModule, kMethod);
     EXPECT_EQ(frame, reentered);
     EXPECT_EQ(calls, 1);
-    EXPECT_TRUE(registry.name(frame).starts_with("Example.Owner.Method "));
+    EXPECT_EQ(text(registry, frame), "Example.Owner.Method()");
 }
 
 TEST(MethodRegistry, InFlightResolutionCannotPublishIntoReusedModuleLifetime) {
@@ -288,9 +305,9 @@ TEST(MethodRegistry, InFlightResolutionCannotPublishIntoReusedModuleLifetime) {
         if (calls.fetch_add(1) == 0) {
             resolving.set_value();
             released.wait();
-            return resolved("Stale.Type.Method");
+            return resolved(named("Stale"));
         }
-        return resolved("Current.Type.Method");
+        return resolved(named("Current"));
     });
     registry.moduleLoaded(kModule);
     FrameId old = 0;
@@ -302,9 +319,9 @@ TEST(MethodRegistry, InFlightResolutionCannotPublishIntoReusedModuleLifetime) {
     finish.set_value();
     worker.join();
     EXPECT_NE(old, current);
-    EXPECT_TRUE(registry.name(current).starts_with("Current.Type.Method "));
-    EXPECT_NE(registry.name(old).find("module-lifetime-ended-during-resolution"), std::string::npos);
-    EXPECT_EQ(registry.name(old).find("Stale.Type.Method"), std::string::npos);
+    EXPECT_EQ(text(registry, current), "Example.Current.Method()");
+    EXPECT_NE(text(registry, old).find("module-lifetime-ended-during-resolution"), std::string::npos);
+    EXPECT_EQ(text(registry, old).find("Stale"), std::string::npos);
 }
 
 TEST(MethodRegistry, ConcurrentRegistrationSharesCookiesAndKeepsResolvedNames) {
@@ -326,7 +343,7 @@ TEST(MethodRegistry, ConcurrentRegistrationSharesCookiesAndKeepsResolvedNames) {
             for (unsigned pass = 0; pass < 20; ++pass) {
                 for (unsigned method = 0; method < methods; ++method) {
                     frames[worker][method] = registry.intern(kModule, kMethod + method);
-                    EXPECT_FALSE(registry.name(frames[worker][method]).empty());
+                    EXPECT_FALSE(text(registry, frames[worker][method]).empty());
                 }
             }
         });
@@ -341,6 +358,6 @@ TEST(MethodRegistry, ConcurrentRegistrationSharesCookiesAndKeepsResolvedNames) {
         EXPECT_EQ(frames[worker], frames[0]);
     }
     for (FrameId frame : unique) {
-        EXPECT_TRUE(registry.name(frame).starts_with("Example.Owner.Method "));
+        EXPECT_EQ(text(registry, frame), "Example.Owner.Method()");
     }
 }

@@ -1,6 +1,8 @@
 #include "sherlock/profiler/aggregator.hpp"
+#include "sherlock/profiler/utf8.hpp"
 
 #include "sherlock/common/logger.hpp"
+#include "sherlock/profiler/signature.hpp"
 #include "sherlock/storage/profile.hpp"
 
 #include <algorithm>
@@ -11,6 +13,7 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <system_error>
 #include <string_view>
 #include <unordered_map>
@@ -38,23 +41,42 @@ thread_local ThreadShard t_shard;
 
 std::atomic<std::uint64_t> g_nextAggregatorId{1};
 
-// FNV-1a over the frame ids.
-std::uint64_t hashFrames(std::span<const FrameId> frames) {
+// FNV-1a over the frame ids and the type: one call site can allocate several types.
+std::uint64_t siteHash(std::span<const FrameId> frames, ClassID classId) {
     std::uint64_t h = 1469598103934665603ull;
     for (FrameId frame : frames) {
         h ^= frame;
         h *= 1099511628211ull;
     }
-    return h;
+    return (h ^ static_cast<std::uint64_t>(classId)) * 1099511628211ull;
 }
 
-// Preserve ASCII type names; replace other UTF-16 units with '?' on Windows and PAL.
-std::string narrow(const WCHAR* s, ULONG len) {
-    std::string out;
-    out.reserve(len);
-    for (ULONG i = 0; i < len && s[i] != 0; ++i)
-        out.push_back(s[i] < 128 ? static_cast<char>(s[i]) : '?');
-    return out;
+// The site with exactly these frames and type, or null.
+Aggregator::Site* findSite(Aggregator::SiteMap& sites, std::uint64_t hash, std::span<const FrameId> frames, ClassID classId) {
+    auto [first, last] = sites.equal_range(hash);
+    for (auto it = first; it != last; ++it) {
+        if (it->second.classId == classId && std::ranges::equal(it->second.frames, frames)) {
+            return &it->second;
+        }
+    }
+    return nullptr;
+}
+
+// A TypeDef's metadata name as UTF-8, as ClrMD spells it; empty when it can't be read.
+std::string typeDefName(IMetaDataImport* md, mdTypeDef typeDef, DWORD& flags) {
+    std::vector<WCHAR> buffer(512);
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        ULONG length = 0;
+        if (FAILED(md->GetTypeDefProps(typeDef, buffer.data(), static_cast<ULONG>(buffer.size()), &length, &flags, nullptr)))
+            return {};
+        if (length <= buffer.size()) {
+            std::span<const WCHAR> units(buffer.data(), length);
+            units = units.first(static_cast<std::size_t>(std::ranges::find(units, WCHAR{0}) - units.begin()));
+            return utf8(units, /*replaceInvalid*/ true).value_or(std::string());
+        }
+        buffer.resize(length);
+    }
+    return {};
 }
 
 // ClrMD-compatible primitive names; other element types need ClassID resolution.
@@ -80,19 +102,17 @@ const char* primitiveElementName(CorElementType t) {
     }
 }
 
-// Nested TypeDefs supply only leaf names. Join enclosing types with '+' and retain
-// metadata's generic-arity suffixes to match ClrMD.
-std::string typeDefName(IMetaDataImport* md, mdTypeDef typeDef) {
-    std::string name;
+// A TypeDef's name and those of its enclosing types, outermost first. Generic arity markers ("`2") are kept;
+// constructedTypeName replaces them with the type arguments.
+std::vector<std::string> typeDefSegments(IMetaDataImport* md, mdTypeDef typeDef) {
+    std::vector<std::string> segments;
     mdTypeDef cur = typeDef;
     for (;;) {
-        WCHAR buf[512];
-        ULONG len = 0;
         DWORD flags = 0;
-        if (FAILED(md->GetTypeDefProps(cur, buf, 512, &len, &flags, nullptr)))
+        std::string name = typeDefName(md, cur, flags);
+        if (name.empty())
             break;
-        std::string part = narrow(buf, len);
-        name = name.empty() ? part : part + "+" + name;
+        segments.insert(segments.begin(), std::move(name));
         if (!IsTdNested(flags))
             break;
         mdTypeDef enclosing = 0;
@@ -100,7 +120,7 @@ std::string typeDefName(IMetaDataImport* md, mdTypeDef typeDef) {
             break;
         cur = enclosing;
     }
-    return name;
+    return segments;
 }
 
 } // namespace
@@ -137,21 +157,16 @@ Aggregator::Shard& Aggregator::localShard() {
 }
 
 void Aggregator::record(std::span<const FrameId> frames, std::uint64_t bytes, ObjectID addr, ClassID classId) {
-    // Include type so one call site allocating different types gets separate sites.
-    std::uint64_t key = hashFrames(frames);
-    key = (key ^ static_cast<std::uint64_t>(classId)) * 1099511628211ull;
+    const std::uint64_t hash = siteHash(frames, classId);
     Shard& shard = localShard();
     std::lock_guard lock(shard.mutex);
 
-    auto it = shard.sites.find(key);
-    Site* site;
-    if (it == shard.sites.end()) {
+    Site* site = findSite(shard.sites, hash, frames, classId);
+    if (site == nullptr) {
         Site fresh;
         fresh.frames.assign(frames.begin(), frames.end());
         fresh.classId = classId;
-        site = &shard.sites.emplace(key, std::move(fresh)).first->second;
-    } else {
-        site = &it->second;
+        site = &shard.sites.emplace(hash, std::move(fresh))->second;
     }
 
     site->alloc.count += 1;
@@ -401,28 +416,24 @@ std::vector<Aggregator::Shard*> Aggregator::registeredShards() const {
     return result;
 }
 
-std::unordered_map<std::uint64_t, Aggregator::Site> Aggregator::mergeShards(
-    std::span<Shard* const> shards) {
-    std::unordered_map<std::uint64_t, Site> merged;
+Aggregator::SiteMap Aggregator::mergeShards(std::span<Shard* const> shards) {
+    SiteMap merged;
     for (Shard* shard : shards) {
-        for (auto& [key, site] : shard->sites) {
-            auto it = merged.find(key);
-            if (it == merged.end()) {
-                merged.emplace(key, site);
+        for (auto& [hash, site] : shard->sites) {
+            if (Site* existing = findSite(merged, hash, site.frames, site.classId)) {
+                existing->alloc.count += site.alloc.count;
+                existing->alloc.bytes += site.alloc.bytes;
+                existing->survived.count += site.survived.count;
+                existing->survived.bytes += site.survived.bytes;
             } else {
-                it->second.alloc.count += site.alloc.count;
-                it->second.alloc.bytes += site.alloc.bytes;
-                it->second.survived.count += site.survived.count;
-                it->second.survived.bytes += site.survived.bytes;
+                merged.emplace(hash, site);
             }
         }
     }
     return merged;
 }
 
-void Aggregator::captureState(
-    std::unordered_map<std::uint64_t, Site>& sites,
-    std::vector<LiveEntry>* live) {
+void Aggregator::captureState(SiteMap& sites, std::vector<LiveEntry>* live) {
     std::lock_guard snapshotLock(snapshotMutex_);
     std::vector<Shard*> shards = registeredShards();
 
@@ -444,21 +455,41 @@ void Aggregator::captureState(
     }
 }
 
-std::uint32_t Aggregator::internSiteStack(storage::ProvenanceWriter& pw, const Site& site) {
-    std::vector<std::string> names;
-    names.reserve(site.frames.size());
-    for (FrameId frame : site.frames)
-        names.push_back(methods_.name(frame));
-    std::vector<std::string_view> views;
-    views.reserve(names.size());
-    for (const std::string& name : names)
-        views.push_back(name);
-    return pw.internStack(views);
-}
+// The methods of one profile write. Each frame is described once, and the writer keeps methods apart by
+// identity (module MVID and token), so two different methods never share a record whatever their names.
+class Aggregator::ProfileMethods {
+public:
+    ProfileMethods(const MethodRegistry& registry, storage::ProvenanceWriter& writer) : registry_(registry), writer_(writer) {}
 
-void Aggregator::writeProfile(storage::ProvenanceWriter& pw, const std::unordered_map<std::uint64_t, Site>& sites) {
-    for (const auto& [key, site] : sites) {
-        const std::uint32_t stackId = internSiteStack(pw, site);
+    std::uint32_t stack(std::span<const FrameId> frames) {
+        scratch_.clear();
+        for (FrameId frame : frames) {
+            scratch_.push_back(method(frame));
+        }
+        return writer_.internStack(scratch_);
+    }
+
+private:
+    std::uint32_t method(FrameId frame) {
+        auto [it, inserted] = indices_.try_emplace(frame, 0u);
+        if (inserted) {
+            const MethodRegistry::Method m = registry_.describe(frame);
+            it->second = writer_.internMethod({m.name.mvid, m.token, m.name.module, m.name.ns, m.name.type, m.name.name,
+                                               m.name.genericParameters, m.name.parameters, m.name.qualifiedParameters,
+                                               m.name.returnType, m.name.qualifiedReturnType, m.problem});
+        }
+        return it->second;
+    }
+
+    const MethodRegistry& registry_;
+    storage::ProvenanceWriter& writer_;
+    std::unordered_map<FrameId, std::uint32_t> indices_;
+    std::vector<std::uint32_t> scratch_;
+};
+
+void Aggregator::writeProfile(storage::ProvenanceWriter& pw, ProfileMethods& methods, const SiteMap& sites) {
+    for (const auto& [hash, site] : sites) {
+        const std::uint32_t stackId = methods.stack(site.frames);
         const std::uint32_t typeId = pw.internType(resolveTypeName(site.classId));
         pw.addAllocation(stackId, typeId, site.alloc.bytes, site.alloc.count, site.survived.bytes, site.survived.count);
     }
@@ -468,19 +499,20 @@ void Aggregator::writeProfile(storage::ProvenanceWriter& pw, const std::unordere
 // shared stack table. sl joins the correlation to a heap dump by address.
 bool Aggregator::emitCorrelation(const std::string& path) noexcept {
     try {
-        std::unordered_map<std::uint64_t, Site> merged;
+        SiteMap merged;
         std::vector<LiveEntry> live;
         captureState(merged, &live);
 
         storage::ProvenanceWriter pw;
-        writeProfile(pw, merged);
+        ProfileMethods methods(methods_, pw);
+        writeProfile(pw, methods, merged);
 
         // Site frames and class IDs are immutable, so resolve them outside shard locks.
         std::unordered_map<const Site*, std::uint32_t> siteStack;
         for (const LiveEntry& lv : live) {
             auto [it, inserted] = siteStack.try_emplace(lv.site, 0u);
             if (inserted) {
-                it->second = internSiteStack(pw, *lv.site);
+                it->second = methods.stack(lv.site->frames);
             }
             pw.addObject(static_cast<std::uint64_t>(lv.addr), it->second);
         }
@@ -507,10 +539,11 @@ bool Aggregator::emitCorrelation(const std::string& path) noexcept {
 // Exit-time (or live-flush) allocation aggregate: allocations only, no correlation.
 bool Aggregator::dump(const std::string& path) noexcept {
     try {
-        std::unordered_map<std::uint64_t, Site> merged;
+        SiteMap merged;
         captureState(merged, nullptr);
         storage::ProvenanceWriter pw;
-        writeProfile(pw, merged);
+        ProfileMethods methods(methods_, pw);
+        writeProfile(pw, methods, merged);
 
         if (!writeSlab(path, pw)) {
             return false;
@@ -621,12 +654,19 @@ std::string Aggregator::resolveTypeNameUncached(ClassID classId) {
     ULONG rank = 0;
     if (info_->IsArrayClass(classId, &elementType, &elementClass, &rank) == S_OK) {
         std::string element;
-        if (const char* prim = primitiveElementName(elementType); prim[0] != '\0')
-            element = prim;
-        else if (elementClass != 0)
-            element = resolveTypeName(elementClass);
-        else
-            element = "System.Object";
+        if (elementType == ELEMENT_TYPE_FNPTR) {
+            element = "System.IntPtr"; // ClrMD's name for function-pointer elements
+        } else if (elementType == ELEMENT_TYPE_PTR) {
+            element = "<pointer>"; // the profiling API doesn't expose the pointee, which ClrMD shows (System.Int32*)
+        } else {
+            // The element's own type first: an enum array reports its underlying primitive as the element type.
+            if (elementClass != 0)
+                element = resolveTypeName(elementClass);
+            if (element.empty() || element == "<unknown>") {
+                const char* primitive = primitiveElementName(elementType);
+                element = primitive[0] != '\0' ? primitive : elementClass != 0 ? element : "System.Object";
+            }
+        }
 
         std::string brackets = "[";
         for (ULONG i = 1; i < rank; ++i)
@@ -637,16 +677,43 @@ std::string Aggregator::resolveTypeNameUncached(ClassID classId) {
 
     ModuleID moduleId = 0;
     mdTypeDef typeDef = 0;
-    if (FAILED(info_->GetClassIDInfo(classId, &moduleId, &typeDef)) || typeDef == 0)
+    ClassID parent = 0;
+    ULONG32 argumentCount = 0;
+    std::vector<ClassID> argumentIds;
+    // The first call reports the module, TypeDef and argument count; the CLR truncates to the buffer otherwise.
+    HRESULT hr = info_->GetClassIDInfo2(classId, &moduleId, &typeDef, &parent, 0, &argumentCount, nullptr);
+    if (SUCCEEDED(hr) && argumentCount > 0) {
+        argumentIds.resize(argumentCount);
+        hr = info_->GetClassIDInfo2(classId, &moduleId, &typeDef, &parent, argumentCount, &argumentCount, argumentIds.data());
+    }
+    if (FAILED(hr)) {
+        // Without the arguments the open name ("List`1") is still better than nothing.
+        argumentCount = 0;
+        if (FAILED(info_->GetClassIDInfo(classId, &moduleId, &typeDef)))
+            return "<unknown>";
+    }
+    if (typeDef == 0)
         return "<unknown>";
 
     IMetaDataImport* md = nullptr;
     if (FAILED(info_->GetModuleMetaData(moduleId, ofRead, IID_IMetaDataImport, (IUnknown**)&md)) || md == nullptr)
         return "<unknown>";
-
-    std::string name = typeDefName(md, typeDef);
+    std::vector<std::string> segments = typeDefSegments(md, typeDef);
     md->Release();
-    return name.empty() ? "<unknown>" : name;
+    if (segments.empty())
+        return "<unknown>";
+
+    std::vector<std::string> arguments;
+    arguments.reserve(argumentCount);
+    for (ULONG32 i = 0; i < argumentCount; ++i)
+        arguments.push_back(resolveTypeName(argumentIds[i]));
+    if (std::optional<std::string> constructed = signature::constructedTypeName(segments, arguments))
+        return *constructed;
+
+    std::string open;
+    for (const std::string& segment : segments)
+        open += (open.empty() ? "" : "+") + segment;
+    return open;
 }
 
 } // namespace Sherlock

@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core.Collection;
 using Sherlock.Core.Store;
@@ -11,6 +12,8 @@ public sealed class RunReplCommand : IReplCommand
     public string Name => "run";
     public string Summary => "Launch a process and track it as a live target.";
     public string Usage => RunLauncher.Usage;
+    public int MaxArgs => int.MaxValue;
+    public IReadOnlyList<string>? Options => null;
     public string Category => "Live";
 
     public ReplResult Execute(ReplContext context, string[] args)

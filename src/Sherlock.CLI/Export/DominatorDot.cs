@@ -20,8 +20,8 @@ public static class DominatorDot
         {
             double share = node.RetainedSize / total;
             dot.AddNode($"n{node.Id}", heat: share, size: node.RetainedSize / maxRetained,
-                TypeNames.Short(node.TypeName),
-                $"{ByteSize.Format((long)node.RetainedSize)} ({100 * share:0.0}%)",
+                DisplayNames.Type(node.TypeName),
+                $"{ByteSize.Format((long)node.RetainedSize)} ({Counts.Percent(100 * share)})",
                 $"0x{node.Address:x}");
         }
 

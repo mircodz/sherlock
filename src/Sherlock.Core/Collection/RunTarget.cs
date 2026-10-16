@@ -11,8 +11,6 @@ using System.Threading.Tasks;
 
 namespace Sherlock.Core.Collection;
 
-public sealed record HeapStats(long Total, long Gen0, long Gen1, long Gen2, long Loh, long Poh);
-public sealed record CoherentCaptureResult(string DumpPath, string ProvenancePath, long GcCount);
 public sealed record RunTrigger(int Pid, string Name, string? ExitToken = null);
 
 /// <summary>A launched process tree and its profiler connection.</summary>
@@ -32,17 +30,42 @@ public sealed class RunTarget : IDisposable
     private ProfilerControl? _control;
 
     private readonly ConcurrentQueue<RunTrigger> _triggerHits = new();
-    private sealed record CoherentCaptureWaiter(
-        int Pid,
-        TaskCompletionSource<(long Gc, string? Error)> Signal);
+    // Completes with null once the capture GC is parked, or with the profiler's error.
+    private sealed record CoherentCaptureWaiter(int Pid, TaskCompletionSource<string?> Signal);
     private readonly ConcurrentDictionary<string, CoherentCaptureWaiter> _coherentCaptures = new();
     private static readonly TimeSpan CoherentReadyTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>Bounds one snapshot capture. The profiler releases a parked GC or exit after the same budget.</summary>
+    internal static readonly TimeSpan CaptureTimeout = TimeSpan.FromMinutes(30);
+
+    // EventPipe session commands run managed code on a target's single diagnostics thread. During a coherent
+    // capture that code waits for the parked GC, and the dump request queues behind it until the capture times
+    // out. Counter sessions therefore start and stop only while no capture holds this gate. Not reentrant on purpose.
+    private readonly SemaphoreSlim _diagnosticsGate = new(1, 1);
+    private readonly ConcurrentDictionary<int, RuntimeCounters> _counters = new();
+    private readonly ConcurrentDictionary<int, (string Error, DateTimeOffset RetryAt)> _counterFailures = new();
+    private static readonly TimeSpan CounterRetryDelay = TimeSpan.FromSeconds(2);
+    private bool _disposed;
+
+    internal SemaphoreSlim DiagnosticsGate => _diagnosticsGate;
 
     private readonly ConcurrentDictionary<int, string> _names = new();
     private readonly ConcurrentDictionary<int, byte> _includedPids = new();
     private string? _processSelectionError;
 
     public string? NameFor(int pid) => _names.TryGetValue(pid, out string? n) ? n : null;
+
+    /// <summary>The app a command runs: "dotnet Orders.Api.dll --port 80" is Orders.Api, not dotnet.</summary>
+    internal static string AppName(IReadOnlyList<string> command)
+    {
+        string host = Path.GetFileNameWithoutExtension(command[0]);
+        if (host.Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+            command.Skip(1).FirstOrDefault(arg => arg.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) is { } app)
+        {
+            return Path.GetFileNameWithoutExtension(app);
+        }
+        return Path.GetFileName(command[0]);
+    }
     public int IncludedProcessCount => _includedPids.Count;
     public string? ProcessSelectionError => Volatile.Read(ref _processSelectionError);
 
@@ -174,7 +197,7 @@ public sealed class RunTarget : IDisposable
         {
             AllocationPath = InsertPid(_allocationTemplate, _root.Id);
         }
-        Name = Path.GetFileName(options.Command[0]);
+        Name = AppName(options.Command);
         _names.TryAdd(_root.Id, Name);
         StartLog();
     }
@@ -218,6 +241,7 @@ public sealed class RunTarget : IDisposable
         _allocationTemplate = Path.Combine(_captureDir!, "allocations.slab");
         psi.Environment["SHERLOCK_PROFILE_OUT"] = _allocationTemplate;
         psi.Environment["SHERLOCK_LOG_LEVEL"] = options.ProfilerLogLevel.ToString().ToLowerInvariant();
+        psi.Environment["SHERLOCK_CAPTURE_TIMEOUT_MS"] = ((long)CaptureTimeout.TotalMilliseconds).ToString(System.Globalization.CultureInfo.InvariantCulture);
         if (options.HasProcessFilter)
         {
             psi.Environment["SHERLOCK_INCLUDE_PROCESSES"] = string.Join('\n', options.IncludeProcesses);
@@ -274,18 +298,17 @@ public sealed class RunTarget : IDisposable
             {
                 _triggerHits.Enqueue(new RunTrigger(pid, "exit", fields[2]));
             }
-            else if (fields.Length >= 4 && fields[1] == ProfilerControl.CoherentCaptureReady &&
+            else if (fields.Length >= 3 && fields[1] == ProfilerControl.CoherentCaptureReady &&
                      _coherentCaptures.TryGetValue(fields[2], out CoherentCaptureWaiter? ready) &&
                      ready.Pid == pid)
             {
-                long gc = long.TryParse(fields[3], out long value) ? value : -1;
-                ready.Signal.TrySetResult((gc, null));
+                ready.Signal.TrySetResult(null);
             }
             else if (fields.Length >= 4 && fields[1] == ProfilerControl.CoherentCaptureFailed &&
                      _coherentCaptures.TryGetValue(fields[2], out CoherentCaptureWaiter? failed) &&
                      failed.Pid == pid)
             {
-                failed.Signal.TrySetResult((-1, fields[3]));
+                failed.Signal.TrySetResult(fields[3]);
             }
         };
         _control.ClientDisconnected += pid =>
@@ -294,7 +317,7 @@ public sealed class RunTarget : IDisposable
             {
                 if (capture.Pid == pid)
                 {
-                    capture.Signal.TrySetResult((-1, "profiler control channel disconnected"));
+                    capture.Signal.TrySetResult("profiler control channel disconnected");
                 }
             }
         };
@@ -419,73 +442,41 @@ public sealed class RunTarget : IDisposable
         return (IReadOnlyList<RunTrigger>?)hits ?? [];
     }
 
-    /// <summary>Forces a GC and captures cumulative allocations plus live-object correlation.</summary>
-    public (string Path, long GcAtEmit) CaptureCorrelation(int pid, TimeSpan timeout)
+    /// <summary>Latest runtime metrics for a .NET process of this run, with or without the profiler. The first call
+    /// starts an EventPipe session that lasts until the process exits or this target is disposed.</summary>
+    public RuntimeMetrics Metrics(int pid)
     {
-        EnsureProcessIncluded(pid);
-        if (_control is null || !ProcessLocator.IsAlive(pid))
+        if (_counters.TryGetValue(pid, out RuntimeCounters? counters))
         {
-            throw new DumpAnalysisException($"Process {pid} has no live profiler control channel.");
+            return new RuntimeMetrics(counters.Latest, null);
         }
-
-        (bool ok, string[] fields) = Request(pid, ProfilerControl.EmitCorrelation, timeout);
-        if (!ok)
+        if (_counterFailures.TryGetValue(pid, out var failure) && DateTimeOffset.UtcNow < failure.RetryAt)
         {
-            throw new DumpAnalysisException(fields.FirstOrDefault() ?? $"Profiler in process {pid} did not produce correlation data.");
+            return new RuntimeMetrics(null, failure.Error);
         }
-
-        // The profiler reports its own (per-pid) sidecar path in the response.
-        string path = fields.Length > 0 ? fields[0] : "";
-        long gc = fields.Length > 1 && long.TryParse(fields[1], out long g) ? g : -1;
-        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        if (!_diagnosticsGate.Wait(0))
         {
-            throw new DumpAnalysisException($"Profiler in process {pid} reported a missing correlation file.");
+            return new RuntimeMetrics(null, null); // a capture holds the target; try again on the next read
         }
-        return (path, gc);
-    }
-
-    public long GcCount(int pid, TimeSpan timeout)
-    {
-        if (!IncludesProcess(pid))
+        try
         {
-            return -1;
-        }
-        if (_control is null || !ProcessLocator.IsAlive(pid))
-        {
-            return -1;
-        }
-
-        (bool ok, string[] fields) = Request(pid, ProfilerControl.GcCount, timeout);
-        return ok && fields.Length > 0 && long.TryParse(fields[0], out long g) ? g : -1;
-    }
-
-    public HeapStats? HeapSize(int pid, TimeSpan timeout)
-    {
-        if (!IncludesProcess(pid))
-        {
-            return null;
-        }
-        if (_control is null || !ProcessLocator.IsAlive(pid))
-        {
-            return null;
-        }
-
-        (bool ok, string[] fields) = Request(pid, ProfilerControl.HeapSize, timeout);
-        if (!ok || fields.Length < 6)
-        {
-            return null;
-        }
-
-        // total \t gen0 \t gen1 \t gen2 \t loh \t poh (bytes)
-        var v = new long[6];
-        for (int i = 0; i < 6; i++)
-        {
-            if (!long.TryParse(fields[i], out v[i]))
+            if (!_disposed && !_counters.ContainsKey(pid))
             {
-                return null;
+                _counters[pid] = RuntimeCounters.Start(pid, TimeSpan.FromSeconds(1));
+                _counterFailures.TryRemove(pid, out _);
             }
+            return new RuntimeMetrics(null, null);
         }
-        return new HeapStats(v[0], v[1], v[2], v[3], v[4], v[5]);
+        catch (DumpAnalysisException ex)
+        {
+            string error = ex.InnerException is OperationCanceledException ? ex.Message : ex.InnerException?.Message ?? ex.Message;
+            _counterFailures[pid] = (error, DateTimeOffset.UtcNow + CounterRetryDelay);
+            return new RuntimeMetrics(null, error);
+        }
+        finally
+        {
+            _diagnosticsGate.Release();
+        }
     }
 
     public (bool Ok, string Detail) ArmTrigger(int pid, string spec, TimeSpan timeout)
@@ -520,7 +511,8 @@ public sealed class RunTarget : IDisposable
         throw new DumpAnalysisException(ok ? $"Profiler in process {pid} reported a missing allocation file." : fields.FirstOrDefault() ?? $"Profiler in process {pid} did not produce allocation data.");
     }
 
-    public CoherentCaptureResult CaptureCoherentSnapshot(int pid, TimeSpan timeout)
+    /// <summary>Parks the target inside a forced GC, dumps it, then writes provenance for exactly that heap.</summary>
+    public SnapshotCaptureResult CaptureCoherentSnapshot(int pid)
     {
         EnsureProcessIncluded(pid);
         if (!_correlate || _control is null || !ProcessLocator.IsAlive(pid))
@@ -529,7 +521,7 @@ public sealed class RunTarget : IDisposable
         }
 
         string token = Guid.NewGuid().ToString("N");
-        var signal = new TaskCompletionSource<(long Gc, string? Error)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var signal = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         if (!_coherentCaptures.TryAdd(token, new CoherentCaptureWaiter(pid, signal)))
         {
             throw new InvalidOperationException("Could not register coherent capture.");
@@ -537,6 +529,7 @@ public sealed class RunTarget : IDisposable
 
         string? dumpPath = null;
         bool begun = false;
+        _diagnosticsGate.Wait();
         try
         {
             (bool ok, string[] fields) = Request(pid, ProfilerControl.BeginCoherentCapture, TimeSpan.FromSeconds(10), token);
@@ -546,50 +539,47 @@ public sealed class RunTarget : IDisposable
             }
             begun = true;
 
-            TimeSpan readyTimeout = timeout < CoherentReadyTimeout ? timeout : CoherentReadyTimeout;
-            (long gc, string? error) result;
+            string? error;
             try
             {
-                result = signal.Task.WaitAsync(readyTimeout).GetAwaiter().GetResult();
+                error = signal.Task.WaitAsync(CoherentReadyTimeout).GetAwaiter().GetResult();
             }
             catch (TimeoutException ex)
             {
                 throw new DumpAnalysisException(
-                    $"Profiler did not reach the coherent capture barrier within {readyTimeout.TotalSeconds:0} seconds.",
+                    $"Profiler did not reach the coherent capture barrier within {CoherentReadyTimeout.TotalSeconds:0} seconds.",
                     ex);
             }
-            (long gc, string? error) = result;
             if (error is not null)
             {
                 throw new DumpAnalysisException($"Profiler could not park the capture GC: {error}");
             }
 
             dumpPath = DumpCollector.Collect(pid, DumpKind.Heap);
-            (ok, fields) = Request(pid, ProfilerControl.CompleteCoherentCapture, timeout, token);
+            (ok, fields) = Request(pid, ProfilerControl.CompleteCoherentCapture, CaptureTimeout, token);
             if (!ok || fields.Length == 0 || !File.Exists(fields[0]))
             {
                 throw new DumpAnalysisException(fields.FirstOrDefault() ?? "Profiler could not complete coherent capture.");
             }
-
-            string provenance = fields[0];
-            long completedGc = fields.Length > 1 && long.TryParse(fields[1], out long value) ? value : gc;
-            return new CoherentCaptureResult(dumpPath, provenance, completedGc);
+            return new SnapshotCaptureResult(dumpPath, fields[0]);
         }
-        catch
+        catch (Exception ex)
         {
             if (begun && _control.IsConnected(pid))
             {
                 _ = Request(pid, ProfilerControl.AbortCoherentCapture, TimeSpan.FromSeconds(5), token);
             }
-            if (dumpPath is not null)
+            if (dumpPath is null)
             {
-                try { File.Delete(dumpPath); } catch { /* best-effort cleanup */ }
+                throw;
             }
-            throw;
+            // The dump is still a valid heap snapshot; report it instead of deleting it.
+            throw SnapshotCapture.Failure(pid, ex, dumpPath, provenancePath: null);
         }
         finally
         {
             _coherentCaptures.TryRemove(token, out _);
+            _diagnosticsGate.Release();
         }
     }
 
@@ -690,6 +680,20 @@ public sealed class RunTarget : IDisposable
     public void Dispose()
     {
         // Dispose releases handles; only Kill terminates the process tree.
+        _diagnosticsGate.Wait();
+        try
+        {
+            _disposed = true;
+            foreach (RuntimeCounters counters in _counters.Values)
+            {
+                counters.Dispose();
+            }
+            _counters.Clear();
+        }
+        finally
+        {
+            _diagnosticsGate.Release();
+        }
         lock (_logLock)
         {
             _log?.Dispose();

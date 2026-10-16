@@ -29,11 +29,14 @@ inline constexpr std::size_t kDefaultChunkBytes = 256u << 20; // 256 MiB
 // Keep values in sync with the C# SectionType enum.
 enum class SectionType : std::uint32_t {
     Strings = 1,
-    Frames = 2,
+    Frames = 2, // retired: profiles before methods had identities; readers reject it
     Stacks = 3,
     StackFrames = 4,
     Allocations = 5,
     Correlation = 6,
+    Modules = 25,
+    Methods = 26,
+    Types = 27,
 };
 
 namespace detail {

@@ -71,6 +71,10 @@ public sealed class SlabFile : IDisposable
             {
                 throw new InvalidDataException("section overlaps the container header");
             }
+            if (length > 0 && offset % ContainerFormat.Alignment != 0)
+            {
+                throw new InvalidDataException($"section at offset {offset} is not {ContainerFormat.Alignment}-byte aligned");
+            }
             if (records > long.MaxValue)
             {
                 throw new InvalidDataException("section record count exceeds supported range");

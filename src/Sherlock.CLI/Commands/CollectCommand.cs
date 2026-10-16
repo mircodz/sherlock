@@ -41,7 +41,7 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
         public bool Analyze { get; init; }
     }
 
-    protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellation)
+    public override int Execute(CommandContext context, Settings settings, CancellationToken cancellation)
     {
         IAnsiConsole console = AnsiConsole.Console;
 
@@ -84,7 +84,7 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
             sourceProcess: sourceName,
             sourcePid: pid);
 
-        Output.Success(console, $"Saved [bold]{entry.Id}[/] [#808791]({ByteSize.Format(entry.SizeBytes)})[/]");
+        Output.Success(console, $"Saved [bold]{entry.Id}[/] [{Palette.Muted}]({ByteSize.Format(entry.SizeBytes)})[/]");
 
         if (settings.Analyze)
         {
@@ -94,7 +94,7 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
             return 0;
         }
 
-        console.MarkupLineInterpolated($"    [#808791]next: sl · load {entry.Id}[/]");
+        console.MarkupLineInterpolated($"    [{Palette.Muted}]next: sl {entry.Id}[/]");
         return 0;
     }
 
@@ -112,7 +112,7 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
         table.AddColumn("[bold]Process[/]");
         foreach (DotnetProcess process in processes)
         {
-            table.AddRow(process.Pid.ToString(), Markup.Escape(process.Name));
+            table.AddRow(process.Pid.ToString(), Styled.Text(process.Name));
         }
 
         console.Write(table);
@@ -143,13 +143,13 @@ public sealed class CollectCommand : Command<CollectCommand.Settings>
                 return false;
             case 1:
                 pid = matches[0].Pid;
-                Output.Info(console, $"Matched [#00D7FF]{matches[0].Name}[/] · pid {pid}");
+                Output.Info(console, $"Matched [{Palette.Name}]{Printable.Escape(matches[0].Name)}[/] · pid {pid}");
                 return true;
             default:
                 Output.Error(console, $"'{settings.Name}' is ambiguous ({matches.Count} matches). Use [bold]--pid[/]:");
                 foreach (DotnetProcess process in matches)
                 {
-                    console.MarkupLineInterpolated($"  [#808791]{process.Pid}[/]  {process.Name}");
+                    console.MarkupLineInterpolated($"  [{Palette.Muted}]{process.Pid}[/]  {Printable.Escape(process.Name)}");
                 }
 
                 return false;

@@ -18,17 +18,18 @@ public sealed class DiffReplCommand : IReplCommand
     public string Summary => "Compare two snapshots by type: what grew and what's new (leak-finding).";
     public string Category => "Analysis";
     public string Usage => "diff <base> <target> [count]";
+    public int MaxArgs => 3;
 
     public ReplResult Execute(ReplContext context, string[] args)
     {
         Args.Require(args, 2, Usage);
-        int limit = Args.Limit(args, 2, DefaultLimit);
+        int limit = Args.Count(args, 2, DefaultLimit, Usage);
 
         SnapshotEntry baseSnap = context.ResolveSnapshot(args[0]);
         SnapshotEntry targetSnap = context.ResolveSnapshot(args[1]);
         if (baseSnap.Path == targetSnap.Path)
         {
-            context.Console.MarkupLine("[#FFAF00]Base and target are the same snapshot.[/]");
+            context.Console.MarkupLine($"[{Palette.Warning}]Base and target are the same snapshot.[/]");
             return ReplResult.Success;
         }
 
@@ -56,7 +57,7 @@ public sealed class DiffReplCommand : IReplCommand
 
         if (rows.Count == 0)
         {
-            context.Console.MarkupLineInterpolated($"[#AFFF00]No differences[/] between {baseSnap.Id} and {targetSnap.Id}.");
+            context.Console.MarkupLineInterpolated($"[{Palette.Hot}]No differences[/] between {baseSnap.Id} and {targetSnap.Id}.");
             return ReplResult.Success;
         }
 
@@ -64,19 +65,21 @@ public sealed class DiffReplCommand : IReplCommand
             rows.Where(r => r.DBytes > 0).OrderByDescending(r => r.DBytes).ToList();
 
         context.Console.MarkupLineInterpolated(
-            $"[#808791]diff[/] [bold]{baseSnap.Id}[/] [#808791]→[/] [bold]{targetSnap.Id}[/]  [#808791](growth = leak candidates)[/]");
+            $"[{Palette.Muted}]diff[/] [bold]{baseSnap.Id}[/] [{Palette.Muted}]→[/] [bold]{targetSnap.Id}[/]  [{Palette.Muted}](growth = leak candidates)[/]");
 
         var table = Theme.Table(expand: true);
         table.AddColumn(new TableColumn("[bold]Δ bytes[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]Δ count[/]").RightAligned());
         table.AddColumn("[bold]Type[/]");
+        table.AddColumn("[bold]Namespace[/]");
 
         foreach ((string type, long dCount, long dBytes, bool isNew) in grew.Take(limit))
         {
             table.AddRow(
-                $"[#AFFF00]+{ByteSize.Format(dBytes)}[/]",
+                $"[{Palette.Hot}]+{ByteSize.Format(dBytes)}[/]",
                 $"+{Counts.Format(dCount)}",
-                $"[#00D7FF]{Markup.Escape(TypeNames.Short(type))}[/]{(isNew ? " [#AFFF00](new)[/]" : "")}");
+                $"{Styled.Type(type)}{(isNew ? $" [{Palette.Hot}](new)[/]" : "")}",
+                Styled.Namespace(type));
         }
 
         context.Console.Write(table);
@@ -85,7 +88,7 @@ public sealed class DiffReplCommand : IReplCommand
         long grewBytes = grew.Sum(r => r.DBytes);
         int shrank = rows.Count(r => r.DBytes < 0);
         context.Console.MarkupLineInterpolated(
-            $"[#808791]{grew.Count} types grew ([/][#AFFF00]+{ByteSize.Format(grewBytes)}[/][#808791]), {shrank} shrank. Net {(netBytes >= 0 ? "+" : "-")}[/][bold]{ByteSize.Format(Math.Abs(netBytes))}[/][#808791].[/]");
+            $"[{Palette.Muted}]{grew.Count} types grew ([/][{Palette.Hot}]+{ByteSize.Format(grewBytes)}[/][{Palette.Muted}]), {shrank} shrank. Net {(netBytes >= 0 ? "+" : "-")}[/][bold]{ByteSize.Format(Math.Abs(netBytes))}[/][{Palette.Muted}].[/]");
         return ReplResult.Success;
     }
 

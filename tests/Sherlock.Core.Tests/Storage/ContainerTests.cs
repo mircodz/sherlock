@@ -143,6 +143,21 @@ public class ContainerTests : IDisposable
     }
 
     [Fact]
+    public void Rejects_MisalignedSections()
+    {
+        var w = new ContainerWriter();
+        w.AddSection(SectionType.Strings, 1, 0, new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9 }, 9);
+        string path = _tmp.File();
+        w.Save(path);
+        byte[] bytes = File.ReadAllBytes(path);
+        ulong offset = BitConverter.ToUInt64(bytes, 24);
+        BitConverter.TryWriteBytes(bytes.AsSpan(24, sizeof(ulong)), offset + 1); // one byte later, still in bounds
+        File.WriteAllBytes(path, [.. bytes, 0]);
+
+        Assert.Contains("aligned", Assert.Throws<InvalidDataException>(() => SlabFile.Open(path)).Message);
+    }
+
+    [Fact]
     public void Open_MemoryMapsAFile_AndReadsZeroCopy()
     {
         var w = new ContainerWriter();

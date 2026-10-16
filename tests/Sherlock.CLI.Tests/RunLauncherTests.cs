@@ -75,10 +75,9 @@ public sealed class RunLauncherTests
         Assert.Null(Parse());
         Assert.Null(Parse("--"));
         Assert.Null(Parse(""));
-        Assert.Null(Parse("--experimental-gc-barrier", "app"));
-        RunOptions options = Assert.IsType<RunOptions>(Parse("--experimental-gc-barrier", "--correlate", "app"));
-        Assert.True(options.ExperimentalGcBarrier);
-        Assert.True(options.UseGcBarrier);
+        Assert.Null(Parse("--include-process", "bin/app", "app"));
+        RunOptions options = Assert.IsType<RunOptions>(Parse("--include-process", "app*", "app"));
+        Assert.True(options.HasProcessFilter);
     }
 
     [Fact]

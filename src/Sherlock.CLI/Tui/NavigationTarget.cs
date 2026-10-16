@@ -1,4 +1,5 @@
 using System;
+using Sherlock.Core.Profiling;
 
 namespace Sherlock.CLI.Tui;
 
@@ -13,4 +14,4 @@ internal abstract record NavigationTarget
 
 internal sealed record ObjTarget(ulong Address, ObjectTab Tab = ObjectTab.Inspect) : NavigationTarget;
 internal sealed record TypeTarget(string Type, TypeTab Tab = TypeTab.Instances) : NavigationTarget;
-internal sealed record MethodTarget(string Method) : NavigationTarget;
+internal sealed record MethodTarget(MethodFrame Method) : NavigationTarget;

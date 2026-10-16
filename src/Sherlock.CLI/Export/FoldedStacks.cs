@@ -19,8 +19,8 @@ public static class FoldedStacks
                 continue;
             }
 
-            // Escape legacy names containing the frame separator.
-            sb.Append(string.Join(';', site.Frames.Select(frame => frame.Replace(';', ':'))));
+            // ';' separates frames, so it can't appear in one.
+            sb.Append(string.Join(';', site.Frames.Select(frame => frame.Label.Replace(';', ':'))));
             sb.Append(' ');
             sb.Append(value);
             sb.Append('\n');

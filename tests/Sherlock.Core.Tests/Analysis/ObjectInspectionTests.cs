@@ -23,52 +23,13 @@ public sealed class ObjectInspectionTests
     }
 
     [Theory]
-    [InlineData("first\nsecond\r\n\t\0", "first\\nsecond\\r\\n\\t\\0")]
-    [InlineData("\"quoted\"\\path", "\\\"quoted\\\"\\\\path")]
-    [InlineData("\u001b[31mred\u0085\u2028\u2029\u202e", "\\u001b[31mred\\u0085\\u2028\\u2029\\u202e")]
-    [InlineData("😀", "😀")]
-    public void PreviewEscapesTerminalControls(string input, string expected)
+    [InlineData("<Payload>k__BackingField", "Payload")]
+    [InlineData("_firstChar", "_firstChar")]
+    [InlineData("<>k__BackingField", "<>k__BackingField")]
+    [InlineData(null, "<field>")]
+    public void BackingFieldsDisplayAsTheirProperty(string? field, string expected)
     {
-        string preview = ObjectInspector.EscapePreview(input);
-
-        Assert.Equal(expected, preview);
-        Assert.DoesNotContain(preview, c => char.IsControl(c) ||
-            char.GetUnicodeCategory(c) is UnicodeCategory.Format or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator);
-    }
-
-    [Fact]
-    public void CharacterPreviewEscapesSingleQuotes()
-    {
-        Assert.Equal("\\'", ObjectInspector.EscapePreview("'", '\''));
-    }
-
-    [Fact]
-    public void PreviewDoesNotTruncateAtTheLimit()
-    {
-        string text = new('x', 256);
-        Assert.Equal(text, ObjectInspector.EscapePreview(text));
-    }
-
-    [Fact]
-    public void PreviewIsBoundedAndMarksTruncation()
-    {
-        string preview = ObjectInspector.EscapePreview(new string('x', 100_000));
-        Assert.Equal(new string('x', 255) + "…", preview);
-    }
-
-    [Fact]
-    public void PreviewNeverSplitsAnEscape()
-    {
-        string preview = ObjectInspector.EscapePreview(new string('x', 253) + "\u001bmore");
-        Assert.Equal(new string('x', 253) + "…", preview);
-    }
-
-    [Fact]
-    public void PreviewNeverSplitsASurrogatePair()
-    {
-        string preview = ObjectInspector.EscapePreview(new string('x', 254) + "😀more");
-        Assert.Equal(new string('x', 254) + "…", preview);
-        Assert.Equal("\\ud800", ObjectInspector.EscapePreview("\ud800"));
+        Assert.Equal(expected, ObjectInspector.FieldDisplayName(field));
     }
 
     [Theory]

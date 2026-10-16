@@ -237,7 +237,7 @@ public sealed class HeapGraph : IDisposable
     }
 
     /// <summary>Lists the largest matching objects without previews, or null when type columns are absent.</summary>
-    public InstanceListing? ListInstances(string typeFilter, int limit = 20, CancellationToken cancellationToken = default)
+    public InstanceListing? ListInstances(string typeFilter, int limit = 20, CancellationToken cancellationToken = default, bool exact = false)
     {
         ThrowIfDisposed();
         ArgumentException.ThrowIfNullOrEmpty(typeFilter);
@@ -253,7 +253,7 @@ public sealed class HeapGraph : IDisposable
         for (int t = 0; t < names.Length; t++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            matches[t] = names[t].Contains(typeFilter, StringComparison.OrdinalIgnoreCase);
+            matches[t] = exact ? names[t] == typeFilter : names[t].Contains(typeFilter, StringComparison.OrdinalIgnoreCase);
             anyMatch |= matches[t];
         }
         if (!anyMatch)

@@ -51,6 +51,10 @@ public sealed class HeapDoctor(Snapshot snapshot)
         }
     }
 
+    // A share alone isn't a problem: on a small heap, some object always holds most of it.
+    private const ulong MinRetainedBytes = 10 << 20;
+    private const ulong MinFreeBytes = 32 << 20;
+
     private static void Retention(List<Finding> findings, DominatorTree tree)
     {
         ulong total = tree.TotalReachableBytes;
@@ -60,7 +64,7 @@ public sealed class HeapDoctor(Snapshot snapshot)
         }
 
         double pct = 100.0 * node.RetainedSize / total;
-        if (pct < 10)
+        if (pct < 10 || node.RetainedSize < MinRetainedBytes)
         {
             return;
         }
@@ -68,7 +72,7 @@ public sealed class HeapDoctor(Snapshot snapshot)
         string kind = IsCollection(node.TypeName) ? "collection " : "";
         findings.Add(new Finding(
             pct >= 50 ? FindingSeverity.High : FindingSeverity.Warning, "retention",
-            $"{TypeNames.Short(node.TypeName)} {kind}retains {ByteFormat.Human(node.RetainedSize)} ({pct:0}% of the reachable heap)",
+            $"{Name(node.TypeName)} {kind}retains {ByteFormat.Human(node.RetainedSize)} ({pct:0}% of the reachable heap)",
             "The biggest retained graph. See what holds it and what it holds.")
         {
             Address = node.Address,
@@ -85,11 +89,11 @@ public sealed class HeapDoctor(Snapshot snapshot)
             return;
         }
 
-        string targets = string.Join(", ", worst.Targets.Take(3).Select(t => $"{TypeNames.Short(t.TypeName)} x{t.Count}"));
+        string targets = string.Join(", ", worst.Targets.Take(3).Select(t => $"{Name(t.TypeName)} x{t.Count}"));
         findings.Add(new Finding(
             worst.SubscriberCount >= 256 ? FindingSeverity.High : FindingSeverity.Warning, "event-handlers",
             $"An event has {worst.SubscriberCount:N0} subscribers - likely an event-handler leak",
-            $"The {TypeNames.Short(worst.DelegateType)} delegate pins every subscriber until it unsubscribes (-=)."
+            $"The {Name(worst.DelegateType)} delegate pins every subscriber until it unsubscribes (-=)."
             + (targets.Length > 0 ? $" Subscribers: {targets}." : ""))
         {
             Address = worst.DelegateAddress,
@@ -107,7 +111,7 @@ public sealed class HeapDoctor(Snapshot snapshot)
             return;
         }
 
-        string top = string.Join(", ", report.ByType.Take(3).Select(s => $"{TypeNames.Short(s.TypeName)} x{s.Count:N0}"));
+        string top = string.Join(", ", report.ByType.Take(3).Select(s => $"{Name(s.TypeName)} x{s.Count:N0}"));
         findings.Add(new Finding(FindingSeverity.Warning, "finalizers",
             $"{report.TotalObjects:N0} finalizable objects awaiting finalization ({ByteFormat.Human(report.TotalBytes)})",
             $"A live finalizer that wasn't suppressed usually means a missing Dispose(). Most common: {top}.")
@@ -146,7 +150,7 @@ public sealed class HeapDoctor(Snapshot snapshot)
         }
 
         double pct = 100.0 * free.TotalSize / heapBytes;
-        if (pct < 25)
+        if (pct < 25 || free.TotalSize < MinFreeBytes)
         {
             return;
         }
@@ -172,13 +176,14 @@ public sealed class HeapDoctor(Snapshot snapshot)
         }
 
         findings.Add(new Finding(FindingSeverity.Info, "growth",
-            $"{suspect.Count:N0} instances of {TypeNames.Short(suspect.TypeName)} ({ByteFormat.Human(suspect.TotalSize)})",
+            $"{suspect.Count:N0} instances of {Name(suspect.TypeName)} ({ByteFormat.Human(suspect.TotalSize)})",
             "A large population - check for unbounded growth (a cache or list that never shrinks).")
         {
             Type = suspect.TypeName,
             Bytes = (long)suspect.TotalSize,
             Count = suspect.Count,
-            NextCommand = $"objects {TypeNames.Short(suspect.TypeName)}",
+            // A command, not a label: objects matches substrings of full names, so drop only the outer namespace.
+            NextCommand = $"objects {WithoutNamespace(suspect.TypeName)}",
         });
     }
 
@@ -189,9 +194,14 @@ public sealed class HeapDoctor(Snapshot snapshot)
     private static bool IsFramework(string type) =>
         type.StartsWith("System.", StringComparison.Ordinal) || type.StartsWith("Microsoft.", StringComparison.Ordinal);
 
-    private static string Preview(string value)
+    // Findings are prose for display, so names from the dump are made printable here.
+    private static string Name(string typeName) => Printable.Escape(TypeNames.Short(typeName));
+
+    private static string Preview(string value) => Printable.Escape(value, 48, '"');
+
+    private static string WithoutNamespace(string typeName)
     {
-        value = value.Replace('\n', ' ').Replace('\r', ' ');
-        return value.Length <= 48 ? value : value[..48] + "...";
+        string ns = TypeNames.Namespace(typeName);
+        return ns.Length == 0 ? typeName : typeName[(ns.Length + 1)..];
     }
 }

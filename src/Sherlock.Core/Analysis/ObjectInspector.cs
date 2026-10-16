@@ -19,7 +19,7 @@ public sealed class ObjectInspector(Snapshot snapshot)
     {
         ClrObject obj = GetObject(address);
         ClrType type = obj.Type!;
-        string? stringValue = type.IsString ? obj.AsString(StringPreviewLength) : null;
+        string? stringValue = type.IsString && obj.AsString(StringPreviewLength + 1) is { } text ? Preview(text) : null;
         IReadOnlyList<string> elements = [];
         IReadOnlyList<FieldValue> fields = [];
         int? elementCount = null;
@@ -27,7 +27,7 @@ public sealed class ObjectInspector(Snapshot snapshot)
         if (!type.IsString && TryGetCollection(obj, out ClrArray array, out int total))
         {
             elementCount = total;
-            InspectionPage page = ReadElements(array, total, 0, MaxElements, escape: false);
+            InspectionPage page = ReadElements(array, total, 0, MaxElements);
             var preview = new List<string>(page.Items.Count);
             foreach (ObjectValue value in page.Items)
             {
@@ -40,7 +40,7 @@ public sealed class ObjectInspector(Snapshot snapshot)
             var preview = new List<FieldValue>();
             foreach (ClrInstanceField field in type.Fields)
             {
-                ObjectValue value = ReadField(obj.Address, field, interior: false, escape: false);
+                ObjectValue value = ReadField(obj.Address, field, interior: false);
                 preview.Add(new FieldValue(value.Name, field.Type?.Name ?? field.ElementType.ToString(), value.Value, field.Offset));
             }
             fields = preview;
@@ -54,7 +54,7 @@ public sealed class ObjectInspector(Snapshot snapshot)
         ClrObject obj = GetObject(address);
         try
         {
-            return ReadReference("$", obj, "<unknown>", escape: true);
+            return ReadReference("$", obj, "<unknown>");
         }
         catch (Exception ex) when (IsReadError(ex))
         {
@@ -94,7 +94,7 @@ public sealed class ObjectInspector(Snapshot snapshot)
         }
         if (!raw && TryGetCollection(obj, out ClrArray array, out int total))
         {
-            return ReadElements(array, total, startIndex, count, escape: true) with
+            return ReadElements(array, total, startIndex, count) with
             {
                 HasRawFields = !obj.Type.IsArray && obj.Type.Fields.Length > 0
             };
@@ -161,7 +161,7 @@ public sealed class ObjectInspector(Snapshot snapshot)
         return true;
     }
 
-    private InspectionPage ReadElements(ClrArray array, int total, int startIndex, int count, bool escape)
+    private InspectionPage ReadElements(ClrArray array, int total, int startIndex, int count)
     {
         int shown = Math.Min(count, Math.Max(0, total - startIndex));
         var values = new List<ObjectValue>(shown);
@@ -174,7 +174,7 @@ public sealed class ObjectInspector(Snapshot snapshot)
             try
             {
                 ulong address = array.Type.GetArrayElementAddress(array.Address, index);
-                values.Add(ReadValue(name, address, componentType?.ElementType ?? ClrElementType.Object, componentType, escape));
+                values.Add(ReadValue(name, address, componentType?.ElementType ?? ClrElementType.Object, componentType));
             }
             catch (Exception ex) when (IsReadError(ex))
             {
@@ -191,18 +191,18 @@ public sealed class ObjectInspector(Snapshot snapshot)
         var values = new List<ObjectValue>(shown);
         for (int i = 0; i < shown; i++)
         {
-            values.Add(ReadField(address, fields[startIndex + i], interior, escape: true));
+            values.Add(ReadField(address, fields[startIndex + i], interior));
         }
         return new InspectionPage(values, fields.Count, startIndex);
     }
 
-    private ObjectValue ReadField(ulong address, ClrInstanceField field, bool interior, bool escape)
+    private ObjectValue ReadField(ulong address, ClrInstanceField field, bool interior)
     {
-        string name = field.Name ?? "<field>";
+        string name = FieldDisplayName(field.Name);
         string typeName = field.Type?.Name ?? field.ElementType.ToString();
         try
         {
-            return ReadValue(name, field.GetAddress(address, interior), field.ElementType, field.Type, escape) with { Offset = field.Offset };
+            return ReadValue(name, field.GetAddress(address, interior), field.ElementType, field.Type) with { Offset = field.Offset };
         }
         catch (Exception ex) when (IsReadError(ex))
         {
@@ -210,7 +210,7 @@ public sealed class ObjectInspector(Snapshot snapshot)
         }
     }
 
-    private ObjectValue ReadValue(string name, ulong address, ClrElementType element, ClrType? type, bool escape)
+    private ObjectValue ReadValue(string name, ulong address, ClrElementType element, ClrType? type)
     {
         string typeName = type?.Name ?? element.ToString();
         ObjectValueKind kind = ObjectValueKind.Number;
@@ -224,7 +224,7 @@ public sealed class ObjectInspector(Snapshot snapshot)
             case ClrElementType.Char:
                 kind = ObjectValueKind.Character;
                 string character = Read<char>(address).ToString();
-                text = $"'{(escape ? EscapePreview(character, '\'') : character)}'";
+                text = $"'{Printable.Escape(character, quote: '\'')}'";
                 break;
             case ClrElementType.Int8: text = Read<sbyte>(address).ToString(CultureInfo.InvariantCulture); break;
             case ClrElementType.UInt8: text = Read<byte>(address).ToString(CultureInfo.InvariantCulture); break;
@@ -255,14 +255,14 @@ public sealed class ObjectInspector(Snapshot snapshot)
                 {
                     return new ObjectValue(name, typeName, "null", ObjectValueKind.Null);
                 }
-                return ReadReference(name, GetObject(referenceAddress), typeName, escape);
+                return ReadReference(name, GetObject(referenceAddress), typeName);
 
             case ClrElementType.Struct:
                 if (type is null || type.MethodTable == 0 || address == 0)
                 {
                     throw new InvalidDataException("Struct address or type is unavailable.");
                 }
-                return new ObjectValue(name, typeName, Preview($"{{{typeName}}}", escape), ObjectValueKind.Struct, address, MethodTable: type.MethodTable);
+                return new ObjectValue(name, typeName, Preview($"{{{typeName}}}"), ObjectValueKind.Struct, address, MethodTable: type.MethodTable);
 
             default:
                 kind = ObjectValueKind.Other;
@@ -272,15 +272,28 @@ public sealed class ObjectInspector(Snapshot snapshot)
         return new ObjectValue(name, typeName, text, kind);
     }
 
-    private ObjectValue ReadReference(string name, ClrObject obj, string typeName, bool escape)
+    private ObjectValue ReadReference(string name, ClrObject obj, string typeName)
     {
         typeName = obj.Type?.Name ?? typeName;
         if (obj.Type?.IsString == true)
         {
             string text = obj.AsString(StringPreviewLength + 1) ?? throw new InvalidDataException("String contents are unavailable.");
-            return new ObjectValue(name, typeName, $"\"{Preview(text, escape)}\"", ObjectValueKind.String, obj.Address, obj.Size);
+            return new ObjectValue(name, typeName, $"\"{Preview(text)}\"", ObjectValueKind.String, obj.Address, obj.Size);
         }
-        return new ObjectValue(name, typeName, Preview($"0x{obj.Address:x} ({typeName})", escape), ObjectValueKind.Reference, obj.Address, obj.Size);
+        return new ObjectValue(name, typeName, Preview($"0x{obj.Address:x} ({TypeNames.Short(typeName)})"), ObjectValueKind.Reference, obj.Address, obj.Size);
+    }
+
+    /// <summary>The property name for a compiler-generated backing field ("&lt;Name&gt;k__BackingField" is "Name").</summary>
+    public static string FieldDisplayName(string? name)
+    {
+        if (name is null)
+        {
+            return "<field>";
+        }
+        const string Suffix = ">k__BackingField";
+        return name.StartsWith('<') && name.EndsWith(Suffix, StringComparison.Ordinal) && name.Length > Suffix.Length + 1
+            ? name[1..^Suffix.Length]
+            : name;
     }
 
     private T Read<T>(ulong address) where T : unmanaged
@@ -309,35 +322,6 @@ public sealed class ObjectInspector(Snapshot snapshot)
         ex is not (ObjectDisposedException or OperationCanceledException or OutOfMemoryException) &&
         ex is (IOException or InvalidDataException or InvalidOperationException or ArgumentException or ClrDiagnosticsException or DumpAnalysisException);
 
-    private static string Preview(string text, bool escape) =>
-        escape ? EscapePreview(text) : text.Length > StringPreviewLength ? text[..StringPreviewLength] + "…" : text;
-
-    internal static string EscapePreview(string text, char quote = '"')
-    {
-        var result = new StringBuilder(Math.Min(text.Length, StringPreviewLength));
-        for (int i = 0; i < text.Length; i++)
-        {
-            char c = text[i];
-            string token = c switch
-            {
-                '\\' => "\\\\",
-                '\n' => "\\n",
-                '\r' => "\\r",
-                '\t' => "\\t",
-                '\0' => "\\0",
-                _ when c == quote => "\\" + c,
-                _ when char.IsHighSurrogate(c) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1]) => text.Substring(i++, 2),
-                _ when char.IsControl(c) || char.IsSurrogate(c) || char.GetUnicodeCategory(c) is UnicodeCategory.Format or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator => $"\\u{(int)c:x4}",
-                _ => c.ToString()
-            };
-            int limit = i < text.Length - 1 ? StringPreviewLength - 1 : StringPreviewLength;
-            if (result.Length + token.Length > limit)
-            {
-                result.Append('…');
-                break;
-            }
-            result.Append(token);
-        }
-        return result.ToString();
-    }
+    // Values are shown, so they are made printable here; names stay raw so they still match.
+    private static string Preview(string text) => Printable.Escape(text, StringPreviewLength, '"');
 }

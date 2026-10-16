@@ -13,13 +13,14 @@ public sealed class SegmentsReplCommand : IReplCommand
     public IReadOnlyList<string> Aliases => ["seg", "eeheap"];
     public string Summary => "Show GC heap segments by generation (gen0/1/2, LOH, POH).";
     public string Usage => "segments";
+    public int MaxArgs => 0;
 
     public ReplResult Execute(ReplContext context, string[] args)
     {
         IReadOnlyList<SegmentInfo> segments = context.Snapshot.Segments;
         if (segments.Count == 0)
         {
-            context.Console.MarkupLine("[#FFAF00]No GC segments found.[/]");
+            context.Console.MarkupLine($"[{Palette.Warning}]No GC segments found.[/]");
             return ReplResult.Success;
         }
 
@@ -33,9 +34,9 @@ public sealed class SegmentsReplCommand : IReplCommand
         {
             table.AddRow(
                 Markup.Escape(segment.Kind),
-                $"[#FFD75F]0x{segment.Start:x}[/]",
-                $"[#FFD75F]0x{segment.End:x}[/]",
-                $"[bold #F2F2F2]{ByteSize.Format((long)segment.Length)}[/]");
+                $"[{Palette.Address}]0x{segment.Start:x}[/]",
+                $"[{Palette.Address}]0x{segment.End:x}[/]",
+                $"[bold {Palette.Text}]{ByteSize.Format((long)segment.Length)}[/]");
         }
 
         context.Console.Write(table);
@@ -46,7 +47,7 @@ public sealed class SegmentsReplCommand : IReplCommand
             .Select(g => (Kind: g.Key, Size: g.Aggregate(0UL, (acc, s) => acc + s.Length)))
             .OrderByDescending(x => x.Size);
 
-        context.Console.MarkupLine($"[#808791]Totals:[/] " +
+        context.Console.MarkupLine($"[{Palette.Muted}]Totals:[/] " +
             string.Join("  ", byKind.Select(k => $"[bold]{Markup.Escape(k.Kind)}[/] {ByteSize.Format((long)k.Size)}")));
         return ReplResult.Success;
     }

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Sherlock.CLI.Rendering;
+using Sherlock.Core;
 using Sherlock.Core.Collection;
 using Spectre.Console;
 
@@ -15,6 +16,7 @@ public sealed class SnapshotOnReplCommand : IReplCommand
     public string Summary => "Capture a snapshot when an event fires (call/alloc/gc/throw) on a live target.";
     public string Category => "Live";
     public string Usage => "snapshot-on <call:Type.Method | alloc:Type | gc[:gen2] | throw[:Exception]>";
+    public int MaxArgs => 1;
 
     public ReplResult Execute(ReplContext context, string[] args)
     {
@@ -37,11 +39,11 @@ public sealed class SnapshotOnReplCommand : IReplCommand
 
         int armPid = target.PrimaryPid; // the app (child under a launcher, if any)
         (bool ok, string detail) = context.Console.Status()
-            .Start($"Arming snapshot-on {spec}…", _ => target.ArmTrigger(armPid, spec, TimeSpan.FromSeconds(10)));
+            .Start($"Arming snapshot-on {Markup.Escape(spec)}…", _ => target.ArmTrigger(armPid, spec, TimeSpan.FromSeconds(10)));
 
         if (ok)
         {
-            Output.Success(context.Console, $"Armed [bold]{spec}[/] on [#00D7FF]{target.Name}[/] · pid {target.Pid}");
+            Output.Success(context.Console, $"Armed [bold]{spec}[/] on [{Palette.Name}]{Printable.Escape(target.Name)}[/] · pid {target.Pid}");
         }
         else
         {

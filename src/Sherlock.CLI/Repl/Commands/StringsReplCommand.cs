@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Linq;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using Spectre.Console;
@@ -15,23 +14,18 @@ public sealed class StringsReplCommand : IReplCommand
     public IReadOnlyList<string> Aliases => ["str"];
     public string Summary => "Find duplicate string values wasting memory.";
     public string Usage => "strings [count]";
+    public int MaxArgs => 1;
 
     public ReplResult Execute(ReplContext context, string[] args)
     {
-        // Leading count sets the limit; `--dup`/`-d` accepted and ignored for backward compat.
-        int limit = DefaultLimit;
-        string? countArg = args.FirstOrDefault(a => !a.StartsWith('-'));
-        if (countArg is not null && !int.TryParse(countArg, out limit))
-        {
-            limit = DefaultLimit;
-        }
+        int limit = Args.Count(args, 0, DefaultLimit, Usage);
 
         IReadOnlyList<DuplicateString> duplicates = context.Console.Status()
             .Start("Hashing strings…", _ => context.Snapshot.DuplicateStrings(limit, context.Cancellation));
 
         if (duplicates.Count == 0)
         {
-            context.Console.MarkupLine("[#AFFF00]No duplicated strings found.[/]");
+            context.Console.MarkupLine($"[{Palette.Hot}]No duplicated strings found.[/]");
             return ReplResult.Success;
         }
 
@@ -46,12 +40,12 @@ public sealed class StringsReplCommand : IReplCommand
             totalWasted += dupString.WastedBytes;
             table.AddRow(
                 Counts.Format(dupString.Count),
-                $"[bold #AFFF00]{ByteSize.Format((long)dupString.WastedBytes)}[/]",
-                $"[#00D7FF]{Markup.Escape(TextUtil.Preview(dupString.Value, 80))}[/]");
+                $"[bold {Palette.Hot}]{ByteSize.Format((long)dupString.WastedBytes)}[/]",
+                $"[{Palette.Name}]{Markup.Escape(Printable.Escape(dupString.Value, 80, '"'))}[/]");
         }
 
         context.Console.Write(table);
-        context.Console.MarkupLine($"[#808791]Top {duplicates.Count} duplicated strings waste[/] [bold #AFFF00]{ByteSize.Format((long)totalWasted)}[/].");
+        context.Console.MarkupLine($"[{Palette.Muted}]Top {duplicates.Count} duplicated strings waste[/] [bold {Palette.Hot}]{ByteSize.Format((long)totalWasted)}[/].");
         return ReplResult.Success;
     }
 

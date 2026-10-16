@@ -5,10 +5,10 @@ namespace Sherlock.CLI.Rendering;
 
 public static class Output
 {
-    public static void Info(IAnsiConsole console, FormattableString message) => Status(console, "i", Theme.Section, message);
-    public static void Success(IAnsiConsole console, FormattableString message) => Status(console, "+", Theme.Success, message);
-    public static void Warning(IAnsiConsole console, FormattableString message) => Status(console, "!", Theme.Attention, message);
-    public static void Error(IAnsiConsole console, FormattableString message) => Status(console, "x", Theme.Error, message);
+    public static void Info(IAnsiConsole console, FormattableString message) => Status(console, "i", Palette.Heading, message);
+    public static void Success(IAnsiConsole console, FormattableString message) => Status(console, "+", Palette.Hot, message);
+    public static void Warning(IAnsiConsole console, FormattableString message) => Status(console, "!", Palette.Warning, message);
+    public static void Error(IAnsiConsole console, FormattableString message) => Status(console, "x", Palette.Error, message);
 
     public static bool TriggeredCapture(IAnsiConsole console, TriggeredCaptureResult capture)
     {
@@ -18,7 +18,7 @@ public static class Output
             return false;
         }
         string contents = entry.HasAllocations ? "heap + allocations" : "heap only";
-        Success(console, $"[bold]{capture.Probe}[/] fired · snapshot [bold]{entry.Id}[/] [#808791]({contents})[/]");
+        Success(console, $"[bold]{capture.Probe}[/] fired · snapshot [bold]{entry.Id}[/] [{Palette.Muted}]({contents})[/]");
         if (capture.Error is null)
         {
             return true;

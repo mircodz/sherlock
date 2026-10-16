@@ -32,6 +32,18 @@ public sealed class HeapGraphInstanceTests
     }
 
     [Fact]
+    public void ExactMatchingExcludesArraysAndOtherTypesContainingTheName()
+    {
+        using HeapGraph graph = SampleGraph();
+
+        InstanceListing result = Assert.IsType<InstanceListing>(graph.ListInstances("App.Order", 10, exact: true));
+
+        Assert.Equal(3, result.TotalMatched);
+        Assert.All(result.Instances, instance => Assert.Equal("App.Order", instance.TypeName));
+        Assert.Equal(0, Assert.IsType<InstanceListing>(graph.ListInstances("app.order", 10, exact: true)).TotalMatched);
+    }
+
+    [Fact]
     public void LimitLargerThanPopulationReturnsAllMatches()
     {
         using HeapGraph graph = SampleGraph();

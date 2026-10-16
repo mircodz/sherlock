@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <fstream>
 #include <iterator>
 #include <span>
@@ -331,38 +332,77 @@ TEST(AggregatorSnapshot, WriteFailureIsReportedAndLeavesNoTemporaryFile) {
     EXPECT_FALSE(std::filesystem::exists(missing));
 }
 
-TEST(AggregatorSnapshot, DistinctMethodCookiesRemainDistinctInTheSlab) {
-    MethodRegistry methods([](ModuleID, mdMethodDef) {
-        return MethodRegistry::Resolution{"Example.Generic<T>.Allocate", S_OK, {}};
+// Two assemblies defining the same App.Mapper.Map(int), and one of them loaded a second time: the
+// profile keeps one record per method identity, whatever the names.
+TEST(AggregatorSnapshot, MethodsAreWrittenByIdentityNotByName) {
+    constexpr ModuleID kLibA = 0x1000, kLibB = 0x2000, kLibAAgain = 0x3000;
+    MethodRegistry methods([&](ModuleID module, mdMethodDef token) {
+        MethodName name;
+        name.mvid = {static_cast<std::uint8_t>(module == kLibB ? 0xb2 : 0xa1)};
+        name.module = module == kLibB ? "LibB.dll" : "LibA.dll";
+        name.ns = "App";
+        name.type = "Mapper";
+        name.name = "Map";
+        name.parameters = name.qualifiedParameters = "(int)";
+        name.returnType = name.qualifiedReturnType = "void";
+        EXPECT_EQ(token, 0x06000001u);
+        return MethodRegistry::Resolution{std::move(name), S_OK, {}};
     });
-    methods.moduleLoaded(0x1000);
-    FrameId first = methods.intern(0x1000, 0x06000001);
-    FrameId overload = methods.intern(0x1000, 0x06000002);
-    const std::string firstName = methods.name(first);
-    const std::string overloadName = methods.name(overload);
+    std::vector<FrameId> frames;
+    for (ModuleID module : {kLibA, kLibB, kLibAAgain}) {
+        methods.moduleLoaded(module);
+        frames.push_back(methods.intern(module, 0x06000001));
+    }
     Aggregator aggregator(nullptr, nullptr, methods);
-    aggregator.record(std::span<const FrameId>(&first, 1), 24, 0x2000, kClass);
-    aggregator.record(std::span<const FrameId>(&overload, 1), 24, 0x3000, kClass);
-    methods.moduleUnloaded(0x1000);
+    for (std::size_t i = 0; i < frames.size(); ++i) {
+        aggregator.record(std::span<const FrameId>(&frames[i], 1), 24, 0x2000 + 0x100 * i, kClass);
+    }
 
-    const std::filesystem::path path = tempSlab("method-cookies");
+    const std::filesystem::path path = tempSlab("method-identity");
     ASSERT_TRUE(aggregator.dump(path.string()));
     const std::string bytes = readAll(path);
     storage::ContainerReader container(std::as_bytes(std::span(bytes)));
     ASSERT_TRUE(container.valid());
     storage::ProvenanceReader profile(container);
-    storage::StackTable stacks = storage::StackTable::read(container);
-    ASSERT_EQ(profile.allocations().size(), 2);
-    std::vector<std::string> names;
+    const storage::SymbolTable& symbols = profile.symbols();
+    ASSERT_EQ(symbols.methodCount(), 2u);
+    std::map<std::string, std::uint64_t> bytesByModule;
     for (const storage::AllocationRecord& record : profile.allocations()) {
-        auto frames = stacks.stackFrames(record.stackId);
-        ASSERT_EQ(frames.size(), 1);
-        names.emplace_back(stacks.frame(frames[0]));
+        auto stack = symbols.stackFrames(record.stackId);
+        ASSERT_EQ(stack.size(), 1u);
+        const storage::MethodRecord& method = symbols.method(stack[0]);
+        EXPECT_EQ(symbols.text(method.name), "Map");
+        bytesByModule[std::string(symbols.text(symbols.module(method.module).name))] += record.allocBytes;
     }
-    std::sort(names.begin(), names.end());
-    std::vector<std::string> expected = {firstName, overloadName};
-    std::sort(expected.begin(), expected.end());
-    EXPECT_EQ(names, expected);
-    EXPECT_NE(names[0], names[1]);
+    EXPECT_EQ(bytesByModule, (std::map<std::string, std::uint64_t>{{"LibA.dll", 48}, {"LibB.dll", 24}}));
+    std::filesystem::remove(path);
+}
+
+// Sites are keyed by their whole stack and type: stacks whose hashes collide stay separate sites.
+TEST(AggregatorSnapshot, CollidingStackHashesKeepTheirSitesApart) {
+    // Built to collide under the aggregator's FNV-1a: hashing [0x1111, kCollider] reaches the same state as
+    // [0x2222]. If the hash changes, recompute this so the test still covers a collision.
+    constexpr std::uint64_t kOffset = 1469598103934665603ull;
+    constexpr std::uint64_t kPrime = 1099511628211ull;
+    constexpr FrameId kCollider = ((kOffset ^ 0x1111) * kPrime) ^ kOffset ^ 0x2222;
+    const FrameId shortStack[] = {0x2222};
+    const FrameId longStack[] = {0x1111, kCollider};
+
+    Agg aggregator;
+    aggregator.record(shortStack, 100, 0x1000, kClass);
+    aggregator.record(longStack, 200, 0x2000, kClass);
+    aggregator.record(longStack, 300, 0x3000, kClass);
+
+    const std::filesystem::path path = tempSlab("collision");
+    ASSERT_TRUE(aggregator.dump(path.string()));
+    const std::string bytes = readAll(path);
+    storage::ContainerReader container(std::as_bytes(std::span(bytes)));
+    ASSERT_TRUE(container.valid());
+    storage::ProvenanceReader profile(container);
+    std::map<std::size_t, std::uint64_t> bytesByDepth;
+    for (const storage::AllocationRecord& record : profile.allocations()) {
+        bytesByDepth[profile.symbols().stackFrames(record.stackId).size()] += record.allocBytes;
+    }
+    EXPECT_EQ(bytesByDepth, (std::map<std::size_t, std::uint64_t>{{1, 100}, {2, 500}}));
     std::filesystem::remove(path);
 }

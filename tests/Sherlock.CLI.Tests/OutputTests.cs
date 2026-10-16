@@ -66,15 +66,31 @@ public sealed class OutputTests
     }
 
     [Fact]
-    public void FoldedStacksKeepLegacyEscapingWeightsAndFrameOrder()
+    public void AllocationGraphsAccountForEveryByteAndCountRecursionOnce()
     {
         var profile = new AllocationProfile(
         [
-            new(["Root;Literal", "Leaf"], 256, 2, 64, 1),
-            new(["Empty"], 0, 0, 0, 0),
+            new(Sherlock.Tests.Frames.Stack("App.Main", "App.Walk", "App.Walk", "App.Walk"), "T", 600, 3, 0, 0),
+            new([], "T", 400, 2, 0, 0),
         ]);
 
-        Assert.Equal("Root:Literal;Leaf 256\n", FoldedStacks.Write(profile));
-        Assert.Equal("Root:Literal;Leaf 64\n", FoldedStacks.Write(profile, survived: true));
+        string dot = AllocationDot.Write(profile, nodeFraction: 0);
+
+        Assert.Contains("label=\"<no managed frame>\\n400 B (40.0%)\"", dot);
+        Assert.Contains("label=\"App.Walk()\\n600 B (60.0%)\"", dot);
+        Assert.Contains("n1 -> n1 [label=\"600 B\"", dot); // recursion counts once per stack, not 1,200 B
+    }
+
+    [Fact]
+    public void FoldedStacksKeepTheFrameSeparatorOutOfLabelsAndKeepWeightsAndFrameOrder()
+    {
+        var profile = new AllocationProfile(
+        [
+            new(Sherlock.Tests.Frames.Stack("App.Root;Literal", "App.Leaf"), "T", 256, 2, 64, 1),
+            new(Sherlock.Tests.Frames.Stack("App.Empty"), "T", 0, 0, 0, 0),
+        ]);
+
+        Assert.Equal("App.Root:Literal();App.Leaf() 256\n", FoldedStacks.Write(profile));
+        Assert.Equal("App.Root:Literal();App.Leaf() 64\n", FoldedStacks.Write(profile, survived: true));
     }
 }

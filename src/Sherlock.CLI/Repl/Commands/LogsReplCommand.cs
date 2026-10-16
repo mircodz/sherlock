@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using Sherlock.CLI.Rendering;
+using Sherlock.Core;
 using Sherlock.Core.Collection;
 using Spectre.Console;
 
@@ -14,6 +15,7 @@ public sealed class LogsReplCommand : IReplCommand
     public string Name => "logs";
     public string Summary => "Show captured stdout/stderr of a run target.";
     public string Usage => "logs [pid] [lines]";
+    public int MaxArgs => 2;
     public string Category => "Live";
 
     public ReplResult Execute(ReplContext context, string[] args)
@@ -21,26 +23,24 @@ public sealed class LogsReplCommand : IReplCommand
         IReadOnlyList<RunTarget> targets = context.Workspace.Targets;
         if (targets.Count == 0)
         {
-            context.Console.MarkupLine("[#808791]No run targets. Launch one with[/] run <path>[#808791].[/]");
+            context.Console.MarkupLine($"[{Palette.Muted}]No run targets. Launch one with[/] run <path>[{Palette.Muted}].[/]");
             return ReplResult.Failure;
         }
 
+        // "logs <pid> [lines]" when the first number is a target's PID, otherwise "logs [lines]".
         int? pid = null;
         int tail = DefaultTail;
-        foreach (string arg in args)
+        if (args.Length > 0)
         {
-            if (!int.TryParse(arg, out int n))
+            int first = Args.Count(args, 0, DefaultTail, Usage);
+            if (args.Length == 2 || targets.Any(t => t.Pid == first))
             {
-                continue;
-            }
-            // Treat the first number above 1000 as a PID.
-            if (pid is null && n > 1000)
-            {
-                pid = n;
+                pid = first;
+                tail = Args.Count(args, 1, DefaultTail, Usage);
             }
             else
             {
-                tail = n;
+                tail = first;
             }
         }
 
@@ -57,11 +57,11 @@ public sealed class LogsReplCommand : IReplCommand
         IReadOnlyList<string> lines = target.ReadLog(tail);
         if (lines.Count == 0)
         {
-            context.Console.MarkupLine("[#808791]<no output captured yet>[/]");
+            context.Console.MarkupLine($"[{Palette.Muted}]<no output captured yet>[/]");
             return ReplResult.Success;
         }
 
-        context.Console.MarkupLineInterpolated($"[#808791]── {target.Name} (pid {target.Pid}), last {lines.Count} lines ──[/]");
+        context.Console.MarkupLineInterpolated($"[{Palette.Muted}]── {Printable.Escape(target.Name)} (pid {target.Pid}), last {lines.Count} lines ──[/]");
         foreach (string line in lines)
         {
             context.Console.WriteLine(line);

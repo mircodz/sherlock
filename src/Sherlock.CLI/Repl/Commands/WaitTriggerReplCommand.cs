@@ -19,6 +19,7 @@ public sealed class WaitTriggerReplCommand : IReplCommand
     public string Summary => "Wait until an armed snapshot trigger fires (or times out).";
     public string Category => "Live";
     public string Usage => "wait-trigger [seconds]";
+    public int MaxArgs => 1;
 
     public ReplResult Execute(ReplContext context, string[] args)
     {

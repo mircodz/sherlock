@@ -22,11 +22,8 @@ namespace Sherlock::control {
 // Keep REQ verbs in sync with C# ControlCommands.
 namespace commands {
 inline constexpr std::string_view kPing = "ping";
-inline constexpr std::string_view kEmitCorrelation = "emit-correlation";
 inline constexpr std::string_view kFlushAllocations = "flush-allocations";
 inline constexpr std::string_view kArmTrigger = "arm-trigger";
-inline constexpr std::string_view kGcCount = "gc-count";
-inline constexpr std::string_view kHeapSize = "heap-size";
 
 // Snapshot correlation while GarbageCollectionFinished keeps the heap still.
 inline constexpr std::string_view kBeginCoherentCapture = "begin-coherent-capture";
@@ -116,7 +113,6 @@ public:
         }
         state_ = State::Arming;
         token_ = std::move(token);
-        gcCountAtReady_ = 0;
         released_ = false;
         active_.store(true, std::memory_order_release);
         return true;
@@ -140,13 +136,12 @@ public:
 
     [[nodiscard]] bool active() const noexcept { return active_.load(std::memory_order_acquire); }
 
-    [[nodiscard]] bool markReady(std::uint64_t gcCount) {
+    [[nodiscard]] bool markReady() {
         std::lock_guard<std::mutex> lock(mutex_);
         if (state_ != State::Arming) {
             return false;
         }
         state_ = State::Parked;
-        gcCountAtReady_ = gcCount;
         // Preserve a shutdown release that raced with the GC while Arming.
         return true;
     }
@@ -161,12 +156,11 @@ public:
         return wasReleased ? ParkResult::Released : ParkResult::TimedOut;
     }
 
-    [[nodiscard]] bool release(const std::string& token, std::uint64_t& gcCount) {
+    [[nodiscard]] bool release(const std::string& token) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (state_ != State::Parked || token_ != token || released_) {
             return false;
         }
-        gcCount = gcCountAtReady_;
         released_ = true;
         cv_.notify_all();
         return true;
@@ -201,7 +195,6 @@ private:
     std::condition_variable cv_;
     State state_ = State::Idle;
     std::string token_;
-    std::uint64_t gcCountAtReady_ = 0;
     bool released_ = false;
 
     // Avoid taking the mutex on GCs with no capture in flight.

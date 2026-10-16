@@ -11,6 +11,7 @@ public sealed class ImportReplCommand : IReplCommand
     public string Name => "import";
     public string Summary => "Add a dump file to the library and load it.";
     public string Usage => "import <file> [label]";
+    public int MaxArgs => int.MaxValue;
     public string Category => "Library";
 
     public ReplResult Execute(ReplContext context, string[] args)
@@ -32,7 +33,7 @@ public sealed class ImportReplCommand : IReplCommand
             label: label);
 
         context.Workspace.Load(session, entry);
-        Output.Success(context.Console, $"Imported and loaded [bold]{entry.Id}[/] [#808791]({Path.GetFileName(entry.Path)})[/]");
+        Output.Success(context.Console, $"Imported and loaded [bold]{entry.Id}[/] [{Palette.Muted}]({Path.GetFileName(entry.Path)})[/]");
         return ReplResult.Success;
     }
 }

@@ -9,6 +9,10 @@ namespace Sherlock.CLI.Export;
 /// <summary>Call graph with inclusive-byte colors, self-byte sizes, and weighted caller-to-callee edges.</summary>
 public static class AllocationDot
 {
+    // Allocations with no managed code on the stack (startup, statics, runtime helpers) get a node of their own, so
+    // the graph accounts for every byte. Frames without a module identity equal only themselves.
+    private static readonly MethodFrame NoManagedFrame = new(Guid.Empty, "", 0, "", "", "", "", "", "", "", "", null);
+
     public static string Write(AllocationProfile profile, double nodeFraction = 0.01, int maxNodes = 60)
     {
         long total = profile.Sites.Sum(s => s.AllocBytes);
@@ -17,80 +21,79 @@ public static class AllocationDot
             return new DotGraph("allocations").Render();
         }
 
-        var flat = new Dictionary<string, long>(StringComparer.Ordinal);
-        var cum = new Dictionary<string, long>(StringComparer.Ordinal);
-        var edges = new Dictionary<(string From, string To), long>();
+        var flat = new Dictionary<MethodFrame, long>();
+        var cum = new Dictionary<MethodFrame, long>();
+        var edges = new Dictionary<(MethodFrame From, MethodFrame To), long>();
 
         foreach (AllocationSite site in profile.Sites)
         {
             long bytes = site.AllocBytes;
-            if (bytes <= 0 || site.Frames.Count == 0)
+            if (bytes <= 0)
             {
                 continue;
             }
 
-            flat[site.Frames[^1]] = flat.GetValueOrDefault(site.Frames[^1]) + bytes;
-            foreach (string frame in site.Frames.Distinct()) // cum counts a method once per stack
+            IReadOnlyList<MethodFrame> frames = site.Frames.Count > 0 ? site.Frames : [NoManagedFrame];
+            flat[frames[^1]] = flat.GetValueOrDefault(frames[^1]) + bytes;
+            // A method and an edge count once per stack, however often recursion repeats them, so no weight
+            // exceeds the total.
+            foreach (MethodFrame frame in frames.Distinct())
             {
                 cum[frame] = cum.GetValueOrDefault(frame) + bytes;
             }
-            for (int i = 0; i + 1 < site.Frames.Count; i++)
+            foreach ((MethodFrame, MethodFrame) edge in frames.Zip(frames.Skip(1)).Distinct())
             {
-                (string, string) edge = (site.Frames[i], site.Frames[i + 1]);
                 edges[edge] = edges.GetValueOrDefault(edge) + bytes;
             }
         }
 
         // Prune nodes and their incident edges together.
         long cutoff = (long)(total * nodeFraction);
-        HashSet<string> kept = cum
+        List<MethodFrame> ranked = cum
             .Where(kv => kv.Value >= cutoff)
             .OrderByDescending(kv => kv.Value)
             .Take(maxNodes)
             .Select(kv => kv.Key)
-            .ToHashSet(StringComparer.Ordinal);
+            .ToList();
+        // Node ids are ranks, so they can't collide.
+        var kept = new Dictionary<MethodFrame, string>();
+        for (int i = 0; i < ranked.Count; i++)
+        {
+            kept[ranked[i]] = $"n{i}";
+        }
 
-        double maxFlat = kept.Count > 0 ? Math.Max(1, kept.Max(m => flat.GetValueOrDefault(m))) : 1;
+        double maxFlat = ranked.Count > 0 ? Math.Max(1, ranked.Max(m => flat.GetValueOrDefault(m))) : 1;
 
         var dot = new DotGraph("allocations");
-        foreach (string method in kept.OrderByDescending(m => cum[m]))
+        foreach (MethodFrame method in ranked)
         {
             long self = flat.GetValueOrDefault(method);
             long through = cum[method];
-            dot.AddNode(Id(method), heat: (double)through / total, size: self / maxFlat, Label(method, self, through, total));
+            dot.AddNode(kept[method], heat: (double)through / total, size: self / maxFlat, Label(method, self, through, total));
         }
 
-        foreach (((string from, string to), long bytes) in edges.OrderByDescending(e => e.Value))
+        foreach (((MethodFrame from, MethodFrame to), long bytes) in edges.OrderByDescending(e => e.Value))
         {
-            if (kept.Contains(from) && kept.Contains(to))
+            if (kept.TryGetValue(from, out string? fromId) && kept.TryGetValue(to, out string? toId))
             {
-                dot.AddEdge(Id(from), Id(to), (double)bytes / total, ByteSize.Format(bytes));
+                dot.AddEdge(fromId, toId, (double)bytes / total, ByteSize.Format(bytes));
             }
         }
 
         return dot.Render();
     }
 
-    private static string[] Label(string method, long flat, long cum, long total)
+    private static string[] Label(MethodFrame method, long flat, long cum, long total)
     {
-        string name = ShortMethod(method);
+        string name = ReferenceEquals(method, NoManagedFrame) ? "<no managed frame>" : method.Label;
         if (flat == cum)
         {
-            return [name, $"{ByteSize.Format(cum)} ({100.0 * cum / total:0.0}%)"];
+            return [name, $"{ByteSize.Format(cum)} ({Counts.Percent(100.0 * cum / total)})"];
         }
         if (flat > 0)
         {
-            return [name, $"flat {ByteSize.Format(flat)} ({100.0 * flat / total:0.0}%)", $"cum {ByteSize.Format(cum)} ({100.0 * cum / total:0.0}%)"];
+            return [name, $"flat {ByteSize.Format(flat)} ({Counts.Percent(100.0 * flat / total)})", $"cum {ByteSize.Format(cum)} ({Counts.Percent(100.0 * cum / total)})"];
         }
-        return [name, $"cum {ByteSize.Format(cum)} ({100.0 * cum / total:0.0}%)"];
-    }
-
-    /// <summary>DOT-safe ID within this process.</summary>
-    private static string Id(string method) => $"n{(uint)StringComparer.Ordinal.GetHashCode(method):x}";
-
-    private static string ShortMethod(string frame)
-    {
-        string[] parts = frame.Split('.');
-        return parts.Length <= 2 ? frame : string.Join('.', parts[^2..]);
+        return [name, $"cum {ByteSize.Format(cum)} ({Counts.Percent(100.0 * cum / total)})"];
     }
 }

@@ -5,7 +5,9 @@
 #include "sherlock/profiler/probe.hpp"
 #include "sherlock/profiler/rejit_policy.hpp"
 
+#include <algorithm>
 #include <cstring>
+#include <format>
 #include <limits>
 #include <optional>
 #include <vector>
@@ -15,23 +17,40 @@ namespace Sherlock {
 namespace shadow {
 thread_local ThreadStack* t_stack = nullptr;
 
-ThreadStack* ensureStack() {
-    if (t_stack == nullptr)
-        t_stack = new ThreadStack(); // retained for the process lifetime
+// Out of memory, a thread goes without a shadow stack rather than retrying on every call.
+thread_local bool t_stackFailed = false;
+
+ThreadStack* ensureStack() noexcept {
+    if (t_stack == nullptr && !t_stackFailed) {
+        try {
+            t_stack = new ThreadStack(); // retained for the process lifetime
+        } catch (...) {
+            t_stackFailed = true; // reached from managed code: no exception may escape
+        }
+    }
     return t_stack;
 }
 } // namespace shadow
 
-extern "C" void Sherlock_ShadowPush(std::int64_t frameId) {
-    // Always ++ so push/pop stay balanced even past the cap; only store within bounds.
+extern "C" void Sherlock_ShadowPush(std::int64_t frameId) noexcept {
+    // Always ++ so push/pop stay balanced past what is stored; store while the buffer has, or can grow, room.
     shadow::ThreadStack* s = shadow::ensureStack();
+    if (s == nullptr)
+        return;
     std::uint32_t d = s->depth;
-    if (d < shadow::kMaxShadow)
+    if (d == s->frames.size() && s->growable && d < shadow::kMaxShadow) {
+        try {
+            s->frames.resize(std::min<std::size_t>(s->frames.size() * 2, shadow::kMaxShadow));
+        } catch (...) {
+            s->growable = false; // called from managed code: no exception may escape
+        }
+    }
+    if (d < s->frames.size())
         s->frames[d] = static_cast<FrameId>(frameId);
     s->depth = d + 1;
 }
 
-extern "C" void Sherlock_ShadowPop() {
+extern "C" void Sherlock_ShadowPop() noexcept {
     shadow::ThreadStack* s = shadow::t_stack;
     if (s != nullptr && s->depth != 0)
         s->depth--;
@@ -44,21 +63,23 @@ struct RetType {
     std::vector<BYTE> blob; // non-void RetType bytes for the return-value local
 };
 
-// Reject byref, typedref and unsupported return shapes. Void needs no return-value local.
-bool parseReturnType(ICorProfilerInfo10* info, ModuleID moduleId, mdMethodDef methodToken, RetType& rt) {
+// Any return type a local can hold is supported; byref and typedref returns are not. Void needs no return-value local.
+// Returns why the method can't be rewritten, or null.
+const char* parseReturnType(ICorProfilerInfo10* info, ModuleID moduleId, mdMethodDef methodToken, RetType& rt) {
     rt = {};
     IMetaDataImport* md = nullptr;
     if (!SUCCEEDED(info->GetModuleMetaData(moduleId, ofRead, IID_IMetaDataImport, (IUnknown**)&md)) || !md) {
-        return false;
+        return "module metadata is unavailable";
     }
 
-    const bool result = [&] {
+    const char* result = [&]() -> const char* {
+        constexpr const char* kMalformed = "its signature can't be read";
         PCCOR_SIGNATURE sig = nullptr;
         ULONG sigLen = 0;
         if (FAILED(md->GetMethodProps(
                 methodToken, nullptr, nullptr, 0, nullptr, nullptr, &sig, &sigLen, nullptr, nullptr)) ||
             sig == nullptr || sigLen == 0) {
-            return false;
+            return kMalformed;
         }
 
         const BYTE* sp = sig; const BYTE* send = sig + sigLen;
@@ -66,60 +87,41 @@ bool parseReturnType(ICorProfilerInfo10* info, ModuleID moduleId, mdMethodDef me
         std::uint32_t tmp;
         if (cc & IMAGE_CEE_CS_CALLCONV_GENERIC) {
             if (!il::uncompress(sp, send, tmp)) {
-                return false;
+                return kMalformed;
             }
         }
         if (!il::uncompress(sp, send, tmp)) {
-            return false;
+            return kMalformed;
         }
 
         const BYTE* rtStart = sp;
-        while (sp < send && (*sp == ELEMENT_TYPE_CMOD_OPT || *sp == ELEMENT_TYPE_CMOD_REQD)) {
-            sp++;
-            std::uint32_t token;
-            if (!il::uncompress(sp, send, token)) {
-                return false;
+        const BYTE* type = sp;
+        std::uint32_t token;
+        while (type < send && (*type == ELEMENT_TYPE_CMOD_OPT || *type == ELEMENT_TYPE_CMOD_REQD)) {
+            ++type;
+            if (!il::uncompress(type, send, token)) {
+                return kMalformed;
             }
         }
-        if (sp >= send) {
-            return false;
+        if (type >= send) {
+            return kMalformed;
         }
-
-        BYTE elementType = *sp++;
-        if (elementType == ELEMENT_TYPE_VOID) {
-            return true;
+        if (*type == ELEMENT_TYPE_BYREF) {
+            return "it returns by reference";
         }
-        if (elementType == ELEMENT_TYPE_BYREF || elementType == ELEMENT_TYPE_TYPEDBYREF) {
-            return false;
+        if (*type == ELEMENT_TYPE_TYPEDBYREF) {
+            return "it returns a TypedReference";
         }
-
-        bool supported = false;
-        switch (elementType) {
-            case ELEMENT_TYPE_BOOLEAN: case ELEMENT_TYPE_CHAR:
-            case ELEMENT_TYPE_I1: case ELEMENT_TYPE_U1: case ELEMENT_TYPE_I2: case ELEMENT_TYPE_U2:
-            case ELEMENT_TYPE_I4: case ELEMENT_TYPE_U4: case ELEMENT_TYPE_I8: case ELEMENT_TYPE_U8:
-            case ELEMENT_TYPE_R4: case ELEMENT_TYPE_R8: case ELEMENT_TYPE_I: case ELEMENT_TYPE_U:
-            case ELEMENT_TYPE_STRING: case ELEMENT_TYPE_OBJECT:
-                supported = true;
-                break;
-            case ELEMENT_TYPE_CLASS: case ELEMENT_TYPE_VALUETYPE: {
-                std::uint32_t token;
-                if (!il::uncompress(sp, send, token)) {
-                    return false;
-                }
-                supported = true;
-                break;
-            }
-            default:
-                break;
+        if (*type == ELEMENT_TYPE_VOID) {
+            return nullptr;
         }
-        if (!supported) {
-            return false;
+        if (!il::skipType(sp, send)) {
+            return kMalformed;
         }
 
         rt.nonVoid = true;
         rt.blob.assign(rtStart, sp);
-        return true;
+        return nullptr;
     }();
 
     md->Release();
@@ -218,21 +220,21 @@ ShadowStackInstrumenter::ModuleSigs ShadowStackInstrumenter::ensureSigs(ModuleID
     return sigs;
 }
 
-bool ShadowStackInstrumenter::buildIL(FrameId frameId, ModuleID moduleId,
-                                      mdMethodDef methodToken, const ProbePlan& probe,
-                                      std::vector<BYTE>& out) {
+const char* ShadowStackInstrumenter::buildIL(FrameId frameId, ModuleID moduleId,
+                                             mdMethodDef methodToken, const ProbePlan& probe,
+                                             std::vector<BYTE>& out) {
     ModuleSigs sigs = ensureSigs(moduleId);
-    if (sigs.push == mdSignatureNil || sigs.pop == mdSignatureNil) { return false; }
-    if (probe && sigs.probe == mdSignatureNil) { return false; }
+    if (sigs.push == mdSignatureNil || sigs.pop == mdSignatureNil) { return "its module can't take the shadow-stack calls"; }
+    if (probe && sigs.probe == mdSignatureNil) { return "its module can't take the probe calls"; }
 
     LPCBYTE header = nullptr;
     ULONG headerSize = 0;
     if (FAILED(info_->GetILFunctionBody(moduleId, methodToken, &header, &headerSize)) || header == nullptr) {
-        return false;
+        return "it has no IL body";
     }
 
     il::MethodHeader hdr;
-    if (!il::parseMethodHeader(header, hdr)) { return false; }
+    if (!il::parseMethodHeader(header, hdr)) { return "its IL header has an unknown format"; }
     const BYTE* code = hdr.code;
     const std::uint32_t codeSize = hdr.codeSize;
     const std::uint16_t maxStack = hdr.maxStack;
@@ -242,19 +244,20 @@ bool ShadowStackInstrumenter::buildIL(FrameId frameId, ModuleID moduleId,
 
     std::vector<il::Insn> insns;
     bool unsafeToWrap = false; // constructs illegal inside a try/finally region
-    if (!il::decodeBody(code, codeSize, insns, unsafeToWrap)) { return false; }
-    if (insns.empty() || unsafeToWrap) { return false; }
+    if (!il::decodeBody(code, codeSize, insns, unsafeToWrap)) { return "its IL can't be decoded"; }
+    if (insns.empty()) { return "its IL body is empty"; }
+    if (unsafeToWrap) { return "it uses tail., localloc, or jmp, which can't run inside try/finally"; }
 
     // leave clears the evaluation stack, so preserve non-void returns in a local.
     RetType rt;
-    if (!parseReturnType(info_, moduleId, methodToken, rt)) { return false; }
+    if (const char* reason = parseReturnType(info_, moduleId, methodToken, rt)) { return reason; }
     const bool nonVoid = rt.nonVoid;
     const std::vector<BYTE>& retTypeBlob = rt.blob;
 
     std::uint32_t retLocalIndex = 0;
     mdSignature newLocalTok = static_cast<mdSignature>(localSigTok);
     if (nonVoid && !buildLocalSig(info_, moduleId, localSigTok, retTypeBlob, retLocalIndex, newLocalTok)) {
-        return false;
+        return "its locals can't take the return value";
     }
 
     // Layout:
@@ -329,7 +332,7 @@ bool ShadowStackInstrumenter::buildIL(FrameId frameId, ModuleID moduleId,
             il::put32(body, n);
             std::uint32_t after = here + 5 + n * 4;
             for (std::uint32_t t : in.swTargets) {
-                std::uint32_t tn; if (!mapOff(t, tn)) { return false; }
+                std::uint32_t tn; if (!mapOff(t, tn)) { return "a switch targets the middle of an instruction"; }
                 il::put32(body, static_cast<std::uint32_t>(static_cast<std::int32_t>(tn) - static_cast<std::int32_t>(after)));
             }
             continue;
@@ -338,7 +341,7 @@ bool ShadowStackInstrumenter::buildIL(FrameId frameId, ModuleID moduleId,
             BYTE op = in.shortBr ? il::shortToLong(in.op0) : in.op0;
             body.push_back(op);
             std::uint32_t after = here + 5;
-            std::uint32_t tn; if (!mapOff(in.brTarget, tn)) { return false; }
+            std::uint32_t tn; if (!mapOff(in.brTarget, tn)) { return "a branch targets the middle of an instruction"; }
             il::put32(body, static_cast<std::uint32_t>(static_cast<std::int32_t>(tn) - static_cast<std::int32_t>(after)));
             continue;
         }
@@ -369,7 +372,7 @@ bool ShadowStackInstrumenter::buildIL(FrameId frameId, ModuleID moduleId,
         };
         for (const il::EHClause& oc : original) {
             auto e = relocate(oc);
-            if (!e) { return false; }
+            if (!e) { return "an exception clause doesn't line up with its instructions"; }
             clauses.push_back(*e);
         }
     }
@@ -392,7 +395,7 @@ bool ShadowStackInstrumenter::buildIL(FrameId frameId, ModuleID moduleId,
         prologueBytes.size() + body.size() + finallyBytes.size() + endSeq.size();
     if (newCodeSize64 > std::numeric_limits<std::uint32_t>::max() ||
         maxStack > std::numeric_limits<std::uint16_t>::max() - 2) {
-        return false;
+        return "the rewritten body would be too large";
     }
     const std::uint32_t newCodeSize = static_cast<std::uint32_t>(newCodeSize64);
 
@@ -403,7 +406,7 @@ bool ShadowStackInstrumenter::buildIL(FrameId frameId, ModuleID moduleId,
             logger_->warn(
                 "shadow rewrite produced an implausible body size ({} from {}); skipping method",
                 newCodeSize, codeSize);
-        return false;
+        return "the rewrite produced an implausible body size";
     }
 
     out.clear();
@@ -428,10 +431,22 @@ bool ShadowStackInstrumenter::buildIL(FrameId frameId, ModuleID moduleId,
         il::put32(out, e.handlerOffset); il::put32(out, e.handlerLength); il::put32(out, e.classTokenOrFilter);
     }
 
-    return true;
+    return nullptr;
 }
 
 void ShadowStackInstrumenter::onModuleLoaded(ModuleID moduleId) {
+    // ReJIT doesn't reach dynamic or collectible modules, and a dynamic module gains methods after it loads.
+    DWORD flags = 0;
+    LPCBYTE base = nullptr;
+    ULONG nameLength = 0;
+    AssemblyID assembly = 0;
+    if (SUCCEEDED(info_->GetModuleInfo2(moduleId, &base, 0, &nameLength, nullptr, &assembly, &flags)) &&
+        (flags & (COR_PRF_MODULE_DYNAMIC | COR_PRF_MODULE_COLLECTIBLE)) != 0) {
+        std::lock_guard lock(jitMutex_);
+        jitModules_.try_emplace(moduleId);
+        return;
+    }
+
     IMetaDataImport* md = nullptr;
     if (FAILED(info_->GetModuleMetaData(moduleId, ofRead, IID_IMetaDataImport, (IUnknown**)&md)) || md == nullptr)
         return;
@@ -485,40 +500,104 @@ void ShadowStackInstrumenter::onModuleLoaded(ModuleID moduleId) {
 }
 
 void ShadowStackInstrumenter::onModuleUnloaded(ModuleID moduleId) {
-    std::lock_guard lock(sigMutex_);
-    sigByModule_.erase(moduleId);
+    {
+        std::lock_guard lock(sigMutex_);
+        sigByModule_.erase(moduleId);
+    }
+    std::lock_guard lock(jitMutex_);
+    jitModules_.erase(moduleId);
+}
+
+void ShadowStackInstrumenter::onJitCompilationStarted(ModuleID moduleId, mdMethodDef methodToken, const ProbePlan& probe) {
+    {
+        // Only the first compilation rewrites; tiered recompilations already see the rewritten IL.
+        std::lock_guard lock(jitMutex_);
+        auto module = jitModules_.find(moduleId);
+        if (module == jitModules_.end() || !module->second.insert(methodToken).second) {
+            return;
+        }
+    }
+    std::vector<BYTE> out;
+    if (prepare(moduleId, methodToken, probe, out) != nullptr) {
+        return;
+    }
+    IMethodMalloc* allocator = nullptr;
+    if (FAILED(info_->GetILFunctionBodyAllocator(moduleId, &allocator)) || allocator == nullptr) {
+        skip(methodToken, "its module has no IL allocator");
+        return;
+    }
+    void* body = allocator->Alloc(static_cast<ULONG>(out.size()));
+    allocator->Release();
+    if (body == nullptr) {
+        skip(methodToken, "the IL allocator is out of memory");
+        return;
+    }
+    std::memcpy(body, out.data(), out.size());
+    if (FAILED(info_->SetILFunctionBody(moduleId, methodToken, static_cast<LPCBYTE>(body)))) {
+        skip(methodToken, "the runtime refused the rewritten body");
+        return;
+    }
+    instrumented_.fetch_add(1, std::memory_order_relaxed);
 }
 
 bool ShadowStackInstrumenter::rewrite(ModuleID moduleId, mdMethodDef methodToken,
                                       const ProbePlan& probe,
                                       ICorProfilerFunctionControl* control) {
-    // The circuit breaker is permanent for this process.
-    if (disabled_.load(std::memory_order_relaxed)) {
-        skipped_.fetch_add(1, std::memory_order_relaxed);
-        return false;
-    }
-    if (const char* reason = rejit::rejection(info_, moduleId, methodToken)) {
-        skipped_.fetch_add(1, std::memory_order_relaxed);
-        if (logger_) {
-            logger_->warn("not rewriting token 0x{:08x}: {}", static_cast<unsigned>(methodToken), reason);
-        }
-        return false;
-    }
-
-    // A declaration has stable metadata even when shared generic IL has no concrete FunctionID.
-    const FrameId frameId = methods_.intern(moduleId, methodToken);
-
     std::vector<BYTE> out;
-    if (!buildIL(frameId, moduleId, methodToken, probe, out)) {
-        skipped_.fetch_add(1, std::memory_order_relaxed);
+    if (prepare(moduleId, methodToken, probe, out) != nullptr) {
         return false;
     }
     if (FAILED(control->SetILFunctionBody(static_cast<ULONG>(out.size()), out.data()))) {
-        skipped_.fetch_add(1, std::memory_order_relaxed);
+        skip(methodToken, "the runtime refused the rewritten body");
         return false;
     }
     instrumented_.fetch_add(1, std::memory_order_relaxed);
     return true;
+}
+
+const char* ShadowStackInstrumenter::prepare(ModuleID moduleId, mdMethodDef methodToken, const ProbePlan& probe,
+                                             std::vector<BYTE>& out) {
+    // The circuit breaker is permanent for this process.
+    if (disabled_.load(std::memory_order_relaxed)) {
+        constexpr const char* kDisabled = "instrumentation was disabled after ReJIT errors";
+        skip(methodToken, kDisabled);
+        return kDisabled;
+    }
+    if (const char* reason = rejit::rejection(info_, moduleId, methodToken)) {
+        skip(methodToken, reason);
+        if (logger_) {
+            logger_->warn("not rewriting token 0x{:08x}: {}", static_cast<unsigned>(methodToken), reason);
+        }
+        return reason;
+    }
+    // A declaration has stable metadata even when shared generic IL has no concrete FunctionID.
+    const FrameId frameId = methods_.intern(moduleId, methodToken);
+    if (const char* reason = buildIL(frameId, moduleId, methodToken, probe, out)) {
+        skip(methodToken, reason);
+        return reason;
+    }
+    return nullptr;
+}
+
+// Skipped methods are missing from stacks, so each is logged with its reason and the reasons are tallied.
+void ShadowStackInstrumenter::skip(mdMethodDef methodToken, const char* reason) {
+    skipped_.fetch_add(1, std::memory_order_relaxed);
+    {
+        std::lock_guard lock(skipMutex_);
+        ++skipReasons_[reason];
+    }
+    if (logger_) {
+        logger_->trace("not instrumenting token 0x{:08x}: {}", static_cast<unsigned>(methodToken), reason);
+    }
+}
+
+std::string ShadowStackInstrumenter::skipSummary() const {
+    std::lock_guard lock(skipMutex_);
+    std::string summary;
+    for (const auto& [reason, count] : skipReasons_) {
+        summary += std::format("{}{} {}", summary.empty() ? "" : "; ", count, reason);
+    }
+    return summary;
 }
 
 void ShadowStackInstrumenter::noteReJITError() {

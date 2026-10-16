@@ -1,3 +1,4 @@
+using System.Globalization;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 
@@ -31,7 +32,18 @@ public static class Args
         return address;
     }
 
-    /// <summary>A positive integer at <paramref name="index"/>, or <paramref name="fallback"/> if absent/invalid.</summary>
-    public static int Limit(string[] args, int index, int fallback) =>
-        args.Length > index && int.TryParse(args[index], out int n) && n > 0 ? n : fallback;
+    /// <summary>A whole number at <paramref name="index"/>, or <paramref name="fallback"/> when absent. Anything else is
+    /// an error rather than a silent default.</summary>
+    public static int Count(string[] args, int index, int fallback, string usage, bool allowZero = false)
+    {
+        if (args.Length <= index)
+        {
+            return fallback;
+        }
+        if (!int.TryParse(args[index], NumberStyles.None, CultureInfo.InvariantCulture, out int n) || (n == 0 && !allowZero))
+        {
+            throw new DumpAnalysisException($"'{args[index]}' is not a {(allowZero ? "non-negative" : "positive")} whole number. usage: {usage}");
+        }
+        return n;
+    }
 }

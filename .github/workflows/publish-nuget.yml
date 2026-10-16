@@ -4,44 +4,68 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # to create and push the release tag
+  contents: write   # to push the release tag and create the GitHub release
   id-token: write
   packages: write
 
-jobs:
-  build:
-    uses: ./.github/workflows/ci.yml
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
 
-  publish:
-    name: publish
-    needs: build
+jobs:
+  check:
+    name: check branch and version
     if: github.actor == 'mircodz'
-    environment: publish
     runs-on: ubuntu-latest
-    env:
-      OUT_DIR: artifacts/nupkg
-      OWNER: ${{ github.repository_owner }}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
+      - name: Ensure main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "Releases are published from main; this run is on ${GITHUB_REF}." >&2
+          exit 1
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      - name: Read version
+        id: version
+        run: |
+          version="$(tr -d '[:space:]' < version)"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid version '$version'. Expected MAJOR.MINOR.PATCH." >&2
+            exit 1
+          fi
+          if git show-ref --verify --quiet "refs/tags/$version"; then
+            echo "Tag $version already exists. Bump the version file." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: check
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: publish and tag
+    needs: [check, build]
+    environment: publish
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      OUT_DIR: artifacts/nupkg
+      OWNER: ${{ github.repository_owner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-
-      - name: Read version
-        id: version
-        run: echo "VERSION=$(cat version)" >> "$GITHUB_OUTPUT"
-
-      - name: Ensure tag does not already exist
-        run: |
-          if git rev-parse "${{ steps.version.outputs.VERSION }}" >/dev/null 2>&1; then
-            echo "Tag ${{ steps.version.outputs.VERSION }} already exists. Bump the version file." >&2
-            exit 1
-          fi
 
       - name: Download package
         uses: actions/download-artifact@v4
@@ -51,11 +75,11 @@ jobs:
 
       - name: Verify package
         run: |
-          test -f "$OUT_DIR/sherlock-tools.${{ steps.version.outputs.VERSION }}.nupkg"
+          test -f "$OUT_DIR/sherlock-tools.$VERSION.nupkg"
           dotnet tool install --tool-path artifacts/tool \
             --add-source "$OUT_DIR" \
             sherlock-tools \
-            --version "${{ steps.version.outputs.VERSION }}"
+            --version "$VERSION"
           artifacts/tool/sl --help
 
       - name: NuGet login
@@ -81,11 +105,18 @@ jobs:
             --api-key "$GITHUB_TOKEN" \
             --skip-duplicate
 
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$VERSION" -m "Release $VERSION"
+          git push origin "refs/tags/$VERSION"
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ steps.version.outputs.VERSION }}" "$OUT_DIR"/*.nupkg \
-            --target "$GITHUB_SHA" \
-            --title "Sherlock ${{ steps.version.outputs.VERSION }}" \
+          gh release create "$VERSION" "$OUT_DIR"/*.nupkg \
+            --verify-tag \
+            --title "Sherlock $VERSION" \
             --generate-notes

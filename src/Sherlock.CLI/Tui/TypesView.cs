@@ -1,13 +1,14 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
 using Cellar.Layout;
 using Cellar.Primitives;
 using Cellar.Terminal;
+using Cellar.Theming;
 using Cellar.Widgets;
 using Sherlock.Core;
 using static Sherlock.CLI.Tui.ViewFormatting;
+using static System.FormattableString;
 
 namespace Sherlock.CLI.Tui;
 
@@ -15,9 +16,16 @@ internal static class TypesView
 {
     public static Widget Create(IReadOnlyList<HeapTypeStat> histogram, Action<NavigationTarget> navigate)
     {
-        List<HeapTypeStat> types = histogram.OrderByDescending(s => s.TotalSize).ToList();
-        Table table = Table(("Type", Constraint.Fill(3), false), ("Count", Constraint.Length(11), true),
-            ("Bytes", Constraint.Length(11), true), ("%", Constraint.Length(6), true), ("share", Constraint.Length(14), false));
+        // Free space isn't a type; Health reports it.
+        List<HeapTypeStat> types = histogram.Where(s => s.TypeName != "Free").OrderByDescending(s => s.TotalSize).ToList();
+        long total = 1; // of the rows shown, so that the shares of a filtered list add up
+        double Percent(HeapTypeStat row) => 100.0 * (long)row.TotalSize / total;
+        Table<HeapTypeStat> table = Table<HeapTypeStat>([], row => navigate(new TypeTarget(row.TypeName)),
+            NameColumn<HeapTypeStat>("Type", row => Rendering.DisplayNames.Type(row.TypeName)),
+            NamespaceColumn<HeapTypeStat>(row => Rendering.DisplayNames.Namespace(row.TypeName)),
+            BytesColumn<HeapTypeStat>("Bytes", row => (long)row.TotalSize, Theme.Current.Success),
+            PercentColumn<HeapTypeStat>(Percent),
+            CountColumn<HeapTypeStat>("Count", row => row.Count));
 
         void Populate(string query)
         {
@@ -25,55 +33,65 @@ internal static class TypesView
             List<HeapTypeStat> rows = query.Length == 0
                 ? types
                 : types.Where(s => s.TypeName.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
-            long total = Math.Max(1, rows.Sum(s => (long)s.TotalSize));
-            SetRows(table, rows, row =>
-            {
-                double percent = 100.0 * (long)row.TotalSize / total;
-                return [row.TypeName, row.Count.ToString("N0", CultureInfo.InvariantCulture), ByteFormat.Human(row.TotalSize),
-                    percent.ToString("0.0", CultureInfo.InvariantCulture), Bar(percent, 12)];
-            }, row => navigate(new TypeTarget(row.TypeName)));
+            total = Math.Max(1, rows.Sum(s => (long)s.TotalSize));
+            table.SetRows(rows);
         }
         Populate("");
         var filter = new Input { Placeholder = "/ to filter types by name\u2026", OnChange = Populate };
-        return Hinted(new Panel(new FilterStack(filter, table), " Types ") { BorderStyle = BorderStyle.Rounded },
-            "Enter \u2192 instances  \u00b7  / filter  \u00b7  Esc unfocus  \u00b7  s sort  \u00b7  Backspace back");
+        return View("Types", new FilterStack(filter, table, Populate), "Enter instances  \u00b7  / filter");
     }
 
     public static Widget Instances(InstanceListing listing, string typeName, Action<NavigationTarget> navigate)
     {
-        Table table = Table(("Address", Constraint.Length(16), false), ("Type", Constraint.Fill(2), false),
-            ("Size", Constraint.Length(10), true), ("Preview", Constraint.Fill(3), false));
-        SetRows(table, listing.Instances,
-            row => [$"0x{row.Address:x}", TypeNames.Short(row.TypeName), ByteFormat.Human(row.Size), row.Preview ?? ""],
-            row => navigate(new ObjTarget(row.Address)));
-        return Hinted(new Panel(table, $" {TypeNames.Short(typeName)} \u2014 {listing.TotalMatched:N0} instances, {ByteFormat.Human(listing.TotalMatchedSize)} ") { BorderStyle = BorderStyle.Rounded },
-            "Enter inspect  \u00b7  Backspace back");
+        if (listing.Instances.Count == 0)
+        {
+            return Message("Instances", $"No live instances of {Rendering.DisplayNames.Type(typeName)} in this snapshot.");
+        }
+        string title = Invariant($"Instances \u00b7 {listing.TotalMatched:N0} \u00b7 {ByteFormat.Human(listing.TotalMatchedSize)}");
+        if (listing.Instances.Count < listing.TotalMatched)
+        {
+            title += Invariant($" \u00b7 first {listing.Instances.Count:N0} shown");
+        }
+        Table<ObjectInstance> table = Table(listing.Instances, row => navigate(new ObjTarget(row.Address)),
+            TextColumn<ObjectInstance>("Address", Constraint.Length(16), row => Rendering.Addresses.Format(row.Address), Theme.Current.Secondary),
+            BytesColumn<ObjectInstance>("Size", row => (long)row.Size, Theme.Current.Success),
+            TextColumn<ObjectInstance>("Preview", Constraint.Fill(), row => row.Preview ?? "", Theme.Current.Foreground));
+        table.Columns[0].SortKey = row => row.Address;
+        return View(title, table, "Enter inspect");
     }
 
+    /// <summary>The filter box above the types table. The table has focus; '/' moves it to the filter, where Enter
+    /// keeps the filter and Esc clears it, both returning to the table. Keys go to whichever has focus and no further,
+    /// so Tab still switches views.</summary>
     private sealed class FilterStack : Widget
     {
+        private const string FilteringPlaceholder = "type a name  \u00b7  Enter keeps the filter  \u00b7  Esc clears it";
         private readonly Input _input;
         private readonly Widget _body;
+        private readonly Action<string> _apply;
         private readonly Stack _stack;
+        private readonly string _idlePlaceholder;
+        private bool _focused;
+        private bool _filtering;
 
-        public FilterStack(Input input, Widget body)
+        public FilterStack(Input input, Widget body, Action<string> apply)
         {
             _input = input;
             _body = body;
+            _apply = apply;
+            _idlePlaceholder = input.Placeholder;
             _stack = new Stack(Direction.Vertical).Add(input, Constraint.Length(1)).Add(body, Constraint.Fill());
         }
 
         public override bool IsFocusable => true;
         public override bool HasFocus
         {
-            get => _stack.HasFocus;
+            get => _focused;
             set
             {
-                _stack.HasFocus = value;
-                if (value && !_input.HasFocus && !_body.HasFocus)
-                {
-                    _body.HasFocus = true;
-                }
+                _focused = value;
+                _input.HasFocus = value && _filtering;
+                _body.HasFocus = value && !_filtering;
             }
         }
         protected override void VisitChildren(Action<Widget> visit) => visit(_stack);
@@ -82,22 +100,33 @@ internal static class TypesView
 
         public override bool OnEvent(InputEvent input)
         {
-            if (input is KeyEvent key)
+            if (input is not KeyEvent key)
             {
-                if (!_input.HasFocus && key.IsChar && key.Rune.Value == '/')
-                {
-                    _body.HasFocus = false;
-                    _input.HasFocus = true;
-                    return true;
-                }
-                if (_input.HasFocus && key.Key == Key.Escape)
-                {
-                    _input.HasFocus = false;
-                    _body.HasFocus = true;
-                    return true;
-                }
+                return _stack.OnEvent(input); // the mouse goes to what's under it
             }
-            return _stack.OnEvent(input);
+            if (!_filtering && key.IsChar && key.Rune.Value == '/')
+            {
+                SetFiltering(true);
+                return true;
+            }
+            if (_filtering && key.Key is Key.Enter or Key.Escape)
+            {
+                if (key.Key == Key.Escape)
+                {
+                    _input.Text = "";
+                    _apply("");
+                }
+                SetFiltering(false);
+                return true;
+            }
+            return (_filtering ? _input : _body).OnEvent(input);
+        }
+
+        private void SetFiltering(bool filtering)
+        {
+            _filtering = filtering;
+            _input.Placeholder = filtering ? FilteringPlaceholder : _idlePlaceholder;
+            HasFocus = true;
         }
     }
 }

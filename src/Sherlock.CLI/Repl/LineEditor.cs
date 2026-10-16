@@ -206,7 +206,7 @@ public static class LineEditor
     private static void Render(IAnsiConsole console, string prompt, StringBuilder buffer, int pos)
     {
         Console.Write($"{Esc}[2K\r");
-        console.Markup($"[{Theme.Focus}]{Markup.Escape(prompt)}[/]");
+        console.Markup($"[{Palette.Hot}]{Markup.Escape(prompt)}[/]");
         Console.Write(buffer.ToString());
 
         Console.Write("\r");

@@ -11,11 +11,11 @@ namespace Sherlock.CLI;
 /// <summary>Parses and starts runs for both the CLI and REPL.</summary>
 public static class RunLauncher
 {
-    public const string Usage = "run [--profile] [--correlate] [--children] [--include-process <glob>] [--experimental-gc-barrier] [--snapshot-on <event>] [--profiler-log <level>] [--] <path> [args...]";
+    public const string Usage = "run [--profile] [--correlate] [--children] [--include-process <glob>] [--snapshot-on <event>] [--profiler-log <level>] [--] <path> [args...]";
 
     public static RunOptions? Parse(IReadOnlyList<string> args, IAnsiConsole console)
     {
-        bool profile = false, correlate = false, children = false, experimentalGcBarrier = false;
+        bool profile = false, correlate = false, children = false;
         string? snapshotOn = null;
         ProfilerLogLevel logLevel = ProfilerLogLevel.Warning;
         var command = new List<string>();
@@ -37,7 +37,6 @@ public static class RunLauncher
                 case "--include-process":
                     Output.Error(console, $"[bold]--include-process[/] requires a filename glob.");
                     return null;
-                case "--experimental-gc-barrier": experimentalGcBarrier = true; break;
                 case "--snapshot-on" when i + 1 < args.Count && !args[i + 1].StartsWith("--", StringComparison.Ordinal):
                     snapshotOn = args[++i];
                     break;
@@ -69,7 +68,7 @@ public static class RunLauncher
             }
         }
 
-        var options = new RunOptions { Command = command, Profile = profile, Correlate = correlate, CollectChildren = children, IncludeProcesses = includeProcesses, ExperimentalGcBarrier = experimentalGcBarrier, SnapshotOn = snapshotOn, ProfilerLogLevel = logLevel };
+        var options = new RunOptions { Command = command, Profile = profile, Correlate = correlate, CollectChildren = children, IncludeProcesses = includeProcesses, SnapshotOn = snapshotOn, ProfilerLogLevel = logLevel };
         try
         {
             options.Validate();
@@ -94,7 +93,7 @@ public static class RunLauncher
             process.Exec = options.Command[0];
             workspace.Store.Persist(session);
             workspace.AddTarget(target, session);
-            Output.Success(console, $"Launched [#00D7FF]{Path.GetFileName(options.Command[0])}[/] · pid {target.Pid} · workspace [bold]{session.Id}[/]");
+            Output.Success(console, $"Launched [{Palette.Name}]{Path.GetFileName(options.Command[0])}[/] · pid {target.Pid} · workspace [bold]{session.Id}[/]");
             return (target, session);
         }
         catch (Exception ex)

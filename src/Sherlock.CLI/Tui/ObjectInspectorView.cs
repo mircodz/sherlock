@@ -11,8 +11,8 @@ using Cellar.Widgets.Charts.Trees;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using Sherlock.Core.Analysis;
-using Palette = Sherlock.CLI.Rendering.Theme;
 using Theme = Cellar.Theming.Theme;
+using static System.FormattableString;
 
 namespace Sherlock.CLI.Tui;
 
@@ -51,8 +51,7 @@ internal sealed class ObjectInspectorView : Widget
 
         _body = new Stack(Direction.Vertical)
             .Add(new Padding(_path, new Thickness(1, 0)), Constraint.Length(1))
-            .Add(new Panel(_tree, " Inspect - fields and contents ") { BorderStyle = BorderStyle.Rounded }, Constraint.Fill())
-            .Add(new Label(new StyledText(" Right/Left expand/collapse  Enter open  t type  Tab views  Backspace back", Theme.Current.MutedStyle)), Constraint.Length(1));
+            .Add(ViewFormatting.View("Fields", _tree, "\u2192\u2190 expand  \u00b7  Enter open object  \u00b7  t open type"), Constraint.Fill());
     }
 
     public override bool IsFocusable => true;
@@ -167,7 +166,7 @@ internal sealed class ObjectInspectorView : Widget
         if (row.Value.TypeName.Length > 0)
         {
             text.Append(" : ").Fg(Theme.Current.Muted)
-                .Append(row.Value.TypeName).Fg(Color.Hex(Palette.Identity));
+                .Append(Printable.Escape(row.Value.TypeName)).Fg(Color.Hex(Palette.Name));
         }
         if (row.Value.Offset is { } offset && row.Kind == RowKind.Value)
         {
@@ -188,27 +187,27 @@ internal sealed class ObjectInspectorView : Widget
         {
             string label = row.Loaded
                 ? $"[{row.StartIndex}..{Math.Max(row.StartIndex, row.EndIndex - 1)}]"
-                : $"Load next {Math.Min(PageSize, row.TotalCount - row.StartIndex)}  ({row.StartIndex:N0} of {row.TotalCount:N0} shown)";
+                : Invariant($"Load next {Math.Min(PageSize, row.TotalCount - row.StartIndex)}  ({row.StartIndex:N0} of {row.TotalCount:N0} shown)");
             return StyledText.Of(label).Fg(theme.Accent);
         }
 
         ObjectValue value = row.Value;
-        StyledText text = StyledText.Of(value.Name).Fg(theme.Foreground);
+        StyledText text = StyledText.Of(Printable.Escape(value.Name)).Fg(theme.Foreground);
         if (value.TypeName.Length > 0)
         {
             text.Append(" : ").Fg(theme.Muted)
-                .Append(TypeNames.Short(value.TypeName)).Fg(Color.Hex(Palette.Identity)).Underline().Link(new TypeTarget(value.TypeName));
+                .Append(DisplayNames.Type(value.TypeName)).Fg(Color.Hex(Palette.Name)).Underline().Link(new TypeTarget(value.TypeName));
         }
         if (ObjectAddress(value) is { } address)
         {
-            text.Append("  @").Fg(theme.Muted)
+            text.Append("  ").Fg(theme.Muted)
                 .Append($"0x{address:x}").Fg(Color.Hex(Palette.Address)).Underline().Link(new ObjTarget(address));
         }
         if (value.Kind is not (ObjectValueKind.Reference or ObjectValueKind.Struct))
         {
             Color color = value.Kind switch
             {
-                ObjectValueKind.String or ObjectValueKind.Character => Color.Hex(Palette.Focus),
+                ObjectValueKind.String or ObjectValueKind.Character => Color.Hex(Palette.Hot),
                 ObjectValueKind.Number => Color.Hex(Palette.Magenta),
                 ObjectValueKind.Boolean or ObjectValueKind.Pointer => Color.Hex(Palette.Address),
                 ObjectValueKind.Null => theme.Muted,
@@ -223,10 +222,10 @@ internal sealed class ObjectInspectorView : Widget
         }
         if (row.CollectionCount is { } count)
         {
-            text.Append($"  count {count:N0}").Fg(theme.Foreground);
+            text.Append(Invariant($"  count {count:N0}")).Fg(theme.Foreground);
             if (row.Capacity is { } capacity)
             {
-                text.Append($" / capacity {capacity:N0}").Fg(theme.Muted);
+                text.Append(Invariant($" / capacity {capacity:N0}")).Fg(theme.Muted);
             }
         }
         if (row.CyclePath is { } cycle)
@@ -285,7 +284,7 @@ internal sealed class ObjectInspectorView : Widget
                 {
                     if (row.Kind == RowKind.Value)
                     {
-                        parts.Add(row.Value.Name);
+                        parts.Add(Printable.Escape(row.Value.Name)); // the path is only shown
                     }
                 }
                 parts.Reverse();

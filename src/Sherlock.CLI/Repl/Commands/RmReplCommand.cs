@@ -9,6 +9,7 @@ public sealed class RmReplCommand : IReplCommand
     public string Name => "rm";
     public string Summary => "Remove a snapshot (sN) or a whole workspace (wN) from the library.";
     public string Usage => "rm <id>";
+    public int MaxArgs => 1;
     public string Category => "Library";
 
     public ReplResult Execute(ReplContext context, string[] args)

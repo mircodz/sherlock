@@ -9,13 +9,13 @@
 #include <string_view>
 #include <vector>
 
-// Allocation and per-object correlation records share one interned stack table.
+// Allocation and per-object correlation records share one symbol table (see symbols.hpp).
 namespace Sherlock::storage {
 
 // One stack/type pair and its counters; naturally aligned to the C# 40-byte layout.
 struct AllocationRecord {
     std::uint32_t stackId;
-    std::uint32_t typeId;   // frameId (in the shared Frames/Strings table) of the allocated type name
+    std::uint32_t typeId;   // index into Types: the allocated type
     std::uint64_t allocBytes;
     std::uint64_t allocCount;
     std::uint64_t survivedBytes;
@@ -31,28 +31,17 @@ struct CorrelationRecord {
 };
 static_assert(sizeof(CorrelationRecord) == 16, "CorrelationRecord must be a packed 16-byte record");
 
-// v2 replaces v1's reserved field with typeId in Frames/Strings.
-// v1 has no type; the C# reader checks the section version before resolving typeId.
-inline constexpr std::uint16_t kProfileVersion = 2;
+// Version 3: stacks are method indices and typeId indexes Types (symbols version 2). Earlier versions
+// referred to names in the retired Frames section.
+inline constexpr std::uint16_t kProfileVersion = 3;
 
-// Emits allocation and correlation records with shared stacks. Callers resolve profiler-owned
-// FrameIds through MethodRegistry and pass root -> leaf names; storage IDs are separate.
+// Emits allocation and correlation records with shared stacks. Callers intern each method once
+// (internMethod), then stacks of the returned indices, root -> leaf.
 class ProvenanceWriter {
 public:
-    // Intern frame names, then their sequence.
-    std::uint32_t internStack(std::span<const std::string_view> frames) {
-        frameScratch_.clear();
-        frameScratch_.reserve(frames.size());
-        for (std::string_view f : frames) {
-            frameScratch_.push_back(interner_.internFrame(f));
-        }
-        return interner_.internStack(frameScratch_);
-    }
-
-    // Type names share Frames/Strings with method names.
-    std::uint32_t internType(std::string_view name) {
-        return interner_.internFrame(name);
-    }
+    std::uint32_t internMethod(const MethodDescription& method) { return symbols_.internMethod(method); }
+    std::uint32_t internStack(std::span<const std::uint32_t> methods) { return symbols_.internStack(methods); }
+    std::uint32_t internType(std::string_view name) { return symbols_.internType(name); }
 
     void addAllocation(std::uint32_t stackId, std::uint32_t typeId, std::uint64_t allocBytes,
                        std::uint64_t allocCount, std::uint64_t survivedBytes, std::uint64_t survivedCount) {
@@ -68,7 +57,7 @@ public:
 
     // Terminal operation: sort correlation in place, then bound each chunk by chunkBytes.
     void writeTo(ContainerWriter& w, std::size_t chunkBytes = kDefaultChunkBytes) {
-        interner_.writeTo(w);
+        symbols_.writeTo(w);
         if (!allocs_.empty()) {
             w.addRecords<AllocationRecord>(SectionType::Allocations, kProfileVersion, allocs_);
         }
@@ -81,8 +70,7 @@ public:
     }
 
 private:
-    StackInterner interner_;
-    std::vector<std::uint32_t> frameScratch_;
+    SymbolWriter symbols_;
     std::vector<AllocationRecord> allocs_;
     std::vector<CorrelationRecord> corr_;
 };
@@ -90,7 +78,7 @@ private:
 // Borrows allocation and stack bytes; owns the reassembled correlation column.
 class ProvenanceReader {
 public:
-    explicit ProvenanceReader(const ContainerReader& c) : stacks_(StackTable::read(c)) {
+    explicit ProvenanceReader(const ContainerReader& c) : symbols_(SymbolTable::read(c)) {
         if (auto a = c.find(SectionType::Allocations)) {
             allocs_ = a->records<AllocationRecord>();
         }
@@ -101,7 +89,7 @@ public:
         }
     }
 
-    [[nodiscard]] const StackTable& stacks() const { return stacks_; }
+    [[nodiscard]] const SymbolTable& symbols() const { return symbols_; }
     [[nodiscard]] std::span<const AllocationRecord> allocations() const { return allocs_; }
     [[nodiscard]] std::span<const CorrelationRecord> correlation() const { return corr_; }
 
@@ -116,7 +104,7 @@ public:
     }
 
 private:
-    StackTable stacks_;
+    SymbolTable symbols_;
     std::span<const AllocationRecord> allocs_;
     std::vector<CorrelationRecord> corr_;
 };

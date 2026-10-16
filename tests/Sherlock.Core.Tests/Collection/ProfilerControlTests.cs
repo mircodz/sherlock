@@ -55,13 +55,13 @@ public sealed class ProfilerControlTests
         {
             string request = await ReceiveAsync(client, cancellation);
             string[] fields = request.Split('\t');
-            Assert.Equal(["REQ", fields[1], "gc-count"], fields);
-            await SendAsync(client, $"RES\t{fields[1]}\tok\t17", cancellation);
+            Assert.Equal(["REQ", fields[1], "flush-allocations"], fields);
+            await SendAsync(client, $"RES\t{fields[1]}\tok\t/tmp/allocations.slab", cancellation);
         }, cancellation);
 
-        (bool ok, string[] fields) = await control.RequestAsync(4242, ProfilerControl.GcCount, TimeSpan.FromSeconds(2));
+        (bool ok, string[] fields) = await control.RequestAsync(4242, ProfilerControl.FlushAllocations, TimeSpan.FromSeconds(2));
         Assert.True(ok);
-        Assert.Equal(["17"], fields);
+        Assert.Equal(["/tmp/allocations.slab"], fields);
         await response;
 
         var received = new TaskCompletionSource<(int Pid, string[] Fields)>(TaskCreationOptions.RunContinuationsAsynchronously);
