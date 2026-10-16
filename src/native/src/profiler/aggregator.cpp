@@ -13,10 +13,12 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <system_error>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <span>
 #include <vector>
 
@@ -39,7 +41,22 @@ struct ThreadShard {
 };
 thread_local ThreadShard t_shard;
 
+// Set once the thread's exit handler ran: a later allocation on the exiting thread records into the overflow shard,
+// which needs no exit handler.
+thread_local bool t_exited = false;
+
 std::atomic<std::uint64_t> g_nextAggregatorId{1};
+
+// Live aggregators by owner ID, so a thread that exits after its aggregator was destroyed doesn't touch it. Never
+// destroyed: threads may exit while static objects are being destroyed.
+struct Owners {
+    std::mutex mutex;
+    std::unordered_map<std::uint64_t, Aggregator*> live;
+};
+Owners& owners() {
+    static Owners* owners = new Owners();
+    return *owners;
+}
 
 // FNV-1a over the frame ids and the type: one call site can allocate several types.
 std::uint64_t siteHash(std::span<const FrameId> frames, ClassID classId) {
@@ -128,12 +145,48 @@ std::vector<std::string> typeDefSegments(IMetaDataImport* md, mdTypeDef typeDef)
 Aggregator::Aggregator(ICorProfilerInfo10* info, Logger* logger, MethodRegistry& methods)
     : info_(info), logger_(logger), methods_(methods),
       instanceId_(g_nextAggregatorId.fetch_add(1, std::memory_order_relaxed)) {
+    std::lock_guard lock(owners().mutex);
+    owners().live.emplace(instanceId_, this);
 }
 
 Aggregator::~Aggregator() {
+    {
+        std::lock_guard lock(owners().mutex);
+        owners().live.erase(instanceId_);
+    }
     for (std::atomic<Shard*>& slot : shards_) {
         delete slot.load(std::memory_order_acquire);
     }
+}
+
+thread_local Aggregator::ThreadExit Aggregator::threadExit_;
+
+Aggregator::ThreadExit::~ThreadExit() {
+    releaseThreadShard();
+    t_exited = true;
+}
+
+void Aggregator::releaseThreadShard() noexcept {
+    const ThreadShard held = std::exchange(t_shard, {});
+    if (held.shard == nullptr) {
+        return;
+    }
+    try {
+        std::lock_guard lock(owners().mutex);
+        auto it = owners().live.find(held.ownerId);
+        if (it == owners().live.end() || held.shard == &it->second->overflow_) {
+            return; // a destroyed aggregator freed its shards; the overflow shard stays shared
+        }
+        Aggregator& owner = *it->second;
+        std::lock_guard shardsLock(owner.shardsMutex_);
+        owner.freeShards_.push_back(held.shard);
+    } catch (...) {
+        // Out of memory growing the free list: the shard stays registered and is dumped, just not reused.
+    }
+}
+
+std::size_t Aggregator::shardCount() const {
+    return registeredShards().size();
 }
 
 // Reserve initial shard capacity; pending retains its capacity across GCs.
@@ -143,17 +196,38 @@ constexpr std::size_t kPendingReserve = 2048;  // sampled objects awaiting their
 } // namespace
 
 Aggregator::Shard& Aggregator::localShard() {
-    if (t_shard.ownerId != instanceId_) {
+    if (t_shard.ownerId != instanceId_) [[unlikely]] {
+        if (t_exited) {
+            return overflow_;
+        }
+        releaseThreadShard(); // one from another aggregator goes back to it
+        t_shard = {instanceId_, &takeShard()};
+        threadExit_.armed = true;
+    }
+    return *t_shard.shard;
+}
+
+Aggregator::Shard& Aggregator::takeShard() {
+    std::lock_guard lock(shardsMutex_);
+    if (!freeShards_.empty()) {
+        Shard* shard = freeShards_.back();
+        freeShards_.pop_back();
+        return *shard;
+    }
+    const int count = shardCount_.load(std::memory_order_relaxed);
+    if (count < kMaxShards) {
         auto* shard = new Shard();
         shard->sites.reserve(kSitesReserve);
         shard->pending.reserve(kPendingReserve);
-        int idx = shardCount_.fetch_add(1, std::memory_order_acq_rel);
-        if (idx < kMaxShards)
-            shards_[idx].store(shard, std::memory_order_release);
-        // else: too many threads, shard still works locally but isn't dumped.
-        t_shard = {instanceId_, shard};
+        shards_[count].store(shard, std::memory_order_release);
+        shardCount_.store(count + 1, std::memory_order_release);
+        return *shard;
     }
-    return *t_shard.shard;
+    if (!overflowReported_ && logger_) {
+        logger_->warn("more than {} threads are recording allocations at once; the others share one shard", kMaxShards);
+    }
+    overflowReported_ = true;
+    return overflow_;
 }
 
 void Aggregator::record(std::span<const FrameId> frames, std::uint64_t bytes, ObjectID addr, ClassID classId) {
@@ -406,13 +480,12 @@ void Aggregator::countPendingAsSurvived() {
 
 std::vector<Aggregator::Shard*> Aggregator::registeredShards() const {
     std::vector<Shard*> result;
-    const int count = std::min(shardCount_.load(std::memory_order_acquire), kMaxShards);
-    result.reserve(static_cast<std::size_t>(count));
+    const int count = shardCount_.load(std::memory_order_acquire);
+    result.reserve(static_cast<std::size_t>(count) + 1);
     for (int i = 0; i < count; ++i) {
-        if (Shard* shard = shards_[i].load(std::memory_order_acquire)) {
-            result.push_back(shard);
-        }
+        result.push_back(shards_[i].load(std::memory_order_acquire));
     }
+    result.push_back(&overflow_);
     return result;
 }
 

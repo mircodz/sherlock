@@ -406,3 +406,51 @@ TEST(AggregatorSnapshot, CollidingStackHashesKeepTheirSitesApart) {
     EXPECT_EQ(bytesByDepth, (std::map<std::size_t, std::uint64_t>{{1, 100}, {2, 500}}));
     std::filesystem::remove(path);
 }
+
+// A thread's shard goes back to the aggregator when the thread exits; 1,100 short-lived threads used to lose every
+// allocation after the 1,024th thread.
+TEST(AggregatorShards, ShortLivedThreadsReuseShardsAndLoseNothing) {
+    Agg a;
+    constexpr int kThreads = 1100;
+    for (int i = 0; i < kThreads; ++i) {
+        std::thread([&a, i] { alloc(a, 0x100000 + static_cast<std::uint64_t>(i) * 0x100); }).join();
+    }
+    EXPECT_EQ(a.shardCount(), 2u); // one reused shard and the overflow shard
+
+    a.beginGc();
+    a.noteCondemnedRange(0x100000, kThreads * 0x100);
+    a.noteSurvivorRange(0x100000, kThreads * 0x100);
+    a.endGc();
+    EXPECT_EQ(liveAddrs(a).size(), static_cast<std::size_t>(kThreads));
+}
+
+TEST(AggregatorShards, ThreadsPastTheCapShareTheOverflowShard) {
+    Agg a;
+    constexpr int kThreads = 1100; // more than record at once with a shard of their own
+    std::atomic<int> recorded{0};
+    std::atomic<bool> release{false};
+    std::vector<std::thread> threads;
+    for (int i = 0; i < kThreads; ++i) {
+        threads.emplace_back([&, i] {
+            alloc(a, 0x100000 + static_cast<std::uint64_t>(i) * 0x100);
+            recorded.fetch_add(1);
+            while (!release.load()) {
+                std::this_thread::yield();
+            }
+        });
+    }
+    while (recorded.load() < kThreads) {
+        std::this_thread::yield();
+    }
+    release = true;
+    for (std::thread& thread : threads) {
+        thread.join();
+    }
+    EXPECT_EQ(a.shardCount(), 1025u);
+
+    a.beginGc();
+    a.noteCondemnedRange(0x100000, kThreads * 0x100);
+    a.noteSurvivorRange(0x100000, kThreads * 0x100);
+    a.endGc();
+    EXPECT_EQ(liveAddrs(a).size(), static_cast<std::size_t>(kThreads));
+}
