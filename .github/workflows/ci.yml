@@ -15,6 +15,29 @@ env:
   DOTNET_NOLOGO: true
 
 jobs:
+  version-check:
+    name: version check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fail if the version is already released
+        run: |
+          VERSION="$(tr -d '[:space:]' < version)"
+          git fetch --tags --force
+          if git rev-parse --verify --quiet "refs/tags/$VERSION" >/dev/null; then
+            echo "::error file=version::Version $VERSION is already tagged. Bump the version file before merging." >&2
+            exit 1
+          fi
+          LATEST="$(git tag --list | sort -V | tail -n1)"
+          if [ -n "$LATEST" ] && [ "$(printf '%s\n%s\n' "$LATEST" "$VERSION" | sort -V | tail -n1)" != "$VERSION" ]; then
+            echo "::error file=version::Version $VERSION must be greater than the latest release, $LATEST." >&2
+            exit 1
+          fi
+          echo "Version $VERSION has no tag yet (latest release: ${LATEST:-none})."
+
   managed:
     name: managed ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
