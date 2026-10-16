@@ -12,27 +12,28 @@ using Sherlock.Core.Store;
 
 namespace Sherlock.Core;
 
-/// <summary>An opened managed heap snapshot.</summary>
+/// <summary>An opened managed heap snapshot. Queries may run on several threads at once: each cached analysis is
+/// computed once, and concurrent callers wait for it.</summary>
 public sealed class Snapshot : IDisposable
 {
     private readonly DataTarget _dataTarget;
     private readonly SnapshotEntry? _entry;
-    private HeapGraphProvider? _heapGraph;
-    private DominatorTree? _dominators;
+    private readonly HeapGraphProvider _heapGraph;
     private readonly Lock _provenanceLock = new();
     private SlabFile? _slab;
     private ProvenanceReader? _provenance;
     private Exception? _provenanceFailure;
-    private DumpInfo? _info;
-    private IReadOnlyList<ModuleInfo>? _modules;
-    private IReadOnlyList<SegmentInfo>? _segments;
-    private HeapGenerations? _generations;
-    private IReadOnlyList<ThreadInfo>? _threads;
-    private IReadOnlyList<ExceptionInfo>? _exceptions;
-    private IReadOnlyList<HeapTypeStat>? _histogram;
     private AllocationProfile? _allocations;
-    private FinalizerReport? _finalizers;
-    private IReadOnlyList<Finding>? _diagnosis;
+    private readonly Once<DumpInfo> _info = new();
+    private readonly Once<IReadOnlyList<ModuleInfo>> _modules = new();
+    private readonly Once<IReadOnlyList<SegmentInfo>> _segments = new();
+    private readonly Once<HeapGenerations> _generations = new();
+    private readonly Once<IReadOnlyList<ThreadInfo>> _threads = new();
+    private readonly Once<IReadOnlyList<ExceptionInfo>> _exceptions = new();
+    private readonly Once<IReadOnlyList<HeapTypeStat>> _histogram = new();
+    private readonly Once<DominatorTree> _dominators = new();
+    private readonly Once<FinalizerReport> _finalizers = new();
+    private readonly Once<IReadOnlyList<Finding>> _diagnosis = new();
     private bool _disposed;
 
     private Snapshot(string path, DataTarget dataTarget, ClrInfo clrInfo, ClrRuntime runtime, SnapshotEntry? entry)
@@ -42,6 +43,7 @@ public sealed class Snapshot : IDisposable
         ClrInfo = clrInfo;
         Runtime = runtime;
         _entry = entry;
+        _heapGraph = new HeapGraphProvider(this);
     }
 
     public string DumpPath { get; }
@@ -80,25 +82,32 @@ public sealed class Snapshot : IDisposable
         }
     }
 
-    public DumpInfo Info => _info ??= new DumpInspector(this).Inspect();
-    public IReadOnlyList<ModuleInfo> Modules => _modules ??= new RuntimeAnalyzer(this).GetModules();
-    public IReadOnlyList<SegmentInfo> Segments => _segments ??= new RuntimeAnalyzer(this).GetSegments();
-    public HeapGenerations Generations => _generations ??= new RuntimeAnalyzer(this).GetGenerations();
-    public IReadOnlyList<ThreadInfo> Threads => _threads ??= new ThreadAnalyzer(this).GetThreads();
+    public DumpInfo Info => _info.Get(() => new DumpInspector(this).Inspect());
+    public IReadOnlyList<ModuleInfo> Modules => _modules.Get(() => new RuntimeAnalyzer(this).GetModules());
+    public IReadOnlyList<SegmentInfo> Segments => _segments.Get(() => new RuntimeAnalyzer(this).GetSegments());
+    public HeapGenerations Generations => _generations.Get(() => new RuntimeAnalyzer(this).GetGenerations());
+    public IReadOnlyList<ThreadInfo> Threads => _threads.Get(() => new ThreadAnalyzer(this).GetThreads());
     public IReadOnlyList<ExceptionInfo> Exceptions => GetExceptions();
-    public IReadOnlyList<HeapTypeStat> Histogram => _histogram ??= BuildHistogram();
+    public IReadOnlyList<HeapTypeStat> Histogram => GetHistogram();
     public DominatorTree Dominators => GetDominatorTree();
 
     public IReadOnlyList<ExceptionInfo> GetExceptions(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return _exceptions ??= new ExceptionAnalyzer(this).FindExceptions(cancellationToken);
+        return _exceptions.Get(() => new ExceptionAnalyzer(this).FindExceptions(cancellationToken), cancellationToken);
+    }
+
+    /// <summary>Objects by type, largest first. Comes from the heap graph when one is cached; otherwise walks the heap.</summary>
+    public IReadOnlyList<HeapTypeStat> GetHistogram(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return _histogram.Get(() => BuildHistogram(cancellationToken), cancellationToken);
     }
 
     public DominatorTree GetDominatorTree(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return _dominators ??= new DominatorAnalyzer(this).Build(cancellationToken);
+        return _dominators.Get(() => new DominatorAnalyzer(this).Build(cancellationToken), cancellationToken);
     }
 
     /// <summary>The snapshot's allocation profile, built once; views on several threads share it. Throws
@@ -145,7 +154,7 @@ public sealed class Snapshot : IDisposable
     public FinalizerReport Finalizers(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return _finalizers ??= new FinalizerAnalyzer(this).Analyze(cancellationToken);
+        return _finalizers.Get(() => new FinalizerAnalyzer(this).Analyze(cancellationToken), cancellationToken);
     }
 
     public IReadOnlyList<EventSubscription> EventHandlerLeaks(int minSubscribers = 16, CancellationToken cancellationToken = default)
@@ -157,7 +166,7 @@ public sealed class Snapshot : IDisposable
     public IReadOnlyList<Finding> Diagnose(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return _diagnosis ??= new HeapDoctor(this).Diagnose(cancellationToken);
+        return _diagnosis.Get(() => new HeapDoctor(this).Diagnose(cancellationToken), cancellationToken);
     }
 
     /// <summary>See <see cref="Profiling.ProvenanceReader.FramesFor"/>. Throws <see cref="InvalidDataException"/> when the
@@ -174,8 +183,8 @@ public sealed class Snapshot : IDisposable
         }
     }
 
-    internal HeapGraph GetHeapGraph(CancellationToken cancellationToken = default) => (_heapGraph ??= new HeapGraphProvider(this)).Get(cancellationToken);
-    internal HeapGraph? TryGetCachedHeapGraph() => (_heapGraph ??= new HeapGraphProvider(this)).TryGetCachedOrOnDisk();
+    internal HeapGraph GetHeapGraph(CancellationToken cancellationToken = default) => _heapGraph.Get(cancellationToken);
+    internal HeapGraph? TryGetCachedHeapGraph(CancellationToken cancellationToken = default) => _heapGraph.TryGetCachedOrOnDisk(cancellationToken);
 
     // Callers hold _provenanceLock. A profile that can't be read fails the same way every time, without reopening it.
     private ProvenanceReader? GetProvenance()
@@ -209,11 +218,11 @@ public sealed class Snapshot : IDisposable
         }
     }
 
-    private IReadOnlyList<HeapTypeStat> BuildHistogram()
+    private IReadOnlyList<HeapTypeStat> BuildHistogram(CancellationToken cancellationToken)
     {
-        if (TryGetCachedHeapGraph() is not { } graph || graph.Histogram() is not { } rows)
+        if (TryGetCachedHeapGraph(cancellationToken) is not { } graph || graph.Histogram() is not { } rows)
         {
-            return new HeapAnalyzer(this).GetStatistics();
+            return new HeapAnalyzer(this).GetStatistics(cancellationToken);
         }
 
         var stats = new List<HeapTypeStat>(rows.Length);
@@ -236,7 +245,7 @@ public sealed class Snapshot : IDisposable
         }
         _disposed = true;
         _slab?.Dispose();
-        _heapGraph?.Dispose();
+        _heapGraph.Dispose();
         Runtime.Dispose();
         _dataTarget.Dispose();
     }

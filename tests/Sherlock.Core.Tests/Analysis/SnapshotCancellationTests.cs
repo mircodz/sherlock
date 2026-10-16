@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -19,6 +20,7 @@ public sealed class SnapshotCancellationTests
         CancellationToken token = cancellation.Token;
 
         AssertCancelled(token, () => snapshot.GetDominatorTree(token));
+        AssertCancelled(token, () => snapshot.GetHistogram(token));
         AssertCancelled(token, () => snapshot.GetExceptions(token));
         AssertCancelled(token, () => snapshot.DuplicateStrings(cancellationToken: token));
         AssertCancelled(token, () => snapshot.Finalizers(token));
@@ -34,10 +36,10 @@ public sealed class SnapshotCancellationTests
         var finalizers = new FinalizerReport(0, 0, []);
         Finding[] diagnosis = [new(FindingSeverity.Info, "growth", "title", "detail")];
         Snapshot snapshot = WithoutRuntime(
-            ("_dominators", dominators),
-            ("_exceptions", exceptions),
-            ("_finalizers", finalizers),
-            ("_diagnosis", diagnosis));
+            ("_dominators", new Once<DominatorTree>(dominators)),
+            ("_exceptions", new Once<IReadOnlyList<ExceptionInfo>>(exceptions)),
+            ("_finalizers", new Once<FinalizerReport>(finalizers)),
+            ("_diagnosis", new Once<IReadOnlyList<Finding>>(diagnosis)));
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         CancellationToken token = cancellation.Token;

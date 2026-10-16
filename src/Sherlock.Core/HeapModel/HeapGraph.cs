@@ -38,7 +38,8 @@ public sealed class HeapGraph : IDisposable
     // Keeps mmap-backed columns alive.
     private readonly IDisposable? _backing;
 
-    private AddressIndex? _index;
+    private readonly Once<AddressIndex> _index = new();
+    private readonly Once<Predecessors> _predecessors = new();
     private bool _disposed;
 
     public HeapGraph(ReadOnlyMemory<ulong> addresses, ReadOnlyMemory<uint> sizes, ReadOnlyMemory<long> offsets, EdgeColumn edges,
@@ -149,16 +150,14 @@ public sealed class HeapGraph : IDisposable
     public int IndexOf(ulong address)
     {
         ThrowIfDisposed();
-        return (_index ??= new AddressIndex(Addresses)).IndexOf(address);
+        return _index.Get(() => new AddressIndex(Addresses)).IndexOf(address);
     }
-
-    private Predecessors? _predecessors;
 
     /// <summary>Who references each object, built on first use and kept with the graph.</summary>
     internal Predecessors GetPredecessors(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        return _predecessors ??= Predecessors.Build(this, cancellationToken);
+        return _predecessors.Get(() => Predecessors.Build(this, cancellationToken), cancellationToken);
     }
 
     /// <summary>Returns an object's type name when stored in the graph.</summary>
@@ -177,7 +176,7 @@ public sealed class HeapGraph : IDisposable
         get
         {
             ThrowIfDisposed();
-            if (_hashed)
+            if (Volatile.Read(ref _hashed))
             {
                 return _contentHash;
             }
@@ -207,9 +206,10 @@ public sealed class HeapGraph : IDisposable
                 Mix(root.IsPinned ? 1u : 0u);
             }
 
+            // Concurrent first readers compute the same value; publishing the flag last makes the hash visible with it.
             _contentHash = h;
-            _hashed = true;
-            return _contentHash;
+            Volatile.Write(ref _hashed, true);
+            return h;
         }
     }
 
