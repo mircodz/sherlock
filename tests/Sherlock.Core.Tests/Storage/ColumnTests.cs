@@ -183,4 +183,17 @@ public class ColumnTests : IDisposable
         Assert.True(col.TrySlice(col.Length, 0, out ReadOnlySpan<uint> tail));
         Assert.Equal(0, tail.Length);
     }
+
+    [Fact]
+    public void AsMemoryReadsBackToBackSectionsFromTheMapping()
+    {
+        var recs = new ulong[24];
+        for (int i = 0; i < recs.Length; i++) recs[i] = (ulong)i * 3;
+        using var slab = WriteSlab(SectionType.GraphAddresses, 3, recs, sections: 3);
+
+        ReadOnlyMemory<ulong> memory = slab.GetColumn<ulong>(SectionType.GraphAddresses).AsMemory();
+
+        Assert.Equal(recs, memory.ToArray());
+        Assert.True(MemoryMarshal.TryGetMemoryManager(memory, out PointerMemory<ulong>? _));
+    }
 }

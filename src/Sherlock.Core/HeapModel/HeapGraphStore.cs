@@ -69,12 +69,13 @@ public static class HeapGraphStore
                 }
             }
 
-            ReadOnlyMemory<ulong> addresses = Materialize(slab.GetColumn<ulong>(SectionType.GraphAddresses));
-            ReadOnlyMemory<uint> sizes = Materialize(slab.GetColumn<uint>(SectionType.GraphSizes));
-            ReadOnlyMemory<long> offsets = Materialize(slab.GetColumn<long>(SectionType.GraphOffsets));
-            ReadOnlyMemory<HeapRootRecord> roots = Materialize(slab.GetColumn<HeapRootRecord>(SectionType.GraphRoots));
+            // Columns stay in the mapping, which the graph owns.
+            ReadOnlyMemory<ulong> addresses = slab.GetColumn<ulong>(SectionType.GraphAddresses).AsMemory();
+            ReadOnlyMemory<uint> sizes = slab.GetColumn<uint>(SectionType.GraphSizes).AsMemory();
+            ReadOnlyMemory<long> offsets = slab.GetColumn<long>(SectionType.GraphOffsets).AsMemory();
+            ReadOnlyMemory<HeapRootRecord> roots = slab.GetColumn<HeapRootRecord>(SectionType.GraphRoots).AsMemory();
 
-            long[] chunkStarts = Materialize(slab.GetColumn<long>(SectionType.GraphEdgeChunkMeta));
+            long[] chunkStarts = slab.GetColumn<long>(SectionType.GraphEdgeChunkMeta).AsMemory().ToArray();
             IReadOnlyList<Column<int>> edgeSections = slab.SectionColumns<int>(SectionType.GraphEdgesChunk);
             var chunks = new ReadOnlyMemory<int>[edgeSections.Count];
             for (int i = 0; i < chunks.Length; i++)
@@ -87,7 +88,7 @@ public static class HeapGraphStore
             string[]? typeNames = null;
             if (slab.Has(SectionType.GraphTypeIds) && slab.Has(SectionType.GraphTypeNames))
             {
-                typeIds = Materialize(slab.GetColumn<int>(SectionType.GraphTypeIds));
+                typeIds = slab.GetColumn<int>(SectionType.GraphTypeIds).AsMemory();
                 typeNames = DecodeNames(slab.Blob(SectionType.GraphTypeNames));
             }
 
@@ -120,13 +121,6 @@ public static class HeapGraphStore
         }
         var file = new FileInfo(path);
         return (file.Length, file.LastWriteTimeUtc.Ticks);
-    }
-
-    private static T[] Materialize<T>(Column<T> col) where T : unmanaged
-    {
-        var arr = GC.AllocateUninitializedArray<T>(checked((int)col.Length));
-        col.CopyTo(0, arr);
-        return arr;
     }
 
     // [u32 count][ (u32 byteLen, utf8 bytes) x count ], little-endian.

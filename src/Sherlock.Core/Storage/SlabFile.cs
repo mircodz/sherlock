@@ -13,24 +13,23 @@ namespace Sherlock.Core.Storage;
 /// </summary>
 public sealed class SlabFile : IDisposable
 {
-    // Descriptor only; columns resolve bytes lazily through the mmap, so a >2 GB section is fine.
+    // Descriptor only; columns read their bytes through the mapping.
     private readonly record struct SectionInfo(SectionType Type, ushort Version, ushort RecordSize, long ByteOffset, long ByteLength, long Count);
 
-    private readonly ChunkedMmap _mmap;
+    private readonly MappedFile _file;
     private readonly List<SectionInfo> _sections = [];
 
     public ushort Version { get; }
 
-    private SlabFile(ChunkedMmap mmap)
+    private SlabFile(MappedFile file)
     {
-        _mmap = mmap;
+        _file = file;
 
-        if (mmap.Length < ContainerFormat.HeaderSize)
+        if (file.Length < ContainerFormat.HeaderSize)
         {
             throw new InvalidDataException("file smaller than container header (truncated)");
         }
-        Span<byte> head = stackalloc byte[ContainerFormat.HeaderSize];
-        mmap.CopyTo(0, head);
+        ReadOnlySpan<byte> head = file.Span(0, ContainerFormat.HeaderSize);
         if (!head[..4].SequenceEqual(ContainerFormat.Magic))
         {
             throw new InvalidDataException("bad container magic");
@@ -48,21 +47,20 @@ public sealed class SlabFile : IDisposable
         uint count = BinaryPrimitives.ReadUInt32LittleEndian(head[8..]);
 
         long tableEnd = ContainerFormat.HeaderSize + (long)count * ContainerFormat.SectionEntrySize;
-        if (tableEnd > mmap.Length || tableEnd > int.MaxValue)
+        if (tableEnd > file.Length || tableEnd > int.MaxValue)
         {
             throw new InvalidDataException("section table exceeds container");
         }
 
-        var table = new byte[checked((int)(count * (long)ContainerFormat.SectionEntrySize))];
-        mmap.CopyTo(ContainerFormat.HeaderSize, table);
+        ReadOnlySpan<byte> table = file.Span(ContainerFormat.HeaderSize, checked((int)(count * (long)ContainerFormat.SectionEntrySize)));
         var occupied = new List<(long Start, long End)>(checked((int)count));
         for (int i = 0; i < count; i++)
         {
-            ReadOnlySpan<byte> e = table.AsSpan(i * ContainerFormat.SectionEntrySize, ContainerFormat.SectionEntrySize);
+            ReadOnlySpan<byte> e = table.Slice(i * ContainerFormat.SectionEntrySize, ContainerFormat.SectionEntrySize);
             ulong offset = BinaryPrimitives.ReadUInt64LittleEndian(e[8..]);
             ulong length = BinaryPrimitives.ReadUInt64LittleEndian(e[16..]);
             ulong records = BinaryPrimitives.ReadUInt64LittleEndian(e[24..]);
-            ulong fileLength = (ulong)mmap.Length;
+            ulong fileLength = (ulong)file.Length;
             if (offset > fileLength || length > fileLength - offset)
             {
                 throw new InvalidDataException("section bounds exceed container");
@@ -106,14 +104,14 @@ public sealed class SlabFile : IDisposable
     /// <summary>Opens (memory-maps) the slab at <paramref name="path"/>.</summary>
     public static SlabFile Open(string path)
     {
-        ChunkedMmap mmap = ChunkedMmap.Open(path);
+        MappedFile file = MappedFile.Open(path);
         try
         {
-            return new SlabFile(mmap);
+            return new SlabFile(file);
         }
         catch
         {
-            mmap.Dispose();
+            file.Dispose();
             throw;
         }
     }
@@ -161,7 +159,7 @@ public sealed class SlabFile : IDisposable
         }
         return segs.Count == 0
             ? Column<T>.Empty
-            : new Column<T>(_mmap, CollectionsMarshal.AsSpan(segs));
+            : new Column<T>(_file, CollectionsMarshal.AsSpan(segs));
     }
 
     /// <summary>Returns each same-typed section separately, in table order, preserving edge-chunk boundaries.</summary>
@@ -178,7 +176,7 @@ public sealed class SlabFile : IDisposable
             }
 
             version = Validate<T>(type, s, width, version);
-            result.Add(new Column<T>(_mmap, [(s.ByteOffset, s.Count)]));
+            result.Add(new Column<T>(_file, [(s.ByteOffset, s.Count)]));
         }
         return result;
     }
@@ -212,12 +210,10 @@ public sealed class SlabFile : IDisposable
                 continue;
             }
 
-            var buf = new byte[checked((int)s.ByteLength)];
-            _mmap.CopyTo(s.ByteOffset, buf);
-            return buf;
+            return _file.Span(s.ByteOffset, checked((int)s.ByteLength)).ToArray();
         }
         return [];
     }
 
-    public void Dispose() => _mmap.Dispose();
+    public void Dispose() => _file.Dispose();
 }

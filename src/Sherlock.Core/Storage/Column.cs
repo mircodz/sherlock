@@ -1,31 +1,24 @@
 using System;
 using System.Buffers;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 
 namespace Sherlock.Core.Storage;
 
 /// <summary>
-/// A long-indexed column of fixed-width records across one or more mapped sections.
-/// The owning mmap must remain alive; records crossing view boundaries are copied.
+/// A long-indexed column of fixed-width records across one or more sections of a mapped file.
+/// The file must stay open while the column, or anything read from it without copying, is used.
 /// </summary>
 public sealed unsafe class Column<T> where T : unmanaged
 {
     // A physical section; FirstElement is its running (global) start index.
-    private readonly struct Seg
+    private readonly struct Seg(long byteOffset, long firstElement, long count)
     {
-        public readonly long ByteOffset;
-        public readonly long FirstElement;
-        public readonly long Count;
-        public Seg(long byteOffset, long firstElement, long count)
-        {
-            ByteOffset = byteOffset;
-            FirstElement = firstElement;
-            Count = count;
-        }
+        public readonly long ByteOffset = byteOffset;
+        public readonly long FirstElement = firstElement;
+        public readonly long Count = count;
     }
 
-    private readonly ChunkedMmap _mmap;
+    private readonly MappedFile _file;
     private readonly Seg[] _segs;
     private static readonly int Width = Unsafe.SizeOf<T>();
 
@@ -37,15 +30,14 @@ public sealed unsafe class Column<T> where T : unmanaged
 
     private Column()
     {
-        _mmap = null!;
+        _file = null!;
         _segs = [];
-        Length = 0;
     }
 
     /// <summary>Builds a column from ordered sections, each described by byte offset and element count.</summary>
-    public Column(ChunkedMmap mmap, ReadOnlySpan<(long byteOffset, long count)> sections)
+    public Column(MappedFile file, ReadOnlySpan<(long byteOffset, long count)> sections)
     {
-        _mmap = mmap;
+        _file = file;
         _segs = new Seg[sections.Length];
         long running = 0;
         for (int i = 0; i < sections.Length; i++)
@@ -65,32 +57,23 @@ public sealed unsafe class Column<T> where T : unmanaged
                 throw new ArgumentOutOfRangeException(nameof(i));
             }
             Seg seg = SegmentOf(i);
-            long byteOffset = seg.ByteOffset + (i - seg.FirstElement) * Width;
-            if (_mmap.TryGetPointer(byteOffset, Width, out nint p))
-            {
-                return Unsafe.ReadUnaligned<T>((void*)p);
-            }
-            // A record can straddle a 1 GiB mmap-view boundary when Width doesn't divide ChunkSize
-            // (non-power-of-two records); stitch a copy in that case.
-            T value;
-            _mmap.CopyTo(byteOffset, new Span<byte>(&value, Width));
-            return value;
+            return Unsafe.ReadUnaligned<T>(_file.Pointer + seg.ByteOffset + (i - seg.FirstElement) * Width);
         }
     }
 
-    /// <summary>A zero-copy span of <paramref name="length"/> elements at <paramref name="start"/>, when
-    /// the run fits one section and one mmap view. Full scans should use <see cref="CopyTo"/>; the whole
-    /// column may exceed <see cref="int.MaxValue"/> elements.</summary>
+    /// <summary>A zero-copy span of <paramref name="length"/> elements at <paramref name="start"/>, when the run fits
+    /// one section. Full scans should use <see cref="CopyTo"/>; the whole column may exceed <see cref="int.MaxValue"/>
+    /// elements.</summary>
     public ReadOnlySpan<T> Slice(long start, int length)
     {
         if (!TrySlice(start, length, out ReadOnlySpan<T> span))
         {
-            throw new InvalidOperationException($"slice [{start}, {start + length}) spans a section/chunk boundary; use CopyTo");
+            throw new InvalidOperationException($"slice [{start}, {start + length}) spans a section boundary; use CopyTo");
         }
         return span;
     }
 
-    /// <summary>Zero-copy span if the run fits one section and mmap view; false if it straddles a boundary.</summary>
+    /// <summary>Zero-copy span if the run fits one section; false if it crosses into the next.</summary>
     public bool TrySlice(long start, int length, out ReadOnlySpan<T> span)
     {
         span = default;
@@ -105,20 +88,14 @@ public sealed unsafe class Column<T> where T : unmanaged
         Seg seg = SegmentOf(start);
         if (start + length > seg.FirstElement + seg.Count)
         {
-            return false; // crosses a section boundary
+            return false;
         }
-        long byteOffset = seg.ByteOffset + (start - seg.FirstElement) * Width;
-        long byteLength = (long)length * Width;
-        if (byteLength <= int.MaxValue && _mmap.TryGetContiguous(byteOffset, (int)byteLength, out ReadOnlySpan<byte> bytes))
-        {
-            span = MemoryMarshal.Cast<byte, T>(bytes);
-            return true;
-        }
-        return false; // crosses an mmap chunk boundary (or too large for one span)
+        span = new ReadOnlySpan<T>(_file.Pointer + seg.ByteOffset + (start - seg.FirstElement) * Width, length);
+        return true;
     }
 
-    /// <summary>Copies <paramref name="dest"/>.Length elements starting at <paramref name="start"/>,
-    /// stitching across section and mmap-chunk boundaries. The boundary-safe way to scan a column.</summary>
+    /// <summary>Copies <paramref name="dest"/>.Length elements starting at <paramref name="start"/>, across section
+    /// boundaries.</summary>
     public void CopyTo(long start, Span<T> dest)
     {
         if (start < 0 || start + dest.Length > Length)
@@ -132,33 +109,34 @@ public sealed unsafe class Column<T> where T : unmanaged
             Seg seg = SegmentOf(i);
             long inSeg = i - seg.FirstElement;
             int take = (int)Math.Min(seg.Count - inSeg, dest.Length - written);
-            long byteOffset = seg.ByteOffset + inSeg * Width;
-            Span<byte> destBytes = MemoryMarshal.AsBytes(dest.Slice(written, take));
-            _mmap.CopyTo(byteOffset, destBytes);
+            new ReadOnlySpan<T>(_file.Pointer + seg.ByteOffset + inSeg * Width, take).CopyTo(dest.Slice(written, take));
             written += take;
             i += take;
         }
     }
 
-    /// <summary>Returns one section as memory, using the mmap directly when contiguous and copying only
-    /// when the section crosses an mmap view boundary.</summary>
+    /// <summary>The whole column as memory backed by the mapping. Sections written back to back read as one run;
+    /// only sections with gaps between them are copied.</summary>
     public ReadOnlyMemory<T> AsMemory()
     {
         if (Length == 0)
         {
             return ReadOnlyMemory<T>.Empty;
         }
-        if (_segs.Length != 1 || Length > int.MaxValue)
+        if (Length > int.MaxValue)
         {
-            throw new InvalidOperationException("column has multiple sections or exceeds the managed array limit");
+            throw new InvalidOperationException("column exceeds the managed array limit");
         }
-        if (_mmap.TryGetPointer(_segs[0].ByteOffset, checked((int)(Length * Width)), out nint ptr))
+        for (int i = 1; i < _segs.Length; i++)
         {
-            return new PointerMemory<T>((T*)ptr, (int)Length).Memory;
+            if (_segs[i].ByteOffset != _segs[i - 1].ByteOffset + _segs[i - 1].Count * Width)
+            {
+                var copy = GC.AllocateUninitializedArray<T>((int)Length);
+                CopyTo(0, copy);
+                return copy;
+            }
         }
-        var copy = GC.AllocateUninitializedArray<T>((int)Length);
-        CopyTo(0, copy);
-        return copy;
+        return new PointerMemory<T>((T*)(_file.Pointer + _segs[0].ByteOffset), (int)Length).Memory;
     }
 
     private Seg SegmentOf(long i)
@@ -180,21 +158,12 @@ public sealed unsafe class Column<T> where T : unmanaged
     }
 }
 
-/// <summary>Exposes a raw mmap pointer as a <see cref="ReadOnlyMemory{T}"/> without copying. The owning
-/// <see cref="ChunkedMmap"/> keeps the pointer valid; this manager frees nothing.</summary>
-internal sealed unsafe class PointerMemory<T> : MemoryManager<T> where T : unmanaged
+/// <summary>Exposes a mapped pointer as a <see cref="ReadOnlyMemory{T}"/> without copying. The owning
+/// <see cref="MappedFile"/> keeps the pointer valid; this manager frees nothing.</summary>
+internal sealed unsafe class PointerMemory<T>(T* pointer, int length) : MemoryManager<T> where T : unmanaged
 {
-    private readonly T* _pointer;
-    private readonly int _length;
-
-    public PointerMemory(T* pointer, int length)
-    {
-        _pointer = pointer;
-        _length = length;
-    }
-
-    public override Span<T> GetSpan() => new(_pointer, _length);
-    public override MemoryHandle Pin(int elementIndex = 0) => new(_pointer + elementIndex);
+    public override Span<T> GetSpan() => new(pointer, length);
+    public override MemoryHandle Pin(int elementIndex = 0) => new(pointer + elementIndex);
     public override void Unpin() { }
-    protected override void Dispose(bool disposing) { } // the mmap owns the memory, not this manager
+    protected override void Dispose(bool disposing) { } // the mapping owns the memory, not this manager
 }

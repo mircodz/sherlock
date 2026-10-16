@@ -1,7 +1,9 @@
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 using Microsoft.Diagnostics.Runtime;
 using Sherlock.Core.HeapModel;
+using Sherlock.Core.Storage;
 using Sherlock.Core.Tests.Common;
 using Xunit;
 
@@ -54,6 +56,19 @@ public sealed class HeapGraphStoreTests : IDisposable
         Assert.Equal([3], loaded.Successors(2).ToArray());
         Assert.Equal([], loaded.Successors(3).ToArray());
         Assert.Equal([0], loaded.Successors(loaded.Root).ToArray()); // synthetic root -> GC roots
+    }
+
+    [Fact]
+    public void LoadedColumnsStayInTheMapping()
+    {
+        HeapGraphStore.Save(_path, SampleGraph());
+        using HeapGraph loaded = HeapGraphStore.Load(_path)!;
+
+        Assert.True(MemoryMarshal.TryGetMemoryManager(loaded.Addresses, out PointerMemory<ulong>? _));
+        Assert.True(MemoryMarshal.TryGetMemoryManager(loaded.Sizes, out PointerMemory<uint>? _));
+        Assert.True(MemoryMarshal.TryGetMemoryManager(loaded.Offsets, out PointerMemory<long>? _));
+        Assert.True(MemoryMarshal.TryGetMemoryManager(loaded.Edges.Chunk(0), out PointerMemory<int>? _));
+        Assert.True(MemoryMarshal.TryGetMemoryManager(loaded.Roots, out PointerMemory<HeapRootRecord>? _));
     }
 
     [Fact]
