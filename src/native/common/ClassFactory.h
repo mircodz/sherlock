@@ -56,19 +56,31 @@ public:
 
     HRESULT STDMETHODCALLTYPE CreateInstance(IUnknown *pUnkOuter, REFIID riid, void **ppvObject)
     {
+        if (ppvObject == nullptr)
+        {
+            return E_POINTER;
+        }
+        *ppvObject = nullptr;
         if (pUnkOuter != nullptr)
         {
-            *ppvObject = nullptr;
             return E_FAIL;
         }
 
-        T* profiler = new T();
-        if (profiler == nullptr)
+        T* profiler = nullptr;
+        try
         {
-            return E_FAIL;
+            profiler = new T();
+        }
+        catch (...)
+        {
+            return E_OUTOFMEMORY; // no exception may cross the COM boundary
         }
 
-        return profiler->QueryInterface(riid, ppvObject);
+        // Hold a reference across QueryInterface, so a failed one frees the object instead of leaking it.
+        profiler->AddRef();
+        HRESULT hr = profiler->QueryInterface(riid, ppvObject);
+        profiler->Release();
+        return hr;
     }
 
     HRESULT STDMETHODCALLTYPE LockServer(BOOL fLock)

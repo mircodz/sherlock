@@ -24,13 +24,21 @@ extern "C" SHERLOCK_EXPORT HRESULT STDMETHODCALLTYPE DllGetClassObject(REFCLSID 
         return E_FAIL;
     }
 
-    auto factory = new ClassFactory<Profiler>;
-    if (factory == nullptr)
+    ClassFactory<Profiler>* factory = nullptr;
+    try
     {
-        return E_FAIL;
+        factory = new ClassFactory<Profiler>;
+    }
+    catch (...)
+    {
+        return E_OUTOFMEMORY; // no exception may cross the COM boundary
     }
 
-    return factory->QueryInterface(riid, ppv);
+    // Hold a reference across QueryInterface, so a failed one frees the factory instead of leaking it.
+    factory->AddRef();
+    HRESULT hr = factory->QueryInterface(riid, ppv);
+    factory->Release();
+    return hr;
 }
 
 extern "C" SHERLOCK_EXPORT HRESULT STDMETHODCALLTYPE DllCanUnloadNow()
