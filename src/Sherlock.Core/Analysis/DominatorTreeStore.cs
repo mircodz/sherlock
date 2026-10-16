@@ -8,7 +8,7 @@ namespace Sherlock.Core.Analysis;
 /// <summary>Persists the columns derived by dominator analysis.</summary>
 public static class DominatorTreeStore
 {
-    private const uint Version = 1;
+    private const uint Version = 2;
 
     public static void Save(string path, DominatorAnalyzer.DominatorResult result, ulong graphContentHash)
     {

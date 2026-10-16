@@ -71,9 +71,16 @@ public class ProvenanceTests : IDisposable
     }
 
     [Fact]
-    public void CorrelationRecordLayoutMatchesNative()
+    public void LiveObjectsAreTwoColumnsOfTwelveBytesEach()
     {
-        Assert.Equal(16, Marshal.SizeOf<CorrelationRecord>());
+        var w = new ProvenanceWriter();
+        uint stack = w.InternStack(Stack("A"));
+        w.AddObject(0x2000, stack);
+        w.AddObject(0x1000, stack);
+        using SlabFile slab = Write(w);
+
+        Assert.Equal(new ulong[] { 0x1000, 0x2000 }, slab.GetColumn<ulong>(SectionType.ObjectAddresses).AsMemory().ToArray());
+        Assert.Equal(new uint[] { stack, stack }, slab.GetColumn<uint>(SectionType.ObjectStacks).AsMemory().ToArray());
     }
 
     [Fact]

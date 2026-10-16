@@ -30,31 +30,26 @@ public class ColumnTests : IDisposable
         for (long i = 0; i < col.Length; i++) Assert.Equal(recs[i], col[i]);
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct Corr { public ulong Address; public uint StackId; public uint Reserved; }
-
     [Fact]
     public void BinarySearchesByLongIndex()
     {
-        // Match whoalloc's long-indexed search over the correlation column.
-        var recs = new Corr[30];
-        for (int i = 0; i < recs.Length; i++)
-            recs[i] = new Corr { Address = (ulong)((i + 1) * 0x1000), StackId = (uint)(i % 3), Reserved = 0 };
-        using var slab = WriteSlab(SectionType.Correlation, recs);
-        Column<Corr> col = slab.GetColumn<Corr>(SectionType.Correlation);
+        // Match whoalloc's long-indexed search over the sorted object addresses.
+        var addresses = new ulong[30];
+        for (int i = 0; i < addresses.Length; i++) addresses[i] = (ulong)((i + 1) * 0x1000);
+        using var slab = WriteSlab(SectionType.ObjectAddresses, addresses);
+        Column<ulong> col = slab.GetColumn<ulong>(SectionType.ObjectAddresses);
 
-        uint Search(ulong addr)
+        long Search(ulong address)
         {
             long lo = 0, hi = col.Length - 1;
             while (lo <= hi)
             {
                 long mid = lo + ((hi - lo) >> 1);
-                ulong a = col[mid].Address;
-                if (a == addr)
+                if (col[mid] == address)
                 {
-                    return col[mid].StackId;
+                    return mid;
                 }
-                if (a < addr)
+                if (col[mid] < address)
                 {
                     lo = mid + 1;
                 }
@@ -63,12 +58,12 @@ public class ColumnTests : IDisposable
                     hi = mid - 1;
                 }
             }
-            return uint.MaxValue;
+            return -1;
         }
 
         for (int i = 1; i <= 30; i++)
-            Assert.Equal((uint)((i - 1) % 3), Search((ulong)(i * 0x1000)));
-        Assert.Equal(uint.MaxValue, Search(0x1500)); // untracked address between records
+            Assert.Equal(i - 1, Search((ulong)(i * 0x1000)));
+        Assert.Equal(-1, Search(0x1500)); // untracked address between records
     }
 
     [Fact]

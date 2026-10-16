@@ -23,16 +23,8 @@ struct AllocationRecord {
 };
 static_assert(sizeof(AllocationRecord) == 40, "AllocationRecord must be a packed 40-byte record");
 
-// Address-sorted provenance records. Explicit padding preserves the C# 16-byte layout.
-struct CorrelationRecord {
-    std::uint64_t address;
-    std::uint32_t stackId;
-    std::uint32_t reserved;
-};
-static_assert(sizeof(CorrelationRecord) == 16, "CorrelationRecord must be a packed 16-byte record");
-
 // The profile kind's version, covering every section; keep in sync with the C# ProfileFormat.Version.
-inline constexpr std::uint32_t kProfileVersion = 1;
+inline constexpr std::uint32_t kProfileVersion = 2;
 
 // Emits allocation and correlation records with shared stacks. Callers intern each method once
 // (internMethod), then stacks of the returned indices, root -> leaf.
@@ -47,30 +39,53 @@ public:
         allocs_.push_back({stackId, typeId, allocBytes, allocCount, survivedBytes, survivedCount});
     }
 
+    // A live object and the stack that allocated it. Adding objects in address order spares a sort.
     void addObject(std::uint64_t address, std::uint32_t stackId) {
-        corr_.push_back({address, stackId, 0});
+        addresses_.push_back(address);
+        stacks_.push_back(stackId);
     }
 
     [[nodiscard]] std::size_t allocationCount() const { return allocs_.size(); }
-    [[nodiscard]] std::size_t objectCount() const { return corr_.size(); }
+    [[nodiscard]] std::size_t objectCount() const { return addresses_.size(); }
 
-    // Terminal operation: sorts correlation in place, so readers can binary-search it.
+    // Terminal operation: hands the objects to the container, sorted by address so readers can binary-search
+    // them. The container borrows the symbols and allocations, so this writer must outlive it.
     void writeTo(ContainerWriter& w) {
         symbols_.writeTo(w);
         if (!allocs_.empty()) {
             w.addRecords<AllocationRecord>(SectionType::Allocations, allocs_);
         }
-        if (!corr_.empty()) {
-            std::sort(corr_.begin(), corr_.end(),
-                      [](const CorrelationRecord& a, const CorrelationRecord& b) { return a.address < b.address; });
-            w.addRecords<CorrelationRecord>(SectionType::Correlation, corr_);
+        if (!addresses_.empty()) {
+            sortObjects();
+            w.addRecords(SectionType::ObjectAddresses, std::move(addresses_));
+            w.addRecords(SectionType::ObjectStacks, std::move(stacks_));
         }
     }
 
 private:
+    void sortObjects() {
+        if (std::is_sorted(addresses_.begin(), addresses_.end())) {
+            return;
+        }
+        std::vector<std::size_t> order(addresses_.size());
+        for (std::size_t i = 0; i < order.size(); ++i) {
+            order[i] = i;
+        }
+        std::sort(order.begin(), order.end(), [this](std::size_t a, std::size_t b) { return addresses_[a] < addresses_[b]; });
+        std::vector<std::uint64_t> addresses(order.size());
+        std::vector<std::uint32_t> stacks(order.size());
+        for (std::size_t i = 0; i < order.size(); ++i) {
+            addresses[i] = addresses_[order[i]];
+            stacks[i] = stacks_[order[i]];
+        }
+        addresses_ = std::move(addresses);
+        stacks_ = std::move(stacks);
+    }
+
     SymbolWriter symbols_;
     std::vector<AllocationRecord> allocs_;
-    std::vector<CorrelationRecord> corr_;
+    std::vector<std::uint64_t> addresses_;
+    std::vector<std::uint32_t> stacks_;
 };
 
 // Borrows the container's bytes.
@@ -80,21 +95,24 @@ public:
         if (auto a = c.find(SectionType::Allocations)) {
             allocs_ = a->records<AllocationRecord>();
         }
-        if (auto s = c.find(SectionType::Correlation)) {
-            corr_ = s->records<CorrelationRecord>();
+        if (auto s = c.find(SectionType::ObjectAddresses)) {
+            addresses_ = s->records<std::uint64_t>();
+        }
+        if (auto s = c.find(SectionType::ObjectStacks)) {
+            stacks_ = s->records<std::uint32_t>();
         }
     }
 
     [[nodiscard]] const SymbolTable& symbols() const { return symbols_; }
     [[nodiscard]] std::span<const AllocationRecord> allocations() const { return allocs_; }
-    [[nodiscard]] std::span<const CorrelationRecord> correlation() const { return corr_; }
+    [[nodiscard]] std::span<const std::uint64_t> objectAddresses() const { return addresses_; }
+    [[nodiscard]] std::span<const std::uint32_t> objectStacks() const { return stacks_; }
 
     // Allocation stack ID, or nullopt for an untracked address.
     [[nodiscard]] std::optional<std::uint32_t> stackForAddress(std::uint64_t address) const {
-        auto it = std::lower_bound(corr_.begin(), corr_.end(), address,
-                                   [](const CorrelationRecord& r, std::uint64_t a) { return r.address < a; });
-        if (it != corr_.end() && it->address == address) {
-            return it->stackId;
+        auto it = std::lower_bound(addresses_.begin(), addresses_.end(), address);
+        if (it != addresses_.end() && *it == address) {
+            return stacks_[static_cast<std::size_t>(it - addresses_.begin())];
         }
         return std::nullopt;
     }
@@ -102,7 +120,8 @@ public:
 private:
     SymbolTable symbols_;
     std::span<const AllocationRecord> allocs_;
-    std::span<const CorrelationRecord> corr_;
+    std::span<const std::uint64_t> addresses_;
+    std::span<const std::uint32_t> stacks_;
 };
 
 } // namespace Sherlock::storage

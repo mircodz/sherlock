@@ -93,16 +93,16 @@ public class ContainerTests : IDisposable
     public void GetColumnRejectsAnotherRecordSize()
     {
         var w = new ContainerWriter(SlabKind.Profile, 1);
-        w.AddRecords(SectionType.Correlation, new uint[] { 0 });
+        w.AddRecords(SectionType.ObjectAddresses, new uint[] { 0 });
         using var r = _tmp.WriteSlab(w, SlabKind.Profile, 1);
-        Assert.Throws<InvalidDataException>(() => r.GetColumn<Rec>(SectionType.Correlation));
+        Assert.Throws<InvalidDataException>(() => r.GetColumn<Rec>(SectionType.ObjectAddresses));
     }
 
     [Fact]
     public void AbsentSectionsReadAsEmpty()
     {
         using var r = _tmp.WriteSlab(new ContainerWriter(SlabKind.Profile, 1), SlabKind.Profile, 1);
-        Assert.Equal(0L, r.GetColumn<ulong>(SectionType.Correlation).Length);
+        Assert.Equal(0L, r.GetColumn<ulong>(SectionType.ObjectAddresses).Length);
         Assert.Empty(r.Blob(SectionType.Strings));
     }
 

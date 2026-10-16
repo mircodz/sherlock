@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <optional>
 #include <ostream>
 #include <span>
@@ -43,7 +44,8 @@ enum class SectionType : std::uint32_t {
     Stacks = 5,
     StackFrames = 6,
     Allocations = 7,
-    Correlation = 8,
+    ObjectAddresses = 8,
+    ObjectStacks = 9,
 };
 
 namespace detail {
@@ -89,7 +91,8 @@ inline std::size_t alignUp(std::size_t n, std::size_t a) { return (n + a - 1) & 
 
 } // namespace detail
 
-// Emits sections in insertion order, without trailing padding.
+// Emits sections in insertion order, without trailing padding. Sections borrow their data until the container
+// is written, unless the writer is given ownership of it.
 class ContainerWriter {
 public:
     ContainerWriter(SlabKind kind, std::uint32_t kindVersion) : kind_(kind), kindVersion_(kindVersion) {}
@@ -102,12 +105,20 @@ public:
         add(type, static_cast<std::uint32_t>(sizeof(T)), std::as_bytes(records));
     }
 
+    // Takes the records, for sections built only to be written.
+    template <typename T>
+    void addRecords(SectionType type, std::vector<T>&& records) {
+        auto owned = std::make_shared<const std::vector<T>>(std::move(records));
+        addRecords<T>(type, std::span<const T>(*owned));
+        owned_.push_back(std::move(owned));
+    }
+
     // Materializes the whole file; use writeTo for large containers.
     [[nodiscard]] std::string finish() const {
         std::string out = headerAndTable();
         for (std::size_t i = 0; i < sections_.size(); ++i) {
             out.resize(offsetOf(i), '\0');
-            out.append(sections_[i].data);
+            out.append(reinterpret_cast<const char*>(sections_[i].data.data()), sections_[i].data.size());
         }
         return out;
     }
@@ -124,7 +135,7 @@ public:
                 os.write(kZeros, static_cast<std::streamsize>(n));
                 gap -= n;
             }
-            os.write(sections_[i].data.data(), static_cast<std::streamsize>(sections_[i].data.size()));
+            os.write(reinterpret_cast<const char*>(sections_[i].data.data()), static_cast<std::streamsize>(sections_[i].data.size()));
             pos = offsetOf(i) + sections_[i].data.size();
         }
         return static_cast<bool>(os);
@@ -134,11 +145,11 @@ private:
     struct Section {
         SectionType type;
         std::uint32_t recordSize;
-        std::string data;
+        std::span<const std::byte> data;
     };
 
     void add(SectionType type, std::uint32_t recordSize, std::span<const std::byte> data) {
-        sections_.push_back({type, recordSize, std::string(reinterpret_cast<const char*>(data.data()), data.size())});
+        sections_.push_back({type, recordSize, data});
     }
 
     std::size_t offsetOf(std::size_t i) const {
@@ -168,6 +179,7 @@ private:
     SlabKind kind_;
     std::uint32_t kindVersion_;
     std::vector<Section> sections_;
+    std::vector<std::shared_ptr<const void>> owned_;
 };
 
 // Borrows the container's bytes.

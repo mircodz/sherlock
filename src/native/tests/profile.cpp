@@ -109,11 +109,14 @@ TEST(Profile, CorrelationIsSortedAndBinarySearchable) {
     ASSERT_TRUE(c.valid());
 
     ProvenanceReader r(c);
-    std::span<const CorrelationRecord> corr = r.correlation();
-    ASSERT_EQ(corr.size(), 3u);
-    EXPECT_EQ(corr[0].address, 0x1000u); // sorted ascending
-    EXPECT_EQ(corr[1].address, 0x2000u);
-    EXPECT_EQ(corr[2].address, 0x3000u);
+    std::span<const std::uint64_t> addresses = r.objectAddresses();
+    ASSERT_EQ(addresses.size(), 3u);
+    ASSERT_EQ(r.objectStacks().size(), 3u);
+    EXPECT_EQ(addresses[0], 0x1000u); // sorted ascending, stacks moved with them
+    EXPECT_EQ(addresses[1], 0x2000u);
+    EXPECT_EQ(addresses[2], 0x3000u);
+    EXPECT_EQ(r.objectStacks()[0], s1);
+    EXPECT_EQ(r.objectStacks()[2], s2);
 
     // Address -> allocating stack, resolved through the shared table.
     auto sid = r.stackForAddress(0x2000);
@@ -135,9 +138,10 @@ TEST(Profile, NoCorrelationSectionWhenAggregateOnly) {
     w.writeTo(cw);
     const std::string bytes = cw.finish();
     ContainerReader c(asBytes(bytes));
-    EXPECT_FALSE(c.find(SectionType::Correlation).has_value());
+    EXPECT_FALSE(c.find(SectionType::ObjectAddresses).has_value());
+    EXPECT_FALSE(c.find(SectionType::ObjectStacks).has_value());
     ProvenanceReader r(c);
-    EXPECT_TRUE(r.correlation().empty());
+    EXPECT_TRUE(r.objectAddresses().empty());
     EXPECT_FALSE(r.stackForAddress(0x1000).has_value());
 }
 
@@ -156,10 +160,10 @@ TEST(Profile, CorrelationIsSortedForBinarySearch) {
     ASSERT_TRUE(c.valid());
 
     ProvenanceReader r(c);
-    std::span<const CorrelationRecord> corr = r.correlation();
-    ASSERT_EQ(corr.size(), 12u);
-    for (std::size_t i = 1; i < corr.size(); ++i)
-        EXPECT_LT(corr[i - 1].address, corr[i].address);
+    std::span<const std::uint64_t> addresses = r.objectAddresses();
+    ASSERT_EQ(addresses.size(), 12u);
+    for (std::size_t i = 1; i < addresses.size(); ++i)
+        EXPECT_LT(addresses[i - 1], addresses[i]);
 
     for (std::uint64_t i = 1; i <= 12; ++i) {
         auto sid = r.stackForAddress(i * 0x1000);

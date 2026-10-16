@@ -10,7 +10,7 @@ namespace Sherlock.Core.HeapModel;
 /// <summary>Persists a heap graph as typed slab columns.</summary>
 public static class HeapGraphStore
 {
-    private const uint Version = 1;
+    private const uint Version = 2;
 
     public static void Save(string path, HeapGraph graph, string? sourcePath = null)
     {

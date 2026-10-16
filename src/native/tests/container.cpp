@@ -120,11 +120,26 @@ TEST(Container, RejectsBadMagicTruncationAndOtherVersions) {
     EXPECT_FALSE(ContainerReader(asBytes(older)).valid());
 }
 
+TEST(Container, OwnedSectionsOutliveTheirSource) {
+    ContainerWriter w(SlabKind::Profile, 1);
+    {
+        std::vector<std::uint32_t> stacks = {7, 8, 9};
+        w.addRecords(SectionType::ObjectStacks, std::move(stacks));
+    }
+    const std::string bytes = w.finish();
+    ContainerReader r(asBytes(bytes));
+    ASSERT_TRUE(r.valid());
+    std::span<const std::uint32_t> got = r.find(SectionType::ObjectStacks)->records<std::uint32_t>();
+    ASSERT_EQ(got.size(), 3u);
+    EXPECT_EQ(got[2], 9u);
+}
+
 TEST(Container, WriteToMatchesFinish) {
     ContainerWriter w(SlabKind::Profile, 1);
     const std::vector<std::uint64_t> recs = {1, 2, 3, 4, 5, 6, 7};
-    w.addRecords<std::uint64_t>(SectionType::Correlation, recs);
-    w.addBytes(SectionType::Strings, asBytes(std::string("abc")));
+    const std::string text = "abc"; // sections borrow their data until written
+    w.addRecords<std::uint64_t>(SectionType::ObjectAddresses, recs);
+    w.addBytes(SectionType::Strings, asBytes(text));
 
     const std::string viaFinish = w.finish();
     std::ostringstream os;
