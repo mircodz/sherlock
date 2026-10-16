@@ -10,6 +10,7 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <limits>
 #include <memory>
@@ -191,6 +192,41 @@ std::size_t Aggregator::shardCount() const {
 
 // Reserve initial shard capacity; pending retains its capacity across GCs.
 namespace {
+// Flushes a written file to disk, so a crash right after publishing it can't leave a partial profile.
+bool syncFile(const std::string& path) {
+#ifdef _WIN32
+    HANDLE file = CreateFileA(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    const bool flushed = FlushFileBuffers(file) != 0;
+    CloseHandle(file);
+    return flushed;
+#else
+    const int fd = ::open(path.c_str(), O_WRONLY);
+    if (fd < 0) {
+        return false;
+    }
+    const bool flushed = ::fsync(fd) == 0;
+    ::close(fd);
+    return flushed;
+#endif
+}
+
+// Flushes the rename that published a file. Windows' write-through move already did; some POSIX file systems can't
+// sync a directory, which only weakens the guarantee.
+void syncParentDirectory([[maybe_unused]] const std::string& path) {
+#ifndef _WIN32
+    std::string dir = std::filesystem::path(path).parent_path().string();
+    const int fd = ::open(dir.empty() ? "." : dir.c_str(), O_RDONLY);
+    if (fd >= 0) {
+        (void)::fsync(fd);
+        ::close(fd);
+    }
+#endif
+}
+
 constexpr std::size_t kSitesReserve = 4096;    // distinct allocation stacks per thread
 constexpr std::size_t kPendingReserve = 2048;  // sampled objects awaiting their first GC
 } // namespace
@@ -668,7 +704,7 @@ bool Aggregator::writeSlab(const std::string& path, storage::ProvenanceWriter& p
     out.flush();
     written = written && out.good();
     out.close();
-    written = written && !out.fail();
+    written = written && !out.fail() && syncFile(temp);
     if (!written) {
         std::remove(temp.c_str());
         if (logger_) {
@@ -690,6 +726,7 @@ bool Aggregator::writeSlab(const std::string& path, storage::ProvenanceWriter& p
         }
         return false;
     }
+    syncParentDirectory(path);
     return true;
 }
 
