@@ -9,6 +9,7 @@ using Cellar.Widgets.Charts;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using static Sherlock.CLI.Tui.ViewFormatting;
+using static System.FormattableString;
 using Theme = Cellar.Theming.Theme;
 
 namespace Sherlock.CLI.Tui;
@@ -42,8 +43,8 @@ internal static class HealthView
             Section(body, "Objects by type", ByType(overview.Histogram));
         }
 
-        string title = overview.Captured is { } captured ? $" {overview.Id} \u00b7 {captured} " : $" {overview.Id} ";
-        return Hinted(new Panel(new Padding(body, new Thickness(1, 0)), title) { BorderStyle = BorderStyle.Rounded }, "");
+        string title = overview.Captured is { } captured ? $"{overview.Id} \u00b7 {captured}" : overview.Id;
+        return View(title, new Padding(body, new Thickness(1, 0)), "");
     }
 
     private const string FreeType = "Free";
@@ -55,8 +56,8 @@ internal static class HealthView
         long free = histogram.Where(stat => stat.TypeName == FreeType).Sum(stat => (long)stat.TotalSize);
         List<HeapTypeStat> types = histogram.Where(stat => stat.TypeName != FreeType).ToList();
         StyledText text = StyledText.Of("Heap ").Fg(Theme.Current.Muted).Append(ByteFormat.Human(heap)).Bold().Fg(Theme.Current.Foreground)
-            .Append($"   {types.Sum(stat => stat.Count):N0}").Fg(Theme.Current.Foreground).Append(" objects").Fg(Theme.Current.Muted)
-            .Append($"   {types.Count:N0}").Fg(Theme.Current.Foreground).Append(" types").Fg(Theme.Current.Muted);
+            .Append(Invariant($"   {types.Sum(stat => stat.Count):N0}")).Fg(Theme.Current.Foreground).Append(" objects").Fg(Theme.Current.Muted)
+            .Append(Invariant($"   {types.Count:N0}")).Fg(Theme.Current.Foreground).Append(" types").Fg(Theme.Current.Muted);
         if (heap > 0)
         {
             text.Append($"   {ByteFormat.Human(free)}").Fg(Theme.Current.Foreground)

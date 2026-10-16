@@ -16,26 +16,26 @@ namespace Sherlock.CLI.Tui;
 
 internal static class ObjectView
 {
-    public static Widget Create(Snapshot snapshot, ulong address, ObjectTab tab, Action<NavigationTarget> navigate)
+    public static Widget Create(OpenedSnapshot opened, ulong address, ObjectTab tab, Action<NavigationTarget> navigate)
     {
-        ObjectValue value = snapshot.InspectValue(address);
-        Tabs tabs = new Tabs()
-            .AddView("Inspect", () => new ObjectInspectorView(value, snapshot.InspectChildren,
+        ObjectValue value = opened.Snapshot.InspectValue(address);
+        Tabs tabs = Views()
+            .Add("Inspect", () => new ObjectInspectorView(value, opened.Snapshot.InspectChildren,
                 target => navigate(new ObjTarget(target)), type => navigate(new TypeTarget(type))))
-            .AddBackgroundView("GC roots", cancellation => Roots(snapshot.Roots(address, cancellation), navigate));
+            .Add("GC roots", opened.Background((snapshot, cancellation) => Roots(snapshot.Roots(address, cancellation), navigate)));
 
-        if (snapshot.HasCorrelation)
+        if (opened.Snapshot.HasCorrelation)
         {
             try
             {
-                if (snapshot.WhoAllocated(address) is { } frames)
+                if (opened.Snapshot.WhoAllocated(address) is { } frames)
                 {
-                    tabs.AddView("whoalloc", () => AllocationStack(frames, navigate));
+                    tabs.Add("Allocation stack", () => AllocationStack(frames, navigate));
                 }
             }
             catch (InvalidDataException ex)
             {
-                tabs.AddView("whoalloc", () => Message(ex.Message, " Allocation stack "));
+                tabs.Add("Allocation stack", Message("Allocation stack", ex.Message));
             }
         }
         tabs.ActiveIndex = tab switch
@@ -57,7 +57,14 @@ internal static class ObjectView
                 : new StyledText(node.Value.Text, Theme.Current.MutedStyle),
             ShowGuides = true,
             OnLinkClick = payload => navigate(NavigationTarget.FromLink(payload)),
-        }.KeepSelectionOnHover();
+            OnActivate = node =>
+            {
+                if (node.Value.Address is ulong address)
+                {
+                    navigate(new ObjTarget(address));
+                }
+            },
+        };
         if (paths.Count == 0)
         {
             tree.AddRoot(new RootRow("(not reachable from any GC root \u2014 collectable)", null));
@@ -73,29 +80,22 @@ internal static class ObjectView
             root.ExpandAll();
         }
         tree.MarkDirty();
-        Widget keys = OpenOnEnter(tree, node =>
-        {
-            if (node.Value.Address is ulong address)
-            {
-                navigate(new ObjTarget(address));
-            }
-        });
-        return Hinted(new Panel(keys, " Why it's alive ") { BorderStyle = BorderStyle.Rounded }, "Enter inspect");
+        return View("GC roots", tree, "Enter inspect");
     }
 
     private static Widget AllocationStack(IReadOnlyList<MethodFrame> stack, Action<NavigationTarget> navigate)
     {
         if (stack.Count == 0)
         {
-            return Message(ProvenanceReader.NoManagedFrames, " Allocation stack ");
+            return Message("Allocation stack", ProvenanceReader.NoManagedFrames);
         }
         MethodFrame[] frames = [.. stack];
         Array.Reverse(frames);
-        Table table = Table(("Method", Constraint.Fill(3), false), ("Namespace", Constraint.Fill(2), false));
-        SetRows(table, frames, frame => [frame.Label, Printable.Escape(frame.Namespace)],
-            frame => navigate(new MethodTarget(frame)));
-        table.Sortable = false;
-        return Hinted(new Panel(table, " Allocation stack ") { BorderStyle = BorderStyle.Rounded }, "Enter open method");
+        Table<MethodFrame> table = Table(frames, frame => navigate(new MethodTarget(frame)),
+            NameColumn<MethodFrame>("Method", frame => frame.Label),
+            NamespaceColumn<MethodFrame>(frame => Printable.Escape(frame.Namespace)));
+        table.Sortable = false; // the order is the stack
+        return View("Allocation stack", table, "Enter open method");
     }
 
     private sealed record RootRow(string Text, ulong? Address);

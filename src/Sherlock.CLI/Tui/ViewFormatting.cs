@@ -1,35 +1,78 @@
 using System;
-using System.Linq;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Threading;
+using System.Linq;
 using Cellar.Layout;
 using Cellar.Primitives;
-using Cellar.Terminal;
 using Cellar.Text;
 using Cellar.Theming;
 using Cellar.Widgets;
-using Cellar.Widgets.Charts.Trees;
+using Sherlock.Core;
+using Sherlock.Core.Store;
 
 namespace Sherlock.CLI.Tui;
 
 internal static class ViewFormatting
 {
-    public static Table Table(params (string Header, Constraint Width, bool Right)[] columns)
+    /// <summary>A page's views, one row of tabs. Tab and Shift+Tab switch views, digits jump to one, and the arrows
+    /// stay inside the view, also where it doesn't use them. A view never contains tabs of its own.</summary>
+    public static Tabs Views() => new() { ArrowKeysSwitch = false };
+
+    /// <summary>A sortable table: Enter or a second click opens a row, and a click on a header sorts by its column.</summary>
+    public static Table<T> Table<T>(IEnumerable<T> rows, Action<T> open, params TableColumn<T>[] columns)
     {
-        var table = new Table { ShowHeader = true, SelectedIndex = 0, Striped = true, ShowScrollbar = true, Sortable = true };
-        foreach ((string header, Constraint width, bool right) in columns)
-        {
-            table.Columns.Add(new Column(header, width, right ? Justify.Right : Justify.Left) { SortKey = right ? text => ParseNumber(text) : null });
-        }
+        var table = new Table<T> { ShowHeader = true, Striped = true, ShowScrollbar = true, Sortable = true, OnActivate = open };
+        table.Columns.AddRange(columns);
+        table.SetRows(rows);
         return table;
     }
 
-    /// <summary>The screen's one hint bar: <paramref name="hint"/> lists the view's own keys; the keys every screen
-    /// shares are appended here so they read the same everywhere. Only the library is neither tabbed nor nested.</summary>
-    public static Widget Hinted(Widget body, string hint, bool tabbed = true, bool canGoBack = true) =>
+    // Every table lays out its columns the same way, as the trees do: the name, its namespace, the main size and its
+    // share, then other sizes and counts. Columns use the colors of the matching tree columns.
+
+    /// <summary>The name of what a row is about, such as a type or a method.</summary>
+    public static TableColumn<T> NameColumn<T>(string header, Func<T, string> name, int share = 3) =>
+        TextColumn(header, Constraint.Fill(share), name, Theme.Current.Accent);
+
+    public static TableColumn<T> NamespaceColumn<T>(Func<T, string> name) =>
+        TextColumn("Namespace", Constraint.Fill(2), name, Theme.Current.Muted);
+
+    public static TableColumn<T> TextColumn<T>(string header, Constraint width, Func<T, string> text, Color color) =>
+        new(header, width, row => new StyledText(text(row), Color(color)));
+
+    public static TableColumn<T> BytesColumn<T>(string header, Func<T, long> bytes, Color color, int width = 11) =>
+        new(header, Constraint.Length(width), row => new StyledText(ByteFormat.Column(bytes(row)), Color(color)), Justify.Right)
+        {
+            SortKey = row => bytes(row),
+        };
+
+    public static TableColumn<T> CountColumn<T>(string header, Func<T, long> count, int width = 10) =>
+        new(header, Constraint.Length(width), row => new StyledText(count(row).ToString("N0", CultureInfo.InvariantCulture), Theme.Current.MutedStyle),
+            Justify.Right)
+        {
+            SortKey = row => count(row),
+        };
+
+    /// <summary>A share as a number; a large share stands out, as in the trees.</summary>
+    public static TableColumn<T> PercentColumn<T>(Func<T, double> percent) =>
+        new("%", Constraint.Length(6), row =>
+        {
+            double value = percent(row);
+            return new StyledText(value.ToString("0.0", CultureInfo.InvariantCulture), Color(value >= 10 ? Theme.Current.Success : Theme.Current.Muted));
+        }, Justify.Right)
+        {
+            SortKey = row => percent(row),
+        };
+
+    private static Style Color(Color foreground) => new(foreground, Cellar.Primitives.Color.Default);
+
+    /// <summary>A view: <paramref name="body"/> framed under <paramref name="title"/>, its name and at most a figure or
+    /// two ("Hot methods \u00b7 top 200 of 1,204"), above the screen's one hint bar. <paramref name="hint"/> lists the
+    /// view's own keys; the keys every screen shares are appended so they read the same everywhere. Only the library is
+    /// neither tabbed nor nested.</summary>
+    public static Widget View(string title, Widget body, string hint, bool tabbed = true, bool canGoBack = true) =>
         new Stack(Direction.Vertical)
-            .Add(body, Constraint.Fill())
+            .Add(new Panel(body, $" {title} "), Constraint.Fill())
             .Add(new Label(new StyledText("  " + string.Join(HintSeparator,
                 new[] { hint, tabbed ? "Tab switch view" : null, canGoBack ? "Backspace back" : null, "q quit" }
                     .Where(part => !string.IsNullOrEmpty(part))),
@@ -38,114 +81,18 @@ internal static class ViewFormatting
     private const string HintSeparator = "  \u00b7  ";
 
     /// <summary>A view that only explains something, such as why it's empty.</summary>
-    public static Widget Message(string text, string title) =>
-        Hinted(new Panel(new Padding(new Label(new StyledText(text, Theme.Current.MutedStyle)), new Thickness(1)), title)
-            { BorderStyle = BorderStyle.Rounded }, "");
+    public static Widget Message(string title, string text) =>
+        View(title, new Padding(new Label(new StyledText(text, Theme.Current.MutedStyle)), new Thickness(1)), "");
 
-    /// <summary>Adds a view, built the first time it's shown. Every tab goes through here or
-    /// <see cref="AddBackgroundView"/>, which give all views the same keys (see <see cref="View"/>). A page has one row
-    /// of tabs: a view never contains tabs of its own.</summary>
-    public static Tabs AddView(this Tabs tabs, string name, Func<Widget> build) => tabs.Add(name, () => View.Of(build()));
+    /// <summary>What a snapshot holds: "heap", "heap + allocations", or "heap + allocations + whoalloc".</summary>
+    public static string SnapshotKind(SnapshotEntry snapshot) =>
+        snapshot.HasCorrelation ? "heap + allocations + whoalloc" : snapshot.HasAllocations ? "heap + allocations" : "heap";
 
-    /// <summary>Adds a view whose content is slow to build, so it's built in the background.</summary>
-    public static Tabs AddBackgroundView(this Tabs tabs, string name, Func<CancellationToken, Widget> build) =>
-        tabs.Add(name, () => View.Background(build));
-
-    /// <summary>Enter opens the selected node. Cellar's tree also toggles the node on Enter, so it would be collapsed
-    /// or expanded when you come back; ←/→ and Space still do that.</summary>
-    public static Widget OpenOnEnter<T>(TreeView<T> tree, Action<TreeNode<T>> open) => new KeyHook(tree, key =>
-    {
-        if (key.Key != Key.Enter || tree.SelectedNode is not { } node)
-        {
-            return null;
-        }
-        open(node);
-        return true;
-    });
-
-    /// <summary>Keeps the selection's colors when the mouse is over a link on the selected row. Cellar paints a hovered
-    /// link with the stripe background unless the link brings its own hover style, so the highlight flickered off.
-    /// Call after setting <c>RenderLabel</c>.</summary>
-    public static TreeView<T> KeepSelectionOnHover<T>(this TreeView<T> tree)
-    {
-        Func<TreeNode<T>, StyledText> render = tree.RenderLabel;
-        tree.RenderLabel = node => ReferenceEquals(node, tree.SelectedNode) ? WithHoverStyle(render(node), SelectedLinkHover) : render(node);
-        return tree;
-    }
-
-    private static Style SelectedLinkHover =>
-        new(Theme.Current.SelectionForeground, Theme.Current.SelectionBackground, TextAttributes.Bold | TextAttributes.Underline);
-
-    private static StyledText WithHoverStyle(StyledText text, Style hover)
-    {
-        if (!text.HasLinks)
-        {
-            return text;
-        }
-        StyledText result = StyledText.Empty();
-        foreach (Span span in text.Spans)
-        {
-            result.Append(span.Link switch
-            {
-                null => span,
-                LinkInfo link => span.WithLink(link with { HoverStyle = hover }),
-                object payload => span.WithLink(new LinkInfo(payload, hover)),
-            });
-        }
-        return result;
-    }
-
-    public static void SetRows<T>(Table table, IEnumerable<T> values, Func<T, string[]> render, Action<T> activate)
-    {
-        var byRow = new Dictionary<string[], T>();
-        table.Rows.Clear();
-        foreach (T value in values)
-        {
-            string[] row = render(value);
-            table.Rows.Add(row);
-            byRow.Add(row, value);
-        }
-        // Cellar sorts the row arrays in place; navigation must follow the row, not its old index.
-        table.OnActivate = index => activate(byRow[table.Rows[index]]);
-        table.SelectedIndex = table.Rows.Count > 0 ? 0 : -1;
-        table.ScrollOffset = 0;
-    }
+    /// <summary>What a snapshot holds and what it was taken on: "heap + allocations \u00b7 on exit".</summary>
+    public static string SnapshotContents(SnapshotEntry snapshot) =>
+        snapshot.Reason is { } reason ? $"{SnapshotKind(snapshot)} \u00b7 on {reason}" : SnapshotKind(snapshot);
 
     /// <summary>"1 type", "3 types".</summary>
     public static string Count(long count, string noun) =>
         $"{count.ToString("N0", CultureInfo.InvariantCulture)} {noun}{(count == 1 ? "" : "s")}";
-
-    public static string Bar(double percentage, int width)
-    {
-        int filled = (int)Math.Round(Math.Clamp(percentage, 0, 100) / 100.0 * width);
-        return new string('\u2588', filled) + new string('\u2591', width - filled);
-    }
-
-    internal static double ParseNumber(string text)
-    {
-        text = text.Trim();
-        double multiplier = 1;
-        foreach ((string suffix, double factor) in Units)
-        {
-            if (text.EndsWith(suffix, StringComparison.Ordinal))
-            {
-                multiplier = factor;
-                text = text[..^suffix.Length].Trim();
-                break;
-            }
-        }
-        return double.TryParse(text, NumberStyles.Number, CultureInfo.InvariantCulture, out double value)
-            ? value * multiplier
-            : throw new FormatException($"'{text}' is not a numeric table value.");
-    }
-
-    private static readonly (string Suffix, double Factor)[] Units =
-    [
-        ("PB", 1125899906842624d),
-        ("TB", 1099511627776d),
-        ("GB", 1073741824d),
-        ("MB", 1048576d),
-        ("KB", 1024d),
-        ("B", 1d),
-    ];
 }

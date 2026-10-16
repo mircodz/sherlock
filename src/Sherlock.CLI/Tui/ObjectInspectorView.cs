@@ -12,6 +12,7 @@ using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using Sherlock.Core.Analysis;
 using Theme = Cellar.Theming.Theme;
+using static System.FormattableString;
 
 namespace Sherlock.CLI.Tui;
 
@@ -40,7 +41,7 @@ internal sealed class ObjectInspectorView : Widget
             Striped = true,
             OnSelect = _ => UpdatePath(),
             OnLinkClick = Follow,
-        }.KeepSelectionOnHover();
+        };
 
         TreeNode<Row> node = CreateNode(new Row(root));
         _tree.AddRoot(node);
@@ -50,8 +51,7 @@ internal sealed class ObjectInspectorView : Widget
 
         _body = new Stack(Direction.Vertical)
             .Add(new Padding(_path, new Thickness(1, 0)), Constraint.Length(1))
-            .Add(ViewFormatting.Hinted(new Panel(_tree, " Fields ") { BorderStyle = BorderStyle.Rounded },
-                "\u2192\u2190 expand  \u00b7  Enter open object  \u00b7  t open type"), Constraint.Fill());
+            .Add(ViewFormatting.View("Fields", _tree, "\u2192\u2190 expand  \u00b7  Enter open object  \u00b7  t open type"), Constraint.Fill());
     }
 
     public override bool IsFocusable => true;
@@ -187,7 +187,7 @@ internal sealed class ObjectInspectorView : Widget
         {
             string label = row.Loaded
                 ? $"[{row.StartIndex}..{Math.Max(row.StartIndex, row.EndIndex - 1)}]"
-                : $"Load next {Math.Min(PageSize, row.TotalCount - row.StartIndex)}  ({row.StartIndex:N0} of {row.TotalCount:N0} shown)";
+                : Invariant($"Load next {Math.Min(PageSize, row.TotalCount - row.StartIndex)}  ({row.StartIndex:N0} of {row.TotalCount:N0} shown)");
             return StyledText.Of(label).Fg(theme.Accent);
         }
 
@@ -222,10 +222,10 @@ internal sealed class ObjectInspectorView : Widget
         }
         if (row.CollectionCount is { } count)
         {
-            text.Append($"  count {count:N0}").Fg(theme.Foreground);
+            text.Append(Invariant($"  count {count:N0}")).Fg(theme.Foreground);
             if (row.Capacity is { } capacity)
             {
-                text.Append($" / capacity {capacity:N0}").Fg(theme.Muted);
+                text.Append(Invariant($" / capacity {capacity:N0}")).Fg(theme.Muted);
             }
         }
         if (row.CyclePath is { } cycle)

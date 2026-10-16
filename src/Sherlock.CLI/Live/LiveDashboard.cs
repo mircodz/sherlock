@@ -80,13 +80,17 @@ public static class LiveDashboard
             ShowGuides = true,
             ShowHeader = false,
             HasFocus = true, // the tree ignores navigation keys without focus
-        }.KeepSelectionOnHover();
+        };
 
-        var snapshots = new Table { ShowHeader = true, Striped = true, ShowScrollbar = true };
-        snapshots.Columns.Add(new Column("Id", Constraint.Length(7)));
-        snapshots.Columns.Add(new Column("Size", Constraint.Length(10), Justify.Right));
-        snapshots.Columns.Add(new Column("Contents", Constraint.Fill(2)));
-        snapshots.Columns.Add(new Column("When", Constraint.Length(8), Justify.Right));
+        var snapshots = new Table<Captured> { ShowHeader = true, Striped = true, ShowScrollbar = true };
+        snapshots.Columns.AddRange(
+        [
+            ViewFormatting.TextColumn<Captured>("Id", Constraint.Length(5), capture => capture.Entry.Id, Theme.Current.Secondary),
+            ViewFormatting.TextColumn<Captured>("When", Constraint.Length(8),
+                capture => capture.At.ToLocalTime().ToString("HH:mm:ss", CultureInfo.InvariantCulture), Theme.Current.Muted),
+            ViewFormatting.BytesColumn<Captured>("On disk", capture => capture.Entry.TotalSizeBytes, Theme.Current.Success),
+            ViewFormatting.TextColumn<Captured>("Contents", Constraint.Fill(2), capture => ViewFormatting.SnapshotContents(capture.Entry), Theme.Current.Muted),
+        ]);
 
         var eventLines = new Label[eventRowCount];
         for (int i = 0; i < eventLines.Length; i++)
@@ -264,7 +268,8 @@ public static class LiveDashboard
             .Add(eventSection, Constraint.Length(eventLines.Length + 1))
             .Add(footer, Constraint.Length(1));
 
-        app.OnEvent = input =>
+        processTree.OnActivate = node => Snapshot(node.Value.Pid);
+        app.OnUnhandledEvent = input =>
         {
             switch (input)
             {
@@ -280,11 +285,8 @@ public static class LiveDashboard
                 case KeyEvent { IsChar: true } key when key.Rune.Value == 'p':
                     TogglePause();
                     return true;
-                case KeyEvent { Key: Key.Enter }: // the tree would also collapse an expanded parent
-                    SnapshotSelected();
-                    return true;
             }
-            return processTree.OnEvent(input);
+            return false;
         };
 
         app.OnMessage = message =>
@@ -386,12 +388,10 @@ public static class LiveDashboard
 
                 case Captured capture:
                     SnapshotEntry entry = capture.Entry;
-                    string contents = entry.HasCorrelation ? "heap + alloc + corr" : entry.HasAllocations ? "heap + alloc" : "heap";
+                    string contents = ViewFormatting.SnapshotKind(entry);
                     string size = ByteSize.Format(entry.TotalSizeBytes);
                     string took = capture.Duration is { } duration ? $" in {Duration(duration)}" : "";
-                    snapshots.Rows.Insert(0,
-                        [entry.Id, size, entry.Reason is { } reason ? $"{contents} ({reason})" : contents,
-                         capture.At.ToLocalTime().ToString("HH:mm:ss", CultureInfo.InvariantCulture)]);
+                    snapshots.Rows.Insert(0, capture);
                     status.Content = StyledText.Of("captured ").Fg(Theme.Current.Success)
                         .Append(entry.Id).Bold().Fg(Theme.Current.Foreground)
                         .Append($"  {contents}  {size}{took}").Fg(Theme.Current.Muted);

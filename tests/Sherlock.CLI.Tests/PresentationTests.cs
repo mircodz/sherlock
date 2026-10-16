@@ -1,6 +1,6 @@
 using System;
 using System.Globalization;
-using Cellar.Layout;
+using System.Linq;
 using Cellar.Terminal;
 using Cellar.Widgets;
 using Sherlock.CLI.Rendering;
@@ -31,14 +31,24 @@ public sealed class PresentationTests
     [InlineData(1024, "1.00 KB")]
     [InlineData(9830, "9.60 KB")]
     [InlineData(46377, "45.29 KB")]
-    public void ColumnSizesKeepTwoDecimalsAndStillSort(long bytes, string expected)
+    public void ColumnSizesKeepTwoDecimals(long bytes, string expected)
     {
         Assert.Equal(expected, ByteFormat.Column(bytes));
-        Assert.Equal(bytes < 1024 ? bytes : Math.Round(bytes / 1024d, 2) * 1024, ViewFormatting.ParseNumber(ByteFormat.Column(bytes)), 6);
     }
 
     [Fact]
-    public void ByteFormattingAndTableSortingAreCultureIndependent()
+    public void SizeColumnsSortByBytesNotByText()
+    {
+        Table<Row> table = ViewFormatting.Table([new Row("small", 900, 1), new Row("large", 20_000, 2), new Row("medium", 9_000, 3)], _ => { },
+            ViewFormatting.BytesColumn<Row>("bytes", row => row.Bytes, Cellar.Primitives.Color.Default));
+
+        table.SortBy(0, SortState.Descending); // as text, "900 B" > "8.79 KB" > "19.53 KB"
+
+        Assert.Equal(["large", "medium", "small"], table.Rows.Select(row => row.Name));
+    }
+
+    [Fact]
+    public void ByteFormattingIsCultureIndependent()
     {
         CultureInfo original = CultureInfo.CurrentCulture;
         try
@@ -46,8 +56,7 @@ public sealed class PresentationTests
             CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("fr-FR");
             Assert.Equal("1.5 KB", ByteFormat.Human(1536));
             Assert.Equal("1.5 KB", ByteSize.Format(1536));
-            Assert.Equal(1536d, ViewFormatting.ParseNumber(ByteFormat.Human(1536)));
-            Assert.Equal(12345d, ViewFormatting.ParseNumber("12,345"));
+            Assert.Equal("1.50 KB", ByteFormat.Column(1536));
         }
         finally
         {
@@ -106,12 +115,12 @@ public sealed class PresentationTests
     [Fact]
     public void SortedRowsActivateTheirDataInsteadOfTheOldIndex()
     {
-        Table table = ViewFormatting.Table(("name", Constraint.Fill(), false), ("bytes", Constraint.Length(10), true));
         var first = new Row("first", 2048, 0x1000);
         var second = new Row("second", 512, 0x2000);
         Row? activated = null;
-        ViewFormatting.SetRows(table, new[] { first, second },
-            row => [row.Name, ByteFormat.Human(row.Bytes)], row => activated = row);
+        Table<Row> table = ViewFormatting.Table([first, second], row => activated = row,
+            ViewFormatting.NameColumn<Row>("name", row => row.Name),
+            ViewFormatting.BytesColumn<Row>("bytes", row => row.Bytes, Cellar.Primitives.Color.Default));
 
         table.SortBy(1, SortState.Ascending);
         ActivateFirst(table);
@@ -124,11 +133,10 @@ public sealed class PresentationTests
     [Fact]
     public void ReplacingFilteredRowsDoesNotRestoreStaleNavigation()
     {
-        Table table = ViewFormatting.Table(("name", Constraint.Fill(), false));
         string? activated = null;
-        ViewFormatting.SetRows(table, new[] { "OldB", "OldA" }, name => [name], name => activated = name);
+        Table<string> table = ViewFormatting.Table(["OldB", "OldA"], name => activated = name, Names());
         table.SortBy(0, SortState.Ascending);
-        ViewFormatting.SetRows(table, new[] { "NewB", "NewA" }, name => [name], name => activated = name);
+        table.SetRows(["NewB", "NewA"]);
         table.SortBy(0, SortState.Descending);
         table.SortBy(0, SortState.None);
 
@@ -140,9 +148,8 @@ public sealed class PresentationTests
     [Fact]
     public void EmptyRowsCannotActivateAStaleSelection()
     {
-        Table table = ViewFormatting.Table(("name", Constraint.Fill(), false));
         bool activated = false;
-        ViewFormatting.SetRows(table, Array.Empty<string>(), name => [name], _ => activated = true);
+        Table<string> table = ViewFormatting.Table([], _ => activated = true, Names());
         table.HasFocus = true;
 
         Assert.True(table.OnEvent(new KeyEvent(Key.Enter, default, default)));
@@ -159,8 +166,8 @@ public sealed class PresentationTests
             new(Sherlock.Tests.Frames.Stack("Other.Alpha.Run"), "T", 512, 2, 0, 0),
         ]);
         NavigationTarget? activated = null;
-        Table table = AllocationsView.HotTable(profile.HotMethods(), target => activated = target);
-        table.SortBy(3, SortState.Ascending);
+        Table<AllocationMethodStat> table = AllocationsView.HotTable(profile.HotMethods(), profile.TotalAllocBytes, target => activated = target);
+        table.SortBy(0, SortState.Ascending); // by method
 
         ActivateFirst(table);
 
@@ -176,8 +183,8 @@ public sealed class PresentationTests
             new(Sherlock.Tests.Frames.Stack("Method"), "Other.Alpha", 512, 2, 0, 0),
         ]);
         NavigationTarget? activated = null;
-        Table table = AllocationsView.TypeTable(profile, name => new TypeTarget(name, TypeTab.Allocations), target => activated = target);
-        table.SortBy(1, SortState.Ascending);
+        Table<AllocationTypeStat> table = AllocationsView.TypeTable(profile, name => new TypeTarget(name, TypeTab.Allocations), target => activated = target);
+        table.SortBy(2, SortState.Ascending); // by bytes allocated
 
         ActivateFirst(table);
 
@@ -192,7 +199,9 @@ public sealed class PresentationTests
         Assert.Throws<ArgumentException>(() => NavigationTarget.FromLink("0x1234"));
     }
 
-    private static void ActivateFirst(Table table)
+    private static TableColumn<string> Names() => ViewFormatting.NameColumn<string>("name", name => name);
+
+    private static void ActivateFirst<T>(Table<T> table)
     {
         table.SelectedIndex = 0;
         table.HasFocus = true;

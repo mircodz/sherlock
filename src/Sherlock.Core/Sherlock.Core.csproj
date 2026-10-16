@@ -10,7 +10,9 @@
     <PackageReference Include="Microsoft.Diagnostics.NETCore.Client" />
     <PackageReference Include="Microsoft.Diagnostics.Runtime" />
     <!-- The build assets only copy Windows ETW/DIA DLLs; EventPipe parsing is fully managed. -->
-    <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" ExcludeAssets="build;buildTransitive" PrivateAssets="build;buildTransitive" />
+    <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" ExcludeAssets="build;buildTransitive" PrivateAssets="build; buildtransitive">
+      <IncludeAssets>runtime; compile; native; contentfiles; analyzers</IncludeAssets>
+    </PackageReference>
   </ItemGroup>
 
   <ItemGroup>

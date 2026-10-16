@@ -32,7 +32,14 @@ internal static class RetentionView
             ShowGuides = true,
             Striped = true,
             OnLinkClick = payload => navigate(NavigationTarget.FromLink(payload)),
-        }.KeepSelectionOnHover();
+            OnActivate = node =>
+            {
+                if (node.Value.Holder is { } holder)
+                {
+                    navigate(new ObjTarget(holder.Address));
+                }
+            },
+        };
         tree.Columns.Add(new TreeColumn<Row>("Retained", 11,
             node => new StyledText(ByteFormat.Column(node.Value.Retained), new Style(Theme.Current.Success, Color.Default))));
         tree.Columns.Add(new TreeColumn<Row>("%", 6, node =>
@@ -47,15 +54,7 @@ internal static class RetentionView
         {
             tree.AddRoot(new Row(holder, holder.RetainedSize), parent => Children(dominators, parent));
         }
-        Widget keys = OpenOnEnter(tree, node =>
-        {
-            if (node.Value.Holder is { } holder)
-            {
-                navigate(new ObjTarget(holder.Address));
-            }
-        });
-        return Hinted(new Panel(keys, $" Retention \u2014 the {Holders} objects holding the most memory ") { BorderStyle = BorderStyle.Rounded },
-            "\u2192\u2190 expand  \u00b7  Enter inspect");
+        return View("Retention", tree, "\u2192\u2190 expand  \u00b7  Enter inspect");
     }
 
     // An object retains its own size plus what each child retains, so whatever the shown children don't account

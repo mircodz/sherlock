@@ -1,28 +1,36 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Cellar.Layout;
 using Cellar.Primitives;
 using Cellar.Terminal;
+using Cellar.Text;
 using Cellar.Theming;
 using Cellar.Widgets;
 using Sherlock.Core;
-using Sherlock.Core.Profiling;
 using Sherlock.Core.Store;
 using static Sherlock.CLI.Tui.ViewFormatting;
 
 namespace Sherlock.CLI.Tui;
 
-/// <summary>Owns the active snapshot and routes navigation between focused explorer views.</summary>
+/// <summary>The snapshot library, and the pages of the snapshot opened from it.</summary>
 public static class SnapshotExplorer
 {
+    /// <summary>Goes back a page. A view sees it first, so a filter box can still delete with it.</summary>
+    internal const Key BackKey = Key.Backspace;
+
+    /// <summary>Quits, unless the view used the key: a filter box can type a q.</summary>
+    internal static bool IsQuitKey(InputEvent input) => input is KeyEvent { IsChar: true } key && key.Rune.Value == 'q';
+
     public static async Task<int> Run()
     {
         Rendering.Theme.ApplyCellar();
         var store = SnapshotStore.Default();
-        var entries = store.Sessions
-            .SelectMany(session => session.Processes.SelectMany(process => process.Snapshots.Select(snapshot => (Process: process, Snapshot: snapshot))))
+        List<LibraryEntry> entries = store.Sessions
+            .SelectMany(session => session.Processes.SelectMany(process => process.Snapshots.Select(snapshot => new LibraryEntry(process, snapshot))))
             .Where(entry => entry.Snapshot.Exists)
             .OrderByDescending(entry => entry.Snapshot.CreatedAt)
             .ToList();
@@ -32,76 +40,43 @@ public static class SnapshotExplorer
             return 1;
         }
 
-        // Keys go to the focused view first; see RouteKey.
-        var navigation = new Navigator { BackKey = Key.None };
-        Snapshot? current = null;
+        var navigation = new Navigator { BackKey = BackKey };
+        OpenedSnapshot? current = null;
 
-        void Follow(Snapshot snapshot, NavigationTarget target)
+        void Open(SnapshotEntry entry)
         {
-            void Navigate(NavigationTarget next) => Follow(snapshot, next);
-            Page page = target switch
+            // Opening the snapshot that's already open keeps what it has analyzed.
+            if (current?.Entry.Id != entry.Id)
             {
-                ObjTarget obj => new Page($"0x{obj.Address:x}", ObjectView.Create(snapshot, obj.Address, obj.Tab, Navigate)),
-                TypeTarget type => new Page(Rendering.DisplayNames.Type(type.Type), TypePage(snapshot, type, Navigate)),
-                MethodTarget method => new Page(method.Method.Label, AllocationsView.ForMethod(snapshot.Allocations, method.Method, Navigate)),
-                _ => throw new ArgumentException("Unknown explorer navigation target.", nameof(target)),
-            };
-            navigation.Push(page);
-        }
-
-        Widget Workspace(Snapshot snapshot, SnapshotEntry entry)
-        {
-            void Navigate(NavigationTarget target) => Follow(snapshot, target);
-            Tabs tabs = new Tabs()
-                .AddBackgroundView("Health", _ => HealthView.Create(Overview(snapshot, entry)))
-                .AddBackgroundView("Types", _ => TypesView.Create(snapshot.Histogram, Navigate))
-                .AddBackgroundView("Retention", cancellation => RetentionView.Create(snapshot.GetDominatorTree(cancellation), Navigate));
-            if (!entry.HasAllocations)
-            {
-                return tabs.AddView("Allocations", () => AllocationsView.MissingProfile(" Allocations "));
+                Snapshot snapshot = store.Open(entry.Id);
+                current?.Close();
+                current = new OpenedSnapshot(snapshot, entry);
             }
-            return tabs
-                .AddBackgroundView("Allocations", _ => AllocationsView.ByType(snapshot.Allocations, Navigate))
-                .AddBackgroundView("Call tree", _ => AllocationsView.Flow(snapshot.Allocations))
-                .AddBackgroundView("Hot methods", _ => AllocationsView.Hot(snapshot.Allocations, Navigate));
+            OpenedSnapshot opened = current;
+            void Navigate(NavigationTarget target) => navigation.Push(Page(opened, target, Navigate));
+            navigation.Push(new Page(entry.Id, Workspace(opened, Navigate)));
         }
 
-        bool labelled = entries.Any(entry => entry.Snapshot.Label is not null);
-        var columns = new List<(string Header, Constraint Width, bool Right)>
-        {
-            ("Id", Constraint.Length(5), false), ("App", Constraint.Fill(2), false), ("When", Constraint.Length(12), false),
-        };
-        if (labelled)
-        {
-            columns.Add(("Label", Constraint.Fill(1), false));
-        }
-        columns.AddRange([("On disk", Constraint.Length(10), true), ("Contents", Constraint.Fill(2), false)]);
-        Table table = Table([.. columns]);
-        SetRows(table, entries, entry =>
-        {
-            SnapshotEntry snapshot = entry.Snapshot;
-            string contents = snapshot.HasCorrelation ? "heap + allocations + whoalloc" : snapshot.HasAllocations ? "heap + allocations" : "heap";
-            var row = new List<string> { snapshot.Id, $"{(entry.Process.Name is { } name ? Printable.Escape(name) : "?")} ({entry.Process.Pid})", snapshot.CreatedAt.LocalDateTime.ToString("MM-dd HH:mm") };
-            if (labelled)
-            {
-                row.Add(snapshot.Label ?? "");
-            }
-            row.AddRange([ByteFormat.Column(snapshot.TotalSizeBytes), snapshot.Reason is { } reason ? $"{contents} \u00b7 on {reason}" : contents]);
-            return [.. row];
-        }, entry =>
-        {
-            Snapshot opened = store.Open(entry.Snapshot.Id);
-            current?.Dispose();
-            current = opened;
-            navigation.Push(new Page(entry.Snapshot.Id, Workspace(opened, entry.Snapshot)));
-        });
-        navigation.Reset(new Page("Snapshots", Hinted(new Panel(table, " Snapshots ") { BorderStyle = BorderStyle.Rounded },
-            "\u2191\u2193 move  \u00b7  Enter open", tabbed: false, canGoBack: false)));
+        Table<LibraryEntry> table = Table(entries, entry => Open(entry.Snapshot), LibraryColumns(entries).ToArray());
+        navigation.Reset(new Page("Snapshots", View("Snapshots", table, "\u2191\u2193 move  \u00b7  Enter open", tabbed: false, canGoBack: false)));
 
         using var terminal = new AnsiTerminal();
         using var app = new App(terminal);
         app.Root = navigation;
-        app.OnEvent = input => RouteKey(navigation, input, app.Quit);
+        app.OnUnhandledEvent = input =>
+        {
+            if (!IsQuitKey(input))
+            {
+                return false;
+            }
+            app.Quit();
+            return true;
+        };
+        app.OnError = error =>
+        {
+            ShowError(app, error);
+            return true;
+        };
         try
         {
             await app.RunAsync();
@@ -109,46 +84,87 @@ public static class SnapshotExplorer
         }
         finally
         {
-            current?.Dispose();
+            current?.Close();
         }
     }
+
+    private static Page Page(OpenedSnapshot opened, NavigationTarget target, Action<NavigationTarget> navigate) => target switch
+    {
+        ObjTarget obj => new Page(Rendering.Addresses.Format(obj.Address), ObjectView.Create(opened, obj.Address, obj.Tab, navigate)),
+        TypeTarget type => new Page(Rendering.DisplayNames.Type(type.Type), TypePage(opened, type, navigate)),
+        MethodTarget method => new Page(method.Method.Label, AllocationsView.ForMethod(opened.Snapshot.Allocations, method.Method, navigate)),
+        _ => throw new ArgumentException("Unknown explorer navigation target.", nameof(target)),
+    };
+
+    private static Widget Workspace(OpenedSnapshot opened, Action<NavigationTarget> navigate)
+    {
+        SnapshotEntry entry = opened.Entry;
+        Tabs tabs = Views()
+            .Add("Health", opened.Background((snapshot, _) => HealthView.Create(Overview(snapshot, entry))))
+            .Add("Types", opened.Background((snapshot, _) => TypesView.Create(snapshot.Histogram, navigate)))
+            .Add("Retention", opened.Background((snapshot, cancellation) => RetentionView.Create(snapshot.GetDominatorTree(cancellation), navigate)));
+        if (!entry.HasAllocations)
+        {
+            return tabs.Add("Allocations", AllocationsView.MissingProfile("Allocations"));
+        }
+        return tabs
+            .Add("Allocations", opened.Background((snapshot, _) => AllocationsView.ByType(snapshot.Allocations, navigate)))
+            .Add("Call tree", opened.Background((snapshot, _) => AllocationsView.Flow(snapshot.Allocations)))
+            .Add("Hot methods", opened.Background((snapshot, _) => AllocationsView.Hot(snapshot.Allocations, navigate)));
+    }
+
+    private static Widget TypePage(OpenedSnapshot opened, TypeTarget target, Action<NavigationTarget> navigate)
+    {
+        Tabs tabs = Views()
+            .Add("Instances", opened.Background((snapshot, cancellation) =>
+                TypesView.Instances(snapshot.Instances(target.Type, 200, cancellation, exact: true), target.Type, navigate)))
+            .Add("Call tree", opened.Background((snapshot, _) => AllocationsView.ForType(snapshot.Allocations, target.Type, navigate)));
+        tabs.ActiveIndex = target.Tab == TypeTab.Allocations ? 1 : 0;
+        return tabs;
+    }
+
+    private static IEnumerable<TableColumn<LibraryEntry>> LibraryColumns(IReadOnlyList<LibraryEntry> entries)
+    {
+        yield return TextColumn<LibraryEntry>("Id", Constraint.Length(5), entry => entry.Snapshot.Id, Theme.Current.Secondary);
+        yield return new TableColumn<LibraryEntry>("App", Constraint.Fill(2), entry =>
+            StyledText.Of(entry.Process.Name is { } name ? Printable.Escape(name) : "?").Fg(Theme.Current.Accent)
+                .Append($" ({entry.Process.Pid})").Fg(Theme.Current.Muted));
+        yield return new TableColumn<LibraryEntry>("When", Constraint.Length(12),
+            entry => new StyledText(When(entry.Snapshot), Theme.Current.MutedStyle))
+        {
+            SortKey = entry => entry.Snapshot.CreatedAt,
+        };
+        if (entries.Any(entry => entry.Snapshot.Label is not null))
+        {
+            yield return TextColumn<LibraryEntry>("Label", Constraint.Fill(1), entry => entry.Snapshot.Label ?? "", Theme.Current.Foreground);
+        }
+        yield return BytesColumn<LibraryEntry>("On disk", entry => entry.Snapshot.TotalSizeBytes, Theme.Current.Success);
+        yield return TextColumn<LibraryEntry>("Contents", Constraint.Fill(2), entry => SnapshotContents(entry.Snapshot), Theme.Current.Muted);
+    }
+
+    private static string When(SnapshotEntry snapshot) => snapshot.CreatedAt.LocalDateTime.ToString("MM-dd HH:mm", CultureInfo.InvariantCulture);
 
     private static HeapOverview Overview(Snapshot snapshot, SnapshotEntry entry)
     {
         DumpInfo info = snapshot.Info;
         string gc = info.ServerGc ? $"server GC, {info.HeapCount} heaps" : "workstation GC";
-        string captured = entry.CreatedAt.LocalDateTime.ToString("MM-dd HH:mm") + (entry.Reason is { } reason ? $" \u00b7 on {reason}" : "");
+        string captured = When(entry) + (entry.Reason is { } reason ? $" \u00b7 on {reason}" : "");
         return new HeapOverview(entry.Id, snapshot.Histogram, snapshot.Generations, $"{info.ClrFlavor} {info.ClrVersion} \u00b7 {gc}", captured);
     }
 
-    /// <summary>The focused view sees every key first, so the filter box can type 'q' and delete with Backspace;
-    /// only keys it leaves unhandled go back (Backspace) or quit (q).</summary>
-    internal static bool RouteKey(Navigator navigation, InputEvent input, Action quit)
+    /// <summary>Shows what went wrong over the page, such as a snapshot that won't open, instead of ending the explorer.
+    /// Esc closes it.</summary>
+    private static void ShowError(App app, Exception error)
     {
-        if (navigation.OnEvent(input))
+        bool expected = error is DumpAnalysisException or IOException or InvalidDataException or UnauthorizedAccessException;
+        string message = expected ? error.Message : $"{error.GetType().Name}: {error.Message}";
+        var text = new Label(StyledText.Of(message).Fg(Theme.Current.Foreground).Append("\n\nEsc to close").Fg(Theme.Current.Muted), wrap: true);
+        app.PushOverlay(new Overlay(new Panel(text, " Error "))
         {
-            return true;
-        }
-        if (input is KeyEvent { Key: Key.Backspace } && navigation.Depth > 1)
-        {
-            navigation.Pop();
-            return true;
-        }
-        if (input is KeyEvent { IsChar: true } key && key.Rune.Value == 'q')
-        {
-            quit();
-            return true;
-        }
-        return false;
+            WidthPercent = 60,
+            Height = 9,
+        });
     }
 
-    private static Widget TypePage(Snapshot snapshot, TypeTarget target, Action<NavigationTarget> navigate)
-    {
-        Tabs tabs = new Tabs()
-            .AddBackgroundView("Instances", cancellation =>
-                TypesView.Instances(snapshot.Instances(target.Type, 200, cancellation, exact: true), target.Type, navigate))
-            .AddBackgroundView("Call tree", _ => AllocationsView.ForType(snapshot.Allocations, target.Type, navigate));
-        tabs.ActiveIndex = target.Tab == TypeTab.Allocations ? 1 : 0;
-        return tabs;
-    }
+    private sealed record LibraryEntry(ProcessRecord Process, SnapshotEntry Snapshot);
 }

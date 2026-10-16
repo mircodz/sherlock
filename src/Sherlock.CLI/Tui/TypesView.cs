@@ -1,13 +1,14 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
 using Cellar.Layout;
 using Cellar.Primitives;
 using Cellar.Terminal;
+using Cellar.Theming;
 using Cellar.Widgets;
 using Sherlock.Core;
 using static Sherlock.CLI.Tui.ViewFormatting;
+using static System.FormattableString;
 
 namespace Sherlock.CLI.Tui;
 
@@ -17,9 +18,14 @@ internal static class TypesView
     {
         // Free space isn't a type; Health reports it.
         List<HeapTypeStat> types = histogram.Where(s => s.TypeName != "Free").OrderByDescending(s => s.TotalSize).ToList();
-        Table table = Table(("Type", Constraint.Fill(3), false), ("Count", Constraint.Length(11), true),
-            ("Bytes", Constraint.Length(11), true), ("%", Constraint.Length(6), true), ("Share", Constraint.Length(14), false),
-            ("Namespace", Constraint.Fill(2), false));
+        long total = 1; // of the rows shown, so that the shares of a filtered list add up
+        double Percent(HeapTypeStat row) => 100.0 * (long)row.TotalSize / total;
+        Table<HeapTypeStat> table = Table<HeapTypeStat>([], row => navigate(new TypeTarget(row.TypeName)),
+            NameColumn<HeapTypeStat>("Type", row => Rendering.DisplayNames.Type(row.TypeName)),
+            NamespaceColumn<HeapTypeStat>(row => Rendering.DisplayNames.Namespace(row.TypeName)),
+            BytesColumn<HeapTypeStat>("Bytes", row => (long)row.TotalSize, Theme.Current.Success),
+            PercentColumn<HeapTypeStat>(Percent),
+            CountColumn<HeapTypeStat>("Count", row => row.Count));
 
         void Populate(string query)
         {
@@ -27,41 +33,36 @@ internal static class TypesView
             List<HeapTypeStat> rows = query.Length == 0
                 ? types
                 : types.Where(s => s.TypeName.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
-            long total = Math.Max(1, rows.Sum(s => (long)s.TotalSize));
-            SetRows(table, rows, row =>
-            {
-                double percent = 100.0 * (long)row.TotalSize / total;
-                return [Rendering.DisplayNames.Type(row.TypeName), row.Count.ToString("N0", CultureInfo.InvariantCulture), ByteFormat.Column(row.TotalSize),
-                    percent.ToString("0.0", CultureInfo.InvariantCulture), Bar(percent, 12), Rendering.DisplayNames.Namespace(row.TypeName)];
-            }, row => navigate(new TypeTarget(row.TypeName)));
+            total = Math.Max(1, rows.Sum(s => (long)s.TotalSize));
+            table.SetRows(rows);
         }
         Populate("");
         var filter = new Input { Placeholder = "/ to filter types by name\u2026", OnChange = Populate };
-        return Hinted(new Panel(new FilterStack(filter, table, Populate), " Types ") { BorderStyle = BorderStyle.Rounded },
-            "Enter instances  \u00b7  / filter  \u00b7  s sort");
+        return View("Types", new FilterStack(filter, table, Populate), "Enter instances  \u00b7  / filter");
     }
 
     public static Widget Instances(InstanceListing listing, string typeName, Action<NavigationTarget> navigate)
     {
         if (listing.Instances.Count == 0)
         {
-            return Message($"No live instances of {Rendering.DisplayNames.Type(typeName)} in this snapshot.", $" {Rendering.DisplayNames.Type(typeName)} ");
+            return Message("Instances", $"No live instances of {Rendering.DisplayNames.Type(typeName)} in this snapshot.");
         }
-        string title = $" {Rendering.DisplayNames.Type(typeName)} \u2014 {listing.TotalMatched:N0} instances, {ByteFormat.Human(listing.TotalMatchedSize)} ";
+        string title = Invariant($"Instances \u00b7 {listing.TotalMatched:N0} \u00b7 {ByteFormat.Human(listing.TotalMatchedSize)}");
         if (listing.Instances.Count < listing.TotalMatched)
         {
-            title += $"\u00b7 showing the first {listing.Instances.Count:N0} ";
+            title += Invariant($" \u00b7 first {listing.Instances.Count:N0} shown");
         }
-        Table table = Table(("Address", Constraint.Length(16), false), ("Size", Constraint.Length(10), true),
-            ("Preview", Constraint.Fill(), false));
-        SetRows(table, listing.Instances,
-            row => [Sherlock.CLI.Rendering.Addresses.Format(row.Address), ByteFormat.Column(row.Size), row.Preview ?? ""],
-            row => navigate(new ObjTarget(row.Address)));
-        return Hinted(new Panel(table, title) { BorderStyle = BorderStyle.Rounded }, "Enter inspect  \u00b7  s sort");
+        Table<ObjectInstance> table = Table(listing.Instances, row => navigate(new ObjTarget(row.Address)),
+            TextColumn<ObjectInstance>("Address", Constraint.Length(16), row => Rendering.Addresses.Format(row.Address), Theme.Current.Secondary),
+            BytesColumn<ObjectInstance>("Size", row => (long)row.Size, Theme.Current.Success),
+            TextColumn<ObjectInstance>("Preview", Constraint.Fill(), row => row.Preview ?? "", Theme.Current.Foreground));
+        table.Columns[0].SortKey = row => row.Address;
+        return View(title, table, "Enter inspect");
     }
 
     /// <summary>The filter box above the types table. The table has focus; '/' moves it to the filter, where Enter
-    /// keeps the filter and Esc clears it, both returning to the table.</summary>
+    /// keeps the filter and Esc clears it, both returning to the table. Keys go to whichever has focus and no further,
+    /// so Tab still switches views.</summary>
     private sealed class FilterStack : Widget
     {
         private const string FilteringPlaceholder = "type a name  \u00b7  Enter keeps the filter  \u00b7  Esc clears it";
@@ -70,6 +71,7 @@ internal static class TypesView
         private readonly Action<string> _apply;
         private readonly Stack _stack;
         private readonly string _idlePlaceholder;
+        private bool _focused;
         private bool _filtering;
 
         public FilterStack(Input input, Widget body, Action<string> apply)
@@ -84,10 +86,10 @@ internal static class TypesView
         public override bool IsFocusable => true;
         public override bool HasFocus
         {
-            get => _stack.HasFocus;
+            get => _focused;
             set
             {
-                _stack.HasFocus = value; // focuses the stack's first child, the filter; correct that below
+                _focused = value;
                 _input.HasFocus = value && _filtering;
                 _body.HasFocus = value && !_filtering;
             }
@@ -98,25 +100,26 @@ internal static class TypesView
 
         public override bool OnEvent(InputEvent input)
         {
-            if (input is KeyEvent key)
+            if (input is not KeyEvent key)
             {
-                if (!_filtering && key.IsChar && key.Rune.Value == '/')
-                {
-                    SetFiltering(true);
-                    return true;
-                }
-                if (_filtering && key.Key is Key.Enter or Key.Escape)
-                {
-                    if (key.Key == Key.Escape)
-                    {
-                        _input.Text = "";
-                        _apply("");
-                    }
-                    SetFiltering(false);
-                    return true;
-                }
+                return _stack.OnEvent(input); // the mouse goes to what's under it
             }
-            return _stack.OnEvent(input);
+            if (!_filtering && key.IsChar && key.Rune.Value == '/')
+            {
+                SetFiltering(true);
+                return true;
+            }
+            if (_filtering && key.Key is Key.Enter or Key.Escape)
+            {
+                if (key.Key == Key.Escape)
+                {
+                    _input.Text = "";
+                    _apply("");
+                }
+                SetFiltering(false);
+                return true;
+            }
+            return (_filtering ? _input : _body).OnEvent(input);
         }
 
         private void SetFiltering(bool filtering)
