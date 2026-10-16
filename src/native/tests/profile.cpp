@@ -54,7 +54,7 @@ TEST(Profile, RoundTripsRecordsAndStacks) {
     w.addAllocation(s2, t2, 512, 8, 0, 0);
     ASSERT_EQ(w.allocationCount(), 2u);
 
-    ContainerWriter cw;
+    ContainerWriter cw(SlabKind::Profile, kProfileVersion);
     w.writeTo(cw);
     const std::string bytes = cw.finish(); // keep the buffer alive; the reader borrows it
     ContainerReader c(asBytes(bytes));
@@ -102,7 +102,7 @@ TEST(Profile, CorrelationIsSortedAndBinarySearchable) {
     w.addObject(0x2000, s1);
     ASSERT_EQ(w.objectCount(), 3u);
 
-    ContainerWriter cw;
+    ContainerWriter cw(SlabKind::Profile, kProfileVersion);
     w.writeTo(cw);
     const std::string bytes = cw.finish();
     ContainerReader c(asBytes(bytes));
@@ -131,7 +131,7 @@ TEST(Profile, NoCorrelationSectionWhenAggregateOnly) {
     // The exit-time aggregate has allocations but no per-object correlation.
     ProvenanceWriter w;
     w.addAllocation(stack(w, {"A"}), w.internType("T"), 100, 1, 100, 1);
-    ContainerWriter cw;
+    ContainerWriter cw(SlabKind::Profile, kProfileVersion);
     w.writeTo(cw);
     const std::string bytes = cw.finish();
     ContainerReader c(asBytes(bytes));
@@ -141,29 +141,26 @@ TEST(Profile, NoCorrelationSectionWhenAggregateOnly) {
     EXPECT_FALSE(r.stackForAddress(0x1000).has_value());
 }
 
-// Tiny chunks force address lookups across section boundaries.
-TEST(Profile, ChunkedCorrelationBinarySearchesAcrossChunks) {
+TEST(Profile, CorrelationIsSortedForBinarySearch) {
     ProvenanceWriter w;
     const std::uint32_t s1 = stack(w, {"A.M", "B.N"});
     const std::uint32_t s2 = stack(w, {"A.M", "C.O"});
-    // 12 objects, inserted out of order; sorted then chunked.
+    // 12 objects, inserted out of order.
     for (std::uint64_t i = 12; i >= 1; --i) w.addObject(i * 0x1000, (i % 2 == 0) ? s1 : s2);
     ASSERT_EQ(w.objectCount(), 12u);
 
-    ContainerWriter cw;
-    w.writeTo(cw, /*chunkBytes*/ 48); // 3 records/chunk → 4 chunks
+    ContainerWriter cw(SlabKind::Profile, kProfileVersion);
+    w.writeTo(cw);
     const std::string bytes = cw.finish();
     ContainerReader c(asBytes(bytes));
     ASSERT_TRUE(c.valid());
-    ASSERT_GE(c.findAll(SectionType::Correlation).size(), 2u); // actually chunked
 
     ProvenanceReader r(c);
     std::span<const CorrelationRecord> corr = r.correlation();
     ASSERT_EQ(corr.size(), 12u);
     for (std::size_t i = 1; i < corr.size(); ++i)
-        EXPECT_LT(corr[i - 1].address, corr[i].address); // globally sorted across chunk boundaries
+        EXPECT_LT(corr[i - 1].address, corr[i].address);
 
-    // Binary search resolves every address, including ones in non-first chunks.
     for (std::uint64_t i = 1; i <= 12; ++i) {
         auto sid = r.stackForAddress(i * 0x1000);
         ASSERT_TRUE(sid.has_value()) << "missing 0x" << std::hex << (i * 0x1000);

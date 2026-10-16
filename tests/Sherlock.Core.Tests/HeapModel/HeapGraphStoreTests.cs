@@ -67,7 +67,7 @@ public sealed class HeapGraphStoreTests : IDisposable
         Assert.True(MemoryMarshal.TryGetMemoryManager(loaded.Addresses, out PointerMemory<ulong>? _));
         Assert.True(MemoryMarshal.TryGetMemoryManager(loaded.Sizes, out PointerMemory<uint>? _));
         Assert.True(MemoryMarshal.TryGetMemoryManager(loaded.Offsets, out PointerMemory<long>? _));
-        Assert.True(MemoryMarshal.TryGetMemoryManager(loaded.Edges.Chunk(0), out PointerMemory<int>? _));
+        Assert.True(MemoryMarshal.TryGetMemoryManager(loaded.Edges.Parts()[0], out PointerMemory<int>? _));
         Assert.True(MemoryMarshal.TryGetMemoryManager(loaded.Roots, out PointerMemory<HeapRootRecord>? _));
     }
 
@@ -94,9 +94,9 @@ public sealed class HeapGraphStoreTests : IDisposable
     }
 
     [Fact]
-    public void RoundTrips_MultiChunkEdges_SplitAndReassemble()
+    public void RoundTrips_MultiChunkEdges_AsOneSection()
     {
-        // A tiny budget exercises multi-chunk persistence without allocating billions of edges.
+        // A tiny budget splits the in-memory edges without allocating billions of them.
         ulong[] addresses = [0x1000, 0x2000, 0x3000, 0x4000];
         uint[] sizes = [16, 24, 24, 48];
         long[] offsets = [0, 2, 3, 4, 4, 5]; // same CSR as SampleGraph, as long
@@ -108,7 +108,7 @@ public sealed class HeapGraphStoreTests : IDisposable
         HeapGraphStore.Save(_path, original);
         using HeapGraph loaded = HeapGraphStore.Load(_path)!;
 
-        Assert.True(loaded.Edges.ChunkCount > 1);
+        Assert.Equal(0, loaded.Edges.ChunkCount); // one mapped section
         Assert.Equal(5, loaded.Edges.Count);
         Assert.Equal([1, 2], loaded.Successors(0).ToArray());
         Assert.Equal([3], loaded.Successors(1).ToArray());

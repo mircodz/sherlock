@@ -204,7 +204,7 @@ public sealed class SnapshotStoreTests : IDisposable
         var provenance = new ProvenanceWriter();
         uint stack = provenance.InternStack(Sherlock.Tests.Frames.Stack("Program.Main", "App.Query"));
         provenance.AddAllocation(stack, provenance.InternType("MyApp.Query"), 128, 2, 64, 1);
-        var container = new ContainerWriter();
+        var container = new ContainerWriter(SlabKind.Profile, ProfileFormat.Version);
         provenance.WriteTo(container);
         string path = Path.Combine(_tmp.Path, name);
         container.Save(path);

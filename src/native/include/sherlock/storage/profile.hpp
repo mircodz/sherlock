@@ -31,9 +31,8 @@ struct CorrelationRecord {
 };
 static_assert(sizeof(CorrelationRecord) == 16, "CorrelationRecord must be a packed 16-byte record");
 
-// Version 3: stacks are method indices and typeId indexes Types (symbols version 2). Earlier versions
-// referred to names in the retired Frames section.
-inline constexpr std::uint16_t kProfileVersion = 3;
+// The profile kind's version, covering every section; keep in sync with the C# ProfileFormat.Version.
+inline constexpr std::uint32_t kProfileVersion = 1;
 
 // Emits allocation and correlation records with shared stacks. Callers intern each method once
 // (internMethod), then stacks of the returned indices, root -> leaf.
@@ -55,17 +54,16 @@ public:
     [[nodiscard]] std::size_t allocationCount() const { return allocs_.size(); }
     [[nodiscard]] std::size_t objectCount() const { return corr_.size(); }
 
-    // Terminal operation: sort correlation in place, then bound each chunk by chunkBytes.
-    void writeTo(ContainerWriter& w, std::size_t chunkBytes = kDefaultChunkBytes) {
+    // Terminal operation: sorts correlation in place, so readers can binary-search it.
+    void writeTo(ContainerWriter& w) {
         symbols_.writeTo(w);
         if (!allocs_.empty()) {
-            w.addRecords<AllocationRecord>(SectionType::Allocations, kProfileVersion, allocs_);
+            w.addRecords<AllocationRecord>(SectionType::Allocations, allocs_);
         }
         if (!corr_.empty()) {
-            // Sort globally before chunking so address lookups can cross chunk boundaries.
             std::sort(corr_.begin(), corr_.end(),
                       [](const CorrelationRecord& a, const CorrelationRecord& b) { return a.address < b.address; });
-            w.addChunkedRecords<CorrelationRecord>(SectionType::Correlation, kProfileVersion, corr_, chunkBytes);
+            w.addRecords<CorrelationRecord>(SectionType::Correlation, corr_);
         }
     }
 
@@ -75,17 +73,15 @@ private:
     std::vector<CorrelationRecord> corr_;
 };
 
-// Borrows allocation and stack bytes; owns the reassembled correlation column.
+// Borrows the container's bytes.
 class ProvenanceReader {
 public:
     explicit ProvenanceReader(const ContainerReader& c) : symbols_(SymbolTable::read(c)) {
         if (auto a = c.find(SectionType::Allocations)) {
             allocs_ = a->records<AllocationRecord>();
         }
-        // Table-order chunks preserve global address order. The C# reader maps them in place.
-        for (const SectionView& s : c.findAll(SectionType::Correlation)) {
-            std::span<const CorrelationRecord> chunk = s.records<CorrelationRecord>();
-            corr_.insert(corr_.end(), chunk.begin(), chunk.end());
+        if (auto s = c.find(SectionType::Correlation)) {
+            corr_ = s->records<CorrelationRecord>();
         }
     }
 
@@ -106,7 +102,7 @@ public:
 private:
     SymbolTable symbols_;
     std::span<const AllocationRecord> allocs_;
-    std::vector<CorrelationRecord> corr_;
+    std::span<const CorrelationRecord> corr_;
 };
 
 } // namespace Sherlock::storage

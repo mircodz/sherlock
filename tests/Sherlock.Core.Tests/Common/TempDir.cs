@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using Sherlock.Core.Profiling;
 using Sherlock.Core.Storage;
 
 namespace Sherlock.Core.Tests.Common;
@@ -13,12 +14,12 @@ public sealed class TempDir : IDisposable
     public string File(string extension = ".slab") =>
         System.IO.Path.Combine(Path, $"{Guid.NewGuid():N}{extension}");
 
-    /// <summary>Serializes a container to a temp file and opens it as a <see cref="SlabFile"/>.</summary>
-    public SlabFile WriteSlab(ContainerWriter writer)
+    /// <summary>Saves a container to a temp file and opens it as <paramref name="kind"/>, a profile by default.</summary>
+    public SlabFile WriteSlab(ContainerWriter writer, SlabKind kind = SlabKind.Profile, uint version = ProfileFormat.Version)
     {
         string path = File();
         writer.Save(path);
-        return SlabFile.Open(path);
+        return SlabFile.Open(path, kind, version);
     }
 
     public void Dispose()

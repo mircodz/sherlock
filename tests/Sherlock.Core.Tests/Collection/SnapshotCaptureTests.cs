@@ -26,7 +26,7 @@ public sealed class SnapshotCaptureTests : IDisposable
         var writer = new ProvenanceWriter();
         uint stack = writer.InternStack(Sherlock.Tests.Frames.Stack("Program.Main"));
         writer.AddAllocation(stack, writer.InternType("Example"), 64, 1, 64, 1);
-        var container = new ContainerWriter();
+        var container = new ContainerWriter(SlabKind.Profile, ProfileFormat.Version);
         writer.WriteTo(container);
         container.Save(provenance);
         var capture = new SnapshotCaptureResult(dump, provenance);

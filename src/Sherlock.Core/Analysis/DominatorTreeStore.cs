@@ -8,29 +8,25 @@ namespace Sherlock.Core.Analysis;
 /// <summary>Persists the columns derived by dominator analysis.</summary>
 public static class DominatorTreeStore
 {
-    private const ushort Version = 2;
+    private const uint Version = 1;
 
     public static void Save(string path, DominatorAnalyzer.DominatorResult result, ulong graphContentHash)
     {
-        var writer = new ContainerWriter();
-        writer.AddRecords(SectionType.DomMeta, Version, [graphContentHash]);
-        writer.AddMemoryRecords<int>(SectionType.DomNodeByRpo, Version, result.NodeByRpo);
-        writer.AddMemoryRecords<ulong>(SectionType.DomRetained, Version, result.Retained);
-        writer.AddMemoryRecords<int>(SectionType.DomIdom, Version, result.Idom);
+        var writer = new ContainerWriter(SlabKind.Dominators, Version);
+        writer.AddRecords<ulong>(SectionType.DomMeta, [graphContentHash]);
+        writer.AddMemory<int>(SectionType.DomNodeByRpo, result.NodeByRpo);
+        writer.AddMemory<ulong>(SectionType.DomRetained, result.Retained);
+        writer.AddMemory<int>(SectionType.DomIdom, result.Idom);
         writer.Save(path);
     }
 
-    /// <summary>Loads a compatible result and reconstructs graph-owned columns.</summary>
+    /// <summary>Loads a result built from <paramref name="graph"/>, or null when it was built from another, and
+    /// reconstructs graph-owned columns.</summary>
     public static DominatorAnalyzer.DominatorResult? Load(string path, HeapGraph graph)
     {
-        using SlabFile slab = SlabFile.Open(path);
-        if (!slab.Has(SectionType.DomMeta) || !slab.Has(SectionType.DomNodeByRpo) ||
-            !slab.Has(SectionType.DomRetained) || !slab.Has(SectionType.DomIdom))
-        {
-            return null;
-        }
-        Column<ulong> metaCol = slab.GetColumn<ulong>(SectionType.DomMeta);
-        if (slab.SectionVersion(SectionType.DomMeta) != Version || metaCol.Length < 1 || metaCol[0] != graph.ContentHash)
+        using SlabFile slab = SlabFile.Open(path, SlabKind.Dominators, Version);
+        Column<ulong> meta = slab.GetColumn<ulong>(SectionType.DomMeta);
+        if (meta.Length < 1 || meta[0] != graph.ContentHash)
         {
             return null;
         }

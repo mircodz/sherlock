@@ -10,101 +10,63 @@ namespace Sherlock.Core.HeapModel;
 /// <summary>Persists a heap graph as typed slab columns.</summary>
 public static class HeapGraphStore
 {
-    private const ushort Version = 6;
+    private const uint Version = 1;
 
     public static void Save(string path, HeapGraph graph, string? sourcePath = null)
     {
-        var writer = new ContainerWriter();
-        writer.AddChunkedMemoryRecords(SectionType.GraphAddresses, Version, graph.Addresses);
-        writer.AddChunkedMemoryRecords(SectionType.GraphSizes, Version, graph.Sizes);
-        writer.AddChunkedMemoryRecords(SectionType.GraphOffsets, Version, graph.Offsets);
-
-        EdgeColumn edges = graph.Edges;
-        IReadOnlyList<ReadOnlyMemory<byte>> edgeChunks = edges.ChunksAsBytes();
-        for (int i = 0; i < edgeChunks.Count; i++)
-        {
-            writer.AddChunkedSection(SectionType.GraphEdgesChunk, Version, sizeof(int), [edgeChunks[i]],
-                (ulong)(edges.ChunkStarts[i + 1] - edges.ChunkStarts[i]));
-        }
-        writer.AddRecords(SectionType.GraphEdgeChunkMeta, Version, edges.ChunkStarts);
-        writer.AddMemoryRecords(SectionType.GraphRoots, Version, graph.Roots);
-
+        var writer = new ContainerWriter(SlabKind.Graph, Version);
         (long sourceLength, long sourceModified) = SourceStamp(sourcePath);
-        writer.AddRecords(SectionType.GraphMeta, Version, [graph.FreeBytes, (ulong)graph.FreeCount, (ulong)sourceLength, (ulong)sourceModified]);
+        writer.AddRecords<ulong>(SectionType.GraphMeta, [graph.FreeBytes, (ulong)graph.FreeCount, (ulong)sourceLength, (ulong)sourceModified]);
+        writer.AddMemory(SectionType.GraphAddresses, graph.Addresses);
+        writer.AddMemory(SectionType.GraphSizes, graph.Sizes);
         if (graph.TypeIds is { } typeIds && graph.TypeNames is { } typeNames)
         {
-            writer.AddChunkedMemoryRecords(SectionType.GraphTypeIds, Version, typeIds);
-            byte[] namesBlob = EncodeNames(typeNames);
-            writer.AddSection(SectionType.GraphTypeNames, Version, 0, namesBlob, (ulong)typeNames.Length);
+            writer.AddMemory(SectionType.GraphTypeIds, typeIds);
+            writer.AddBytes(SectionType.GraphTypeNames, EncodeNames(typeNames));
         }
+        writer.AddMemory(SectionType.GraphOffsets, graph.Offsets);
+        writer.AddMemory(SectionType.GraphEdges, graph.Edges.Parts());
+        writer.AddMemory(SectionType.GraphRoots, graph.Roots);
         writer.Save(path);
     }
 
-    /// <summary>Loads a compatible graph, keeping edge chunks memory-mapped.</summary>
+    /// <summary>Loads a graph that matches <paramref name="sourcePath"/>, or null when it doesn't. Columns stay in
+    /// the mapping, which the graph owns.</summary>
     public static HeapGraph? Load(string path, string? sourcePath = null)
     {
-        SlabFile slab = SlabFile.Open(path);
+        SlabFile slab = SlabFile.Open(path, SlabKind.Graph, Version);
         try
         {
-            if (!slab.Has(SectionType.GraphOffsets) || !slab.Has(SectionType.GraphEdgeChunkMeta) || !slab.Has(SectionType.GraphRoots))
-            {
-                slab.Dispose();
-                return null;
-            }
-            if (slab.SectionVersion(SectionType.GraphOffsets) != Version || slab.SectionVersion(SectionType.GraphMeta) != Version ||
-                slab.SectionVersion(SectionType.GraphRoots) != Version)
-            {
-                slab.Dispose();
-                return null;
-            }
-
             Column<ulong> meta = slab.GetColumn<ulong>(SectionType.GraphMeta);
+            if (meta.Length != 4)
+            {
+                throw new InvalidDataException("The heap graph has no metadata.");
+            }
             if (sourcePath is not null)
             {
                 (long sourceLength, long sourceModified) = SourceStamp(sourcePath);
-                if (meta.Length < 4 || meta[2] != (ulong)sourceLength || meta[3] != (ulong)sourceModified)
+                if (meta[2] != (ulong)sourceLength || meta[3] != (ulong)sourceModified)
                 {
                     slab.Dispose();
                     return null;
                 }
             }
 
-            // Columns stay in the mapping, which the graph owns.
-            ReadOnlyMemory<ulong> addresses = slab.GetColumn<ulong>(SectionType.GraphAddresses).AsMemory();
-            ReadOnlyMemory<uint> sizes = slab.GetColumn<uint>(SectionType.GraphSizes).AsMemory();
-            ReadOnlyMemory<long> offsets = slab.GetColumn<long>(SectionType.GraphOffsets).AsMemory();
-            ReadOnlyMemory<HeapRootRecord> roots = slab.GetColumn<HeapRootRecord>(SectionType.GraphRoots).AsMemory();
-
-            long[] chunkStarts = slab.GetColumn<long>(SectionType.GraphEdgeChunkMeta).AsMemory().ToArray();
-            IReadOnlyList<Column<int>> edgeSections = slab.SectionColumns<int>(SectionType.GraphEdgesChunk);
-            var chunks = new ReadOnlyMemory<int>[edgeSections.Count];
-            for (int i = 0; i < chunks.Length; i++)
-            {
-                chunks[i] = edgeSections[i].AsMemory();
-            }
-            var edges = new EdgeColumn(chunks, chunkStarts);
-
             ReadOnlyMemory<int>? typeIds = null;
             string[]? typeNames = null;
-            if (slab.Has(SectionType.GraphTypeIds) && slab.Has(SectionType.GraphTypeNames))
+            if (slab.Has(SectionType.GraphTypeIds))
             {
                 typeIds = slab.GetColumn<int>(SectionType.GraphTypeIds).AsMemory();
                 typeNames = DecodeNames(slab.Blob(SectionType.GraphTypeNames));
             }
-
-            ulong freeBytes = 0;
-            long freeCount = 0;
-            if (meta.Length >= 1)
-            {
-                freeBytes = meta[0];
-            }
-
-            if (meta.Length >= 2)
-            {
-                freeCount = (long)meta[1];
-            }
-
-            return new HeapGraph(addresses, sizes, offsets, edges, typeIds, typeNames, freeBytes, freeCount, roots, slab);
+            return new HeapGraph(
+                slab.GetColumn<ulong>(SectionType.GraphAddresses).AsMemory(),
+                slab.GetColumn<uint>(SectionType.GraphSizes).AsMemory(),
+                slab.GetColumn<long>(SectionType.GraphOffsets).AsMemory(),
+                new EdgeColumn(slab.GetColumn<int>(SectionType.GraphEdges)),
+                typeIds, typeNames, meta[0], (long)meta[1],
+                slab.GetColumn<HeapRootRecord>(SectionType.GraphRoots).AsMemory(),
+                slab);
         }
         catch
         {

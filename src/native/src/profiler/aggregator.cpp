@@ -674,7 +674,7 @@ bool Aggregator::dump(const std::string& path) noexcept {
 }
 
 bool Aggregator::writeSlab(const std::string& path, storage::ProvenanceWriter& pw) {
-    storage::ContainerWriter cw;
+    storage::ContainerWriter cw(storage::SlabKind::Profile, storage::kProfileVersion);
     pw.writeTo(cw);
     const std::string temp =
         path + ".tmp-" + std::to_string(instanceId_) + "-" +

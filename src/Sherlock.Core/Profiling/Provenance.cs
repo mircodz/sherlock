@@ -27,10 +27,12 @@ public struct CorrelationRecord
     public uint Reserved;
 }
 
-/// <summary>Version constant for the profile/correlation record sections (mirrors native <c>kProfileVersion</c>).</summary>
+/// <summary>The profile kind's version, covering every section (mirrors native <c>kProfileVersion</c>).</summary>
 public static class ProfileFormat
 {
-    public const ushort Version = 3;
+    public const uint Version = 1;
+
+    public static SlabFile Open(string path) => SlabFile.Open(path, SlabKind.Profile, Version);
 }
 
 /// <summary>
@@ -76,13 +78,13 @@ public sealed class ProvenanceWriter
         _symbols.WriteTo(w);
         if (_allocs.Count > 0)
         {
-            w.AddRecords(SectionType.Allocations, ProfileFormat.Version, CollectionsMarshal.AsSpan(_allocs));
+            w.AddRecords(SectionType.Allocations, CollectionsMarshal.AsSpan(_allocs));
         }
         if (_corr.Count > 0)
         {
-            // Binary search requires address order; chunking matches the native writer.
+            // Readers binary-search by address.
             _corr.Sort(static (a, b) => a.Address.CompareTo(b.Address));
-            w.AddChunkedRecords(SectionType.Correlation, ProfileFormat.Version, CollectionsMarshal.AsSpan(_corr));
+            w.AddRecords(SectionType.Correlation, CollectionsMarshal.AsSpan(_corr));
         }
     }
 }
@@ -101,13 +103,6 @@ public sealed class ProvenanceReader
     public ProvenanceReader(SlabFile slab)
     {
         Symbols = SymbolTable.Read(slab);
-        foreach (SectionType section in new[] { SectionType.Allocations, SectionType.Correlation })
-        {
-            if (slab.Has(section) && slab.SectionVersion(section) != ProfileFormat.Version)
-            {
-                throw new InvalidDataException($"The profile's {section} section has unsupported version {slab.SectionVersion(section)}.");
-            }
-        }
         Allocations = slab.GetColumn<AllocationRecord>(SectionType.Allocations);
         _corr = slab.GetColumn<CorrelationRecord>(SectionType.Correlation);
 
@@ -151,7 +146,7 @@ public sealed class ProvenanceReader
 
     public static void ValidateFile(string path)
     {
-        using SlabFile slab = SlabFile.Open(path);
+        using SlabFile slab = ProfileFormat.Open(path);
         _ = new ProvenanceReader(slab);
     }
 

@@ -98,7 +98,7 @@ public static class AllocationProfileReader
 {
     public static AllocationProfile Read(string path)
     {
-        using SlabFile slab = SlabFile.Open(path);
+        using SlabFile slab = ProfileFormat.Open(path);
         return From(new ProvenanceReader(slab));
     }
 

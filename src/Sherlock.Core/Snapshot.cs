@@ -205,7 +205,7 @@ public sealed class Snapshot : IDisposable
         SlabFile? slab = null;
         try
         {
-            slab = SlabFile.Open(path);
+            slab = ProfileFormat.Open(path);
             _provenance = new ProvenanceReader(slab);
             _slab = slab;
             return _provenance;
