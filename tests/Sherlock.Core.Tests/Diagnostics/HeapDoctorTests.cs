@@ -184,7 +184,7 @@ public sealed class HeapDoctorTests
             retained[0] += objects[i].Bytes;
             rpoOf[address[rpo]] = rpo;
         }
-        return new DominatorTree(null!, address, ownSize, retained, new int[address.Length], rpoOf,
+        return new DominatorTree(address, ownSize, retained, new int[address.Length], rpoOf,
             addr => objects[rpoOf[addr] - 1].Type);
     }
 }

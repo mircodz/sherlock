@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Microsoft.Diagnostics.Runtime;
 using Sherlock.Core.HeapModel;
@@ -72,6 +73,43 @@ public sealed class HeapGraphStoreTests : IDisposable
     }
 
     [Fact]
+    public void RecordsHaveNoPadding()
+    {
+        Assert.Equal(16, Unsafe.SizeOf<HeapRootRecord>());
+        Assert.Equal(16, Unsafe.SizeOf<LargeSize>());
+        Assert.Equal(48, Unsafe.SizeOf<GraphMeta>());
+    }
+
+    [Fact]
+    public void ObjectsOfFourGigabytesOrMoreKeepTheirSize()
+    {
+        const ulong large = 6UL << 30;
+        ulong[] addresses = [0x1000, 0x2000];
+        uint[] sizes = [24, uint.MaxValue];
+        long[] offsets = [0, 0, 0, 0];
+        var graph = new HeapGraph(Guid.NewGuid(), addresses, sizes, new LargeSize[] { new(1, large) }, offsets,
+            new EdgeColumn(Array.Empty<int>()), new[] { 0, 1 }, ["App.Small", "System.Int64[]"], 0, 0, Array.Empty<HeapRootRecord>());
+
+        HeapGraphStore.Save(_path, graph);
+        using HeapGraph loaded = HeapGraphStore.Load(_path)!;
+
+        Assert.Equal(24UL, loaded.SizeOf(0));
+        Assert.Equal(large, loaded.SizeOf(1));
+        Assert.Equal(large, Array.Find(loaded.Histogram(), h => h.TypeName == "System.Int64[]").TotalSize);
+        InstanceListing listing = loaded.ListInstances(".", 1);
+        Assert.Equal(large, Assert.Single(listing.Instances).Size);
+        Assert.Equal(large + 24, listing.TotalMatchedSize);
+    }
+
+    [Fact]
+    public void RejectsALargeObjectTheSizeColumnDoesNotMark()
+    {
+        Assert.Throws<ArgumentException>(() => new HeapGraph(Guid.NewGuid(), new ulong[] { 0x1000 }, new uint[] { 24 },
+            new LargeSize[] { new(0, 6UL << 30) }, new long[] { 0, 0, 0 }, new EdgeColumn(Array.Empty<int>()), new[] { 0 },
+            ["App.Small"], 0, 0, Array.Empty<HeapRootRecord>()));
+    }
+
+    [Fact]
     public void RoundTripsEveryRootRecord()
     {
         HeapGraph graph = SampleGraph();
@@ -80,8 +118,8 @@ public sealed class HeapGraphStoreTests : IDisposable
             new(0, 0xabc, ClrRootKind.Stack, true, false),
             new(0, 0xdef, ClrRootKind.PinnedHandle, false, true),
         ];
-        var original = new HeapGraph(graph.Addresses, graph.Sizes, graph.Offsets, graph.Edges,
-            null, null, 0, 0, roots);
+        var original = new HeapGraph(Guid.NewGuid(), graph.Addresses, graph.Sizes, default, graph.Offsets, graph.Edges,
+            graph.TypeIds, graph.TypeNames, 0, 0, roots);
 
         HeapGraphStore.Save(_path, original);
         using HeapGraph loaded = HeapGraphStore.Load(_path)!;
@@ -184,9 +222,7 @@ public sealed class HeapGraphStoreTests : IDisposable
         HeapGraphStore.Save(_path, SampleGraphWithTypes());
         HeapGraph loaded = HeapGraphStore.Load(_path)!;
 
-        Assert.True(loaded.HasTypes);
-        Assert.Equal([0, 1, 1, 2], loaded.TypeIds!.Value.ToArray());
-        Assert.NotNull(loaded.TypeNames);
+        Assert.Equal([0, 1, 1, 2], loaded.TypeIds.ToArray());
         Assert.Equal(["System.String", "MyApp.Node", "System.Byte[]"], loaded.TypeNames);
         Assert.Equal("System.String", loaded.TypeNameOf(0));
         Assert.Equal("MyApp.Node", loaded.TypeNameOf(1));
@@ -194,34 +230,29 @@ public sealed class HeapGraphStoreTests : IDisposable
     }
 
     [Fact]
-    public void GraphWithoutTypes_LoadsWithoutTypes()
+    public void GraphBuiltWithoutTypesHasOneUnknownType()
     {
-        // Missing type columns require the ClrMD fallback.
         HeapGraphStore.Save(_path, SampleGraph());
         HeapGraph loaded = HeapGraphStore.Load(_path)!;
 
-        Assert.False(loaded.HasTypes);
-        Assert.Null(loaded.TypeIds);
-        Assert.Null(loaded.TypeNameOf(0));
+        Assert.Equal(["<unknown>"], loaded.TypeNames);
+        Assert.Equal("<unknown>", loaded.TypeNameOf(3));
     }
 
     [Fact]
     public void Histogram_FromTypeColumn_IsCorrect()
     {
         HeapGraph g = SampleGraphWithTypes();
-        var hist = g.Histogram();
-
-        Assert.NotNull(hist);
-        var byName = System.Linq.Enumerable.ToDictionary(hist!, h => h.TypeName);
+        var byName = System.Linq.Enumerable.ToDictionary(g.Histogram(), h => h.TypeName);
         Assert.Equal((1L, 16u), (byName["System.String"].Count, byName["System.String"].TotalSize));
         Assert.Equal((2L, 48u), (byName["MyApp.Node"].Count, byName["MyApp.Node"].TotalSize)); // 24+24
         Assert.Equal((1L, 48u), (byName["System.Byte[]"].Count, byName["System.Byte[]"].TotalSize));
     }
 
     [Fact]
-    public void Histogram_NullWithoutTypes()
+    public void Histogram_CountsUntypedObjectsAsUnknown()
     {
-        Assert.Null(SampleGraph().Histogram());
+        Assert.Equal(("<unknown>", 4L, 112UL), Assert.Single(SampleGraph().Histogram()));
     }
 
     [Fact]
@@ -240,7 +271,7 @@ public sealed class HeapGraphStoreTests : IDisposable
         Assert.Equal(4096u, loaded.FreeBytes);
         Assert.Equal(7L, loaded.FreeCount);
 
-        var free = System.Array.Find(loaded.Histogram()!, h => h.TypeName == "Free");
+        var free = System.Array.Find(loaded.Histogram(), h => h.TypeName == "Free");
         Assert.Equal(7L, free.Count);
         Assert.Equal(4096u, free.TotalSize);
     }

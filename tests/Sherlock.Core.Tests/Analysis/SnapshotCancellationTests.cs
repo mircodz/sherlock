@@ -31,7 +31,7 @@ public sealed class SnapshotCancellationTests
     [Fact]
     public void CachedAnalysisRejectsCancellationAndPreservesCachedResults()
     {
-        var dominators = new DominatorTree(null!, [0], [0], [0], [0], []);
+        var dominators = new DominatorTree([0], [0], [0], [0], [], _ => "");
         ExceptionInfo[] exceptions = [new(0x1000, "App.Error", "message", 0, null)];
         var finalizers = new FinalizerReport(0, 0, []);
         Finding[] diagnosis = [new(FindingSeverity.Info, "growth", "title", "detail")];

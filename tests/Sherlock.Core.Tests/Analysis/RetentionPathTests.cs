@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.Diagnostics.Runtime;
@@ -40,8 +41,8 @@ public sealed class RetentionPathTests
         DominatorAnalyzer.DominatorResult r = DominatorAnalyzer.Compute(g);
         var rpoOf = new Dictionary<ulong, int>(r.Address.Length);
         for (int rpo = 1; rpo < r.Address.Length; rpo++) rpoOf[r.Address[rpo]] = rpo;
-        string Resolve(ulong addr) { int id = g.IndexOf(addr); return id >= 0 ? g.TypeNameOf(id) ?? "?" : "?"; }
-        return new DominatorTree(null!, r.Address, r.Own, r.Retained, r.Idom, rpoOf, Resolve);
+        string Resolve(ulong addr) { int id = g.IndexOf(addr); return id >= 0 ? g.TypeNameOf(id) : "?"; }
+        return new DominatorTree(r.Address, r.Own, r.Retained, r.Idom, rpoOf, Resolve);
     }
 
     private static string[] PathTypes(DominatorTree t, HeapGraph g, int obj) =>
@@ -103,7 +104,7 @@ public sealed class RetentionPathTests
     {
         HeapGraph graph = Build([10, 10], roots: [0], (0, 1));
         HeapRootRecord[] roots = [new(0, 0x1234, ClrRootKind.PinnedHandle, true, true)];
-        var withMetadata = new HeapGraph(graph.Addresses, graph.Sizes, graph.Offsets, graph.Edges,
+        var withMetadata = new HeapGraph(Guid.NewGuid(), graph.Addresses, graph.Sizes, default, graph.Offsets, graph.Edges,
             graph.TypeIds, graph.TypeNames, 0, 0, roots);
         GcRootInfo root = Assert.Single(RootAnalyzer.Find(withMetadata, graph.Addresses.Span[1])).Root;
 

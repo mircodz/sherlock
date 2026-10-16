@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Microsoft.Diagnostics.Runtime;
 
 namespace Sherlock.Core.Analysis;
 
@@ -12,18 +11,16 @@ namespace Sherlock.Core.Analysis;
 /// </summary>
 public sealed class DominatorTree
 {
-    private readonly ClrHeap _heap;
-    private readonly Func<ulong, string>? _typeNameByAddress;
+    private readonly Func<ulong, string> _typeNameByAddress;
     private readonly ulong[] _address;              // RPO -> object address (0 for synthetic root)
     private readonly ulong[] _ownSize;              // RPO -> shallow size
     private readonly ulong[] _retained;             // RPO -> retained size
     private readonly int[] _idom;                   // RPO -> immediate dominator (RPO)
     private readonly Dictionary<ulong, int> _rpoOf; // address -> RPO (excludes synthetic root)
 
-    internal DominatorTree(ClrHeap heap, ulong[] address, ulong[] ownSize, ulong[] retained, int[] idom,
-        Dictionary<ulong, int> rpoOf, Func<ulong, string>? typeNameByAddress = null)
+    internal DominatorTree(ulong[] address, ulong[] ownSize, ulong[] retained, int[] idom,
+        Dictionary<ulong, int> rpoOf, Func<ulong, string> typeNameByAddress)
     {
-        _heap = heap;
         _typeNameByAddress = typeNameByAddress;
         _address = address;
         _ownSize = ownSize;
@@ -137,7 +134,7 @@ public sealed class DominatorTree
     }
 
     private string TypeNameAt(int rpo) =>
-        _typeNameByAddress?.Invoke(_address[rpo]) ?? _heap.GetObject(_address[rpo]).Type?.Name ?? "<unknown>";
+        _typeNameByAddress(_address[rpo]);
 }
 
 /// <summary>

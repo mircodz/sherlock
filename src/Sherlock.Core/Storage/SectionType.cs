@@ -17,18 +17,18 @@ public enum SectionType : uint
     ObjectStacks = 9,
 
     // Graph: dense object ids in address order; the node after the last object is the synthetic root, whose
-    // successors are the rooted objects. GraphRoots keeps every root's CLR metadata.
-    GraphMeta = 16,      // ulong[4]: free bytes, free count, source dump length, source dump mtime
-    GraphAddresses = 17, // ulong per object, sorted
-    GraphSizes = 18,     // uint per object
-    GraphTypeIds = 19,   // int per object, indexing GraphTypeNames
-    GraphTypeNames = 20, // [u32 count][(u32 length, utf8) x count]
-    GraphOffsets = 21,   // long per object, then the root's, then the total: each one's first edge
-    GraphEdges = 22,     // int per reference
-    GraphRoots = 23,     // HeapRootRecord per CLR root
+    // successors are the rooted objects. Type names are Strings and Types, as in a profile.
+    GraphMeta = 16,       // GraphMeta: graph id, free space, and the source dump's length and mtime
+    GraphAddresses = 17,  // ulong per object, sorted
+    GraphSizes = 18,      // uint per object; uint.MaxValue marks one in GraphLargeSizes
+    GraphLargeSizes = 19, // LargeSize per object of 4 GiB or more, by id
+    GraphTypeIds = 20,    // int per object, indexing Types
+    GraphOffsets = 21,    // long per object, then the root's, then the total: each one's first edge
+    GraphEdges = 22,      // int per reference
+    GraphRoots = 23,      // HeapRootRecord per CLR root
 
     // Dominators, in reverse postorder with the synthetic root first.
-    DomMeta = 32,      // ulong[1]: the graph's ContentHash
+    DomMeta = 32,      // Guid: the id of the graph the tree was computed from
     DomNodeByRpo = 33, // int: object id
     DomRetained = 34,  // ulong: retained bytes
     DomIdom = 35,      // int: immediate dominator

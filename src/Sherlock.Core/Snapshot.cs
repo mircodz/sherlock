@@ -220,11 +220,12 @@ public sealed class Snapshot : IDisposable
 
     private IReadOnlyList<HeapTypeStat> BuildHistogram(CancellationToken cancellationToken)
     {
-        if (TryGetCachedHeapGraph(cancellationToken) is not { } graph || graph.Histogram() is not { } rows)
+        if (TryGetCachedHeapGraph(cancellationToken) is not { } graph)
         {
             return new HeapAnalyzer(this).GetStatistics(cancellationToken);
         }
 
+        var rows = graph.Histogram();
         var stats = new List<HeapTypeStat>(rows.Length);
         foreach ((string typeName, long count, ulong totalSize) in rows)
         {

@@ -64,7 +64,7 @@ internal static class RootAnalyzer
         var path = new List<GcRootNode>(steps[start]);
         for (int node = start; ; )
         {
-            path.Add(new GcRootNode(graph.Addresses.Span[node], graph.TypeNameOf(node) ?? "<unknown>"));
+            path.Add(new GcRootNode(graph.Addresses.Span[node], graph.TypeNameOf(node)));
             if (steps[node] == 1)
             {
                 return path; // the target

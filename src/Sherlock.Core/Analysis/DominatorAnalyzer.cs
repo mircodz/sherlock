@@ -23,11 +23,8 @@ public sealed class DominatorAnalyzer(Snapshot snapshot)
         for (int rpo = 1; rpo < r.Address.Length; rpo++)
             rpoOf[r.Address[rpo]] = rpo;
 
-        Func<ulong, string>? typeNames = graph.HasTypes
-            ? address => { int id = graph.IndexOf(address); return id >= 0 ? graph.TypeNameOf(id) ?? "<unknown>" : "<unknown>"; }
-        : null;
-
-        return new DominatorTree(snapshot.Runtime.Heap, r.Address, r.Own, r.Retained, r.Idom, rpoOf, typeNames);
+        return new DominatorTree(r.Address, r.Own, r.Retained, r.Idom, rpoOf,
+            address => graph.IndexOf(address) is var id and >= 0 ? graph.TypeNameOf(id) : "<unknown>");
     }
 
     public static string SidecarPath(string dumpPath) => System.IO.Path.GetFileName(dumpPath) == "heap.dmp" ? System.IO.Path.Combine(System.IO.Path.GetDirectoryName(dumpPath)!, "dominators.slab") : dumpPath + ".dominators.slab";
@@ -53,7 +50,7 @@ public sealed class DominatorAnalyzer(Snapshot snapshot)
         DominatorResult r = Compute(graph, cancellationToken);
         try
         {
-            DominatorTreeStore.Save(path, r, graph.ContentHash);
+            DominatorTreeStore.Save(path, r, graph.Id);
         }
         catch
         {
@@ -154,7 +151,7 @@ public sealed class DominatorAnalyzer(Snapshot snapshot)
             if (node != root)
             {
                 address[rpo] = gAddr[node];
-                own[rpo] = gSize[node];
+                own[rpo] = gSize[node] != uint.MaxValue ? gSize[node] : graph.SizeOf(node);
             }
         }
 

@@ -31,7 +31,7 @@ public sealed class DominatorTreeStoreTests : IDisposable
         HeapGraph g = DiamondGraph();
         DominatorAnalyzer.DominatorResult computed = DominatorAnalyzer.Compute(g);
 
-        DominatorTreeStore.Save(_path, computed, g.ContentHash);
+        DominatorTreeStore.Save(_path, computed, g.Id);
         DominatorAnalyzer.DominatorResult? loaded = DominatorTreeStore.Load(_path, g);
 
         Assert.NotNull(loaded);
@@ -43,24 +43,23 @@ public sealed class DominatorTreeStoreTests : IDisposable
     }
 
     [Fact]
-    public void Load_RejectsMismatchedGraphHash()
+    public void Load_RejectsATreeOfAnotherGraph()
     {
         HeapGraph g = DiamondGraph();
-        DominatorTreeStore.Save(_path, DominatorAnalyzer.Compute(g), g.ContentHash ^ 0xDEADBEEF);
+        DominatorTreeStore.Save(_path, DominatorAnalyzer.Compute(g), DiamondGraph().Id);
 
         Assert.Null(DominatorTreeStore.Load(_path, g));
     }
 
     [Fact]
-    public void ContentHash_IsStableAndStructureSensitive()
+    public void AGraphKeepsItsIdWhenSavedAndLoaded()
     {
-        Assert.Equal(DiamondGraph().ContentHash, DiamondGraph().ContentHash);
+        HeapGraph g = DiamondGraph();
+        string graphPath = _path + ".graph";
+        HeapGraphStore.Save(graphPath, g);
+        using HeapGraph loaded = HeapGraphStore.Load(graphPath)!;
 
-        ulong[] addresses = [0x1000, 0x2000, 0x3000, 0x4000];
-        uint[] sizes = [10, 20, 30, 40];
-        int[] offsets = [0, 2, 3, 4, 4, 5];
-        int[] changed = [1, 2, 3, 2, 0]; // C->C instead of C->D
-        var altered = new HeapGraph(addresses, sizes, offsets, changed);
-        Assert.NotEqual(DiamondGraph().ContentHash, altered.ContentHash);
+        Assert.Equal(g.Id, loaded.Id);
+        Assert.NotEqual(g.Id, DiamondGraph().Id);
     }
 }

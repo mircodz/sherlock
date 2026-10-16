@@ -62,11 +62,16 @@ public sealed class HeapGraphProvider(Snapshot snapshot) : IDisposable
         }
     }
 
+    // Reads the saved graph back, so the extracted arrays can be released and pages load as they're used.
     private HeapGraph Extract(string path, CancellationToken cancellationToken)
     {
         HeapGraph graph = new HeapGraphExtractor(snapshot).Extract(cancellationToken);
-        TrySave(path, graph);
-        return graph;
+        if (!TrySave(path, graph) || TryLoad(path) is not { } saved)
+        {
+            return graph;
+        }
+        graph.Dispose();
+        return saved;
     }
 
     private HeapGraph? TryLoad(string path)
@@ -85,15 +90,17 @@ public sealed class HeapGraphProvider(Snapshot snapshot) : IDisposable
         }
     }
 
-    private void TrySave(string path, HeapGraph graph)
+    private bool TrySave(string path, HeapGraph graph)
     {
         try
         {
             HeapGraphStore.Save(path, graph, snapshot.DumpPath);
+            return true;
         }
         catch
         {
             // The in-memory graph remains valid when persistence is unavailable.
+            return false;
         }
     }
 

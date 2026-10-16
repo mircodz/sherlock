@@ -69,17 +69,6 @@ public sealed class EdgeColumnTests
     }
 
     [Fact]
-    public void Sample_VisitsAcrossChunks()
-    {
-        (EdgeColumn col, _) = Build(100, 100, 100);
-        var seen = new System.Collections.Generic.List<int>();
-        col.Sample(30, v => seen.Add(v));
-        Assert.NotEmpty(seen);
-        // Strided sampling must reach into later chunks, not just the first.
-        Assert.Contains(seen, v => v >= 200);
-    }
-
-    [Fact]
     public void RejectsMismatchedStartsLength()
     {
         var chunks = new[] { new ReadOnlyMemory<int>([1, 2]), new ReadOnlyMemory<int>([3]) };

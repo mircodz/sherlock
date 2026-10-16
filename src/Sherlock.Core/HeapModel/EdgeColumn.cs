@@ -177,19 +177,4 @@ public sealed class EdgeColumn
         }
         return lo;
     }
-
-    /// <summary>Samples values across the whole column.</summary>
-    public void Sample(int approxPoints, Action<int> mix)
-    {
-        long total = Count;
-        if (total == 0)
-        {
-            return;
-        }
-        long step = Math.Max(1, total / Math.Max(1, approxPoints));
-        for (long pos = 0; pos < total; pos += step)
-        {
-            mix(Slice(pos, 1)[0]);
-        }
-    }
 }

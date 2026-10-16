@@ -8,12 +8,12 @@ namespace Sherlock.Core.Analysis;
 /// <summary>Persists the columns derived by dominator analysis.</summary>
 public static class DominatorTreeStore
 {
-    private const uint Version = 2;
+    private const uint Version = 3;
 
-    public static void Save(string path, DominatorAnalyzer.DominatorResult result, ulong graphContentHash)
+    public static void Save(string path, DominatorAnalyzer.DominatorResult result, Guid graphId)
     {
         var writer = new ContainerWriter(SlabKind.Dominators, Version);
-        writer.AddRecords<ulong>(SectionType.DomMeta, [graphContentHash]);
+        writer.AddRecords(SectionType.DomMeta, [graphId]);
         writer.AddMemory<int>(SectionType.DomNodeByRpo, result.NodeByRpo);
         writer.AddMemory<ulong>(SectionType.DomRetained, result.Retained);
         writer.AddMemory<int>(SectionType.DomIdom, result.Idom);
@@ -25,8 +25,8 @@ public static class DominatorTreeStore
     public static DominatorAnalyzer.DominatorResult? Load(string path, HeapGraph graph)
     {
         using SlabFile slab = SlabFile.Open(path, SlabKind.Dominators, Version);
-        Column<ulong> meta = slab.GetColumn<ulong>(SectionType.DomMeta);
-        if (meta.Length < 1 || meta[0] != graph.ContentHash)
+        Column<Guid> meta = slab.GetColumn<Guid>(SectionType.DomMeta);
+        if (meta.Length != 1 || meta[0] != graph.Id)
         {
             return null;
         }
@@ -42,7 +42,6 @@ public static class DominatorTreeStore
         }
         int root = graph.Root;
         ReadOnlySpan<ulong> gAddr = graph.Addresses.Span;
-        ReadOnlySpan<uint> gSize = graph.Sizes.Span;
         var address = new ulong[m];
         var own = new ulong[m];
         for (int rpo = 0; rpo < m; rpo++)
@@ -51,7 +50,7 @@ public static class DominatorTreeStore
             if (node != root && node >= 0)
             {
                 address[rpo] = gAddr[node];
-                own[rpo] = gSize[node];
+                own[rpo] = graph.SizeOf(node);
             }
         }
 

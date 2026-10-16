@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading;
 
 namespace Sherlock.Core.HeapModel;
@@ -7,25 +8,31 @@ namespace Sherlock.Core.HeapModel;
 /// <summary>A dense-id managed object graph with CSR reference edges.</summary>
 public sealed class HeapGraph : IDisposable
 {
+    /// <summary>Identifies this graph. Results derived from it record the id, so they're never applied to another
+    /// graph of the same dump.</summary>
+    public Guid Id { get; }
+
     /// <summary>Ascending object addresses; the index is the object id.</summary>
     public ReadOnlyMemory<ulong> Addresses { get; }
 
-    /// <summary>Shallow size per object id.</summary>
+    /// <summary>Shallow size per object id; <see cref="uint.MaxValue"/> marks an object of 4 GiB or more, whose
+    /// size <see cref="SizeOf"/> reads from a separate table.</summary>
     public ReadOnlyMemory<uint> Sizes { get; }
+
+    /// <summary>Objects of 4 GiB or more, by ascending id.</summary>
+    internal ReadOnlyMemory<LargeSize> LargeSizes { get; }
 
     /// <summary>CSR row offsets, including the synthetic root row and terminator.</summary>
     public ReadOnlyMemory<long> Offsets { get; }
 
-    /// <summary>Chunked CSR successor ids.</summary>
+    /// <summary>CSR successor ids.</summary>
     public EdgeColumn Edges { get; }
 
-    /// <summary>Per-object index into <see cref="TypeNames"/>, when available.</summary>
-    public ReadOnlyMemory<int>? TypeIds { get; }
+    /// <summary>Per-object index into <see cref="TypeNames"/>.</summary>
+    public ReadOnlyMemory<int> TypeIds { get; }
 
     /// <summary>Distinct type names, indexed by <see cref="TypeIds"/>.</summary>
-    public string[]? TypeNames { get; }
-
-    public bool HasTypes => TypeIds is not null;
+    public string[] TypeNames { get; }
 
     /// <summary>Free-space bytes excluded from the object graph.</summary>
     public ulong FreeBytes { get; }
@@ -42,32 +49,47 @@ public sealed class HeapGraph : IDisposable
     private readonly Once<Predecessors> _predecessors = new();
     private bool _disposed;
 
+    /// <summary>Creates an in-memory graph whose roots are the synthetic root's successors. Without type columns,
+    /// every object is of one unknown type.</summary>
     public HeapGraph(ReadOnlyMemory<ulong> addresses, ReadOnlyMemory<uint> sizes, ReadOnlyMemory<long> offsets, EdgeColumn edges,
-        ReadOnlyMemory<int>? typeIds = null, string[]? typeNames = null, ulong freeBytes = 0, long freeCount = 0,
-        IDisposable? backing = null)
-        : this(addresses, sizes, offsets, edges, typeIds, typeNames, freeBytes, freeCount, InferRoots(offsets, edges), backing)
+        ReadOnlyMemory<int>? typeIds = null, string[]? typeNames = null, ulong freeBytes = 0, long freeCount = 0)
+        : this(Guid.NewGuid(), addresses, sizes, default, offsets, edges, TypeIdsOrDefault(typeIds, typeNames, addresses.Length),
+            typeNames ?? ["<unknown>"], freeBytes, freeCount, InferRoots(offsets, edges))
     {
     }
 
-    internal HeapGraph(ReadOnlyMemory<ulong> addresses, ReadOnlyMemory<uint> sizes, ReadOnlyMemory<long> offsets, EdgeColumn edges,
-        ReadOnlyMemory<int>? typeIds, string[]? typeNames, ulong freeBytes, long freeCount,
+    private static ReadOnlyMemory<int> TypeIdsOrDefault(ReadOnlyMemory<int>? typeIds, string[]? typeNames, int objectCount) =>
+        (typeIds is null) != (typeNames is null)
+            ? throw new ArgumentException("typeIds and typeNames must both be present or both absent.")
+            : typeIds ?? new int[objectCount];
+
+    /// <summary>Creates a single-chunk in-memory graph.</summary>
+    public HeapGraph(ReadOnlyMemory<ulong> addresses, ReadOnlyMemory<uint> sizes, int[] offsets, int[] edges,
+        ReadOnlyMemory<int>? typeIds = null, string[]? typeNames = null, ulong freeBytes = 0, long freeCount = 0)
+        : this(addresses, sizes, WidenOffsets(offsets), new EdgeColumn(edges), typeIds, typeNames, freeBytes, freeCount)
+    {
+    }
+
+    internal HeapGraph(Guid id, ReadOnlyMemory<ulong> addresses, ReadOnlyMemory<uint> sizes, ReadOnlyMemory<LargeSize> largeSizes,
+        ReadOnlyMemory<long> offsets, EdgeColumn edges, ReadOnlyMemory<int> typeIds, string[] typeNames, ulong freeBytes, long freeCount,
         ReadOnlyMemory<HeapRootRecord> roots, IDisposable? backing = null)
     {
         if (offsets.Length != addresses.Length + 2)
         {
             throw new ArgumentException($"offsets length {offsets.Length} must be object count {addresses.Length} + 2 (incl. synthetic root).");
         }
-        if ((typeIds is null) != (typeNames is null))
+        if (sizes.Length != addresses.Length || typeIds.Length != addresses.Length)
         {
-            throw new ArgumentException("typeIds and typeNames must both be present or both absent.");
+            throw new ArgumentException($"sizes ({sizes.Length}) and type ids ({typeIds.Length}) must have one entry per object ({addresses.Length}).");
         }
-        if (typeIds is not null && typeIds.Value.Length != addresses.Length)
+        int previous = -1;
+        foreach (LargeSize large in largeSizes.Span)
         {
-            throw new ArgumentException($"typeIds length {typeIds.Value.Length} must equal object count {addresses.Length}.");
-        }
-        if (sizes.Length != addresses.Length)
-        {
-            throw new ArgumentException($"sizes length {sizes.Length} must equal object count {addresses.Length}.");
+            if (large.Id <= previous || large.Id >= addresses.Length || sizes.Span[large.Id] != uint.MaxValue)
+            {
+                throw new ArgumentException($"large object {large.Id} is out of order, outside the graph, or not marked in the size column.");
+            }
+            previous = large.Id;
         }
         foreach (HeapRootRecord root in roots.Span)
         {
@@ -76,8 +98,10 @@ public sealed class HeapGraph : IDisposable
                 throw new ArgumentException($"root object id {root.ObjectId} is outside the graph.");
             }
         }
+        Id = id;
         Addresses = addresses;
         Sizes = sizes;
+        LargeSizes = largeSizes;
         Offsets = offsets;
         Edges = edges;
         TypeIds = typeIds;
@@ -86,13 +110,6 @@ public sealed class HeapGraph : IDisposable
         FreeCount = freeCount;
         Roots = roots;
         _backing = backing;
-    }
-
-    /// <summary>Creates a single-chunk in-memory graph.</summary>
-    public HeapGraph(ReadOnlyMemory<ulong> addresses, ReadOnlyMemory<uint> sizes, int[] offsets, int[] edges,
-        ReadOnlyMemory<int>? typeIds = null, string[]? typeNames = null, ulong freeBytes = 0, long freeCount = 0)
-        : this(addresses, sizes, WidenOffsets(offsets), new EdgeColumn(edges), typeIds, typeNames, freeBytes, freeCount)
-    {
     }
 
     private static long[] WidenOffsets(int[] offsets)
@@ -160,102 +177,79 @@ public sealed class HeapGraph : IDisposable
         return _predecessors.Get(() => Predecessors.Build(this, cancellationToken), cancellationToken);
     }
 
-    /// <summary>Returns an object's type name when stored in the graph.</summary>
-    public string? TypeNameOf(int objectId)
+    public string TypeNameOf(int objectId)
     {
         ThrowIfDisposed();
-        return TypeIds is { } ids && TypeNames is { } names ? names[ids.Span[objectId]] : null;
+        return TypeNames[TypeIds.Span[objectId]];
     }
 
-    private ulong _contentHash;
-    private bool _hashed;
-
-    /// <summary>Deterministic sampled fingerprint for derived-cache invalidation.</summary>
-    public ulong ContentHash
-    {
-        get
-        {
-            ThrowIfDisposed();
-            if (Volatile.Read(ref _hashed))
-            {
-                return _contentHash;
-            }
-
-            const ulong prime = 1099511628211UL;
-            ulong h = 1469598103934665603UL;
-
-            void Mix(ulong v) { for (int i = 0; i < 8; i++) { h ^= (byte)(v >> (i * 8)); h *= prime; } }
-
-            ReadOnlySpan<ulong> addr = Addresses.Span;
-            Mix((ulong)addr.Length);
-            Mix((ulong)Edges.Count);
-            Mix((ulong)Offsets.Length);
-            Mix(FreeBytes);
-            Mix((ulong)Roots.Length);
-            if (addr.Length > 0) { Mix(addr[0]); Mix(addr[^1]); }
-
-            int step = Math.Max(1, addr.Length / 4096);
-            for (int i = 0; i < addr.Length; i += step) Mix(addr[i]);
-            Edges.Sample(4096, v => Mix((uint)v));
-            foreach (HeapRootRecord root in Roots.Span)
-            {
-                Mix((uint)root.ObjectId);
-                Mix(root.Address);
-                Mix((uint)root.Kind);
-                Mix(root.IsInterior ? 1u : 0u);
-                Mix(root.IsPinned ? 1u : 0u);
-            }
-
-            // Concurrent first readers compute the same value; publishing the flag last makes the hash visible with it.
-            _contentHash = h;
-            Volatile.Write(ref _hashed, true);
-            return h;
-        }
-    }
-
-    /// <summary>Builds a type histogram without ClrMD when type columns are present.</summary>
-    public (string TypeName, long Count, ulong TotalSize)[]? Histogram()
+    /// <summary>An object's shallow size.</summary>
+    public ulong SizeOf(int objectId)
     {
         ThrowIfDisposed();
-        if (TypeIds is not { } idsMem || TypeNames is not { } names)
+        uint size = Sizes.Span[objectId];
+        return size != uint.MaxValue ? size : LargeSizeOf(objectId);
+    }
+
+    private ulong LargeSizeOf(int objectId)
+    {
+        ReadOnlySpan<LargeSize> large = LargeSizes.Span;
+        int lo = 0, hi = large.Length - 1;
+        while (lo <= hi)
         {
-            return null;
+            int mid = lo + ((hi - lo) >> 1);
+            if (large[mid].Id == objectId)
+            {
+                return large[mid].Size;
+            }
+            if (large[mid].Id < objectId)
+            {
+                lo = mid + 1;
+            }
+            else
+            {
+                hi = mid - 1;
+            }
         }
-        ReadOnlySpan<int> ids = idsMem.Span;
+        throw new InvalidDataException($"Object {objectId} is marked as 4 GiB or larger but has no recorded size.");
+    }
+
+    /// <summary>Counts objects and bytes by type, plus free space.</summary>
+    public (string TypeName, long Count, ulong TotalSize)[] Histogram()
+    {
+        ThrowIfDisposed();
+        ReadOnlySpan<int> ids = TypeIds.Span;
         ReadOnlySpan<uint> sizes = Sizes.Span;
 
-        var counts = new long[names.Length];
-        var bytes = new ulong[names.Length];
+        var counts = new long[TypeNames.Length];
+        var bytes = new ulong[TypeNames.Length];
         for (int i = 0; i < ids.Length; i++)
         {
             int t = ids[i];
             counts[t]++;
-            bytes[t] += sizes[i];
+            bytes[t] += sizes[i] != uint.MaxValue ? sizes[i] : LargeSizeOf(i);
         }
 
-        var result = new (string, long, ulong)[names.Length + (FreeBytes > 0 ? 1 : 0)];
-        for (int t = 0; t < names.Length; t++)
+        var result = new (string, long, ulong)[TypeNames.Length + (FreeBytes > 0 ? 1 : 0)];
+        for (int t = 0; t < TypeNames.Length; t++)
         {
-            result[t] = (names[t], counts[t], bytes[t]);
+            result[t] = (TypeNames[t], counts[t], bytes[t]);
         }
         if (FreeBytes > 0)
         {
-            result[names.Length] = ("Free", FreeCount, FreeBytes);
+            result[TypeNames.Length] = ("Free", FreeCount, FreeBytes);
         }
         return result;
     }
 
-    /// <summary>Lists the largest matching objects without previews, or null when type columns are absent.</summary>
-    public InstanceListing? ListInstances(string typeFilter, int limit = 20, CancellationToken cancellationToken = default, bool exact = false)
+    /// <summary>Lists the largest matching objects without previews.</summary>
+    public InstanceListing ListInstances(string typeFilter, int limit = 20, CancellationToken cancellationToken = default, bool exact = false)
     {
         ThrowIfDisposed();
         ArgumentException.ThrowIfNullOrEmpty(typeFilter);
         ArgumentOutOfRangeException.ThrowIfNegative(limit);
         cancellationToken.ThrowIfCancellationRequested();
-        if (TypeIds is not { } idsMem || TypeNames is not { } names)
-        {
-            return null;
-        }
+        string[] names = TypeNames;
 
         var matches = new bool[names.Length];
         bool anyMatch = false;
@@ -270,9 +264,9 @@ public sealed class HeapGraph : IDisposable
             return new InstanceListing([], 0, 0);
         }
 
-        ReadOnlySpan<int> ids = idsMem.Span;
+        ReadOnlySpan<int> ids = TypeIds.Span;
         ReadOnlySpan<uint> sizes = Sizes.Span;
-        var top = new PriorityQueue<int, uint>();
+        var top = new PriorityQueue<int, ulong>();
         long totalMatched = 0;
         ulong totalSize = 0;
         for (int i = 0; i < ids.Length; i++)
@@ -284,7 +278,7 @@ public sealed class HeapGraph : IDisposable
             }
 
             totalMatched++;
-            uint size = sizes[i];
+            ulong size = sizes[i] != uint.MaxValue ? sizes[i] : LargeSizeOf(i);
             totalSize += size;
             if (limit == 0)
             {
@@ -294,7 +288,7 @@ public sealed class HeapGraph : IDisposable
             {
                 top.Enqueue(i, size);
             }
-            else if (size > sizes[top.Peek()])
+            else if (top.TryPeek(out _, out ulong smallest) && size > smallest)
             {
                 top.EnqueueDequeue(i, size);
             }
@@ -306,7 +300,7 @@ public sealed class HeapGraph : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             int id = top.Dequeue();
-            instances[i] = new ObjectInstance(addresses[id], names[ids[id]], sizes[id], null);
+            instances[i] = new ObjectInstance(addresses[id], names[ids[id]], SizeOf(id), null);
         }
         return new InstanceListing(instances, totalMatched, totalSize);
     }
