@@ -26,7 +26,7 @@ public sealed class HeapGraphProvider(Snapshot snapshot) : IDisposable
             {
                 return cached;
             }
-            string path = SidecarPath(snapshot.DumpPath);
+            string path = CachePath;
             HeapGraph result = TryLoad(path) ?? Extract(path, cancellationToken);
             Volatile.Write(ref _graph, result);
             return result;
@@ -37,7 +37,7 @@ public sealed class HeapGraphProvider(Snapshot snapshot) : IDisposable
         }
     }
 
-    public static string SidecarPath(string dumpPath) => Path.GetFileName(dumpPath) == "heap.dmp" ? Path.Combine(Path.GetDirectoryName(dumpPath)!, "heapgraph.slab") : dumpPath + ".heapgraph.slab";
+    private string CachePath => Path.Combine(snapshot.CacheDirectory, "heapgraph.slab");
 
     /// <summary>Returns an existing graph without extracting one, waiting for a load or extraction in progress.</summary>
     public HeapGraph? TryGetCachedOrOnDisk(CancellationToken cancellationToken = default)
@@ -50,7 +50,7 @@ public sealed class HeapGraphProvider(Snapshot snapshot) : IDisposable
         try
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_graph is null && TryLoad(SidecarPath(snapshot.DumpPath)) is { } loaded)
+            if (_graph is null && TryLoad(CachePath) is { } loaded)
             {
                 Volatile.Write(ref _graph, loaded);
             }
@@ -94,6 +94,7 @@ public sealed class HeapGraphProvider(Snapshot snapshot) : IDisposable
     {
         try
         {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             HeapGraphStore.Save(path, graph, snapshot.DumpPath);
             return true;
         }

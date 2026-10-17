@@ -36,9 +36,10 @@ public sealed class Snapshot : IDisposable
     private readonly Once<IReadOnlyList<Finding>> _diagnosis = new();
     private bool _disposed;
 
-    private Snapshot(string path, DataTarget dataTarget, ClrInfo clrInfo, ClrRuntime runtime, SnapshotEntry? entry)
+    private Snapshot(string path, DataTarget dataTarget, ClrInfo clrInfo, ClrRuntime runtime, SnapshotEntry? entry, string cacheDirectory)
     {
         DumpPath = path;
+        CacheDirectory = cacheDirectory;
         _dataTarget = dataTarget;
         ClrInfo = clrInfo;
         Runtime = runtime;
@@ -47,6 +48,10 @@ public sealed class Snapshot : IDisposable
     }
 
     public string DumpPath { get; }
+
+    /// <summary>Where this dump's analysis caches are kept: its snapshot folder when the store owns it, otherwise a
+    /// folder under the store, never next to someone else's file.</summary>
+    internal string CacheDirectory { get; }
     public ClrRuntime Runtime { get; }
     public bool HasProvenance => _entry?.ProvenancePath is not null;
     public bool HasCorrelation => _entry?.HasCorrelation ?? false;
@@ -54,9 +59,9 @@ public sealed class Snapshot : IDisposable
     internal DataTarget DataTarget => _dataTarget;
     internal ClrInfo ClrInfo { get; }
 
-    public static Snapshot Open(string path) => Open(path, null);
+    public static Snapshot Open(string path) => Open(path, null, SnapshotStore.CacheDirectory(SnapshotStore.DefaultRoot, path));
 
-    internal static Snapshot Open(string path, SnapshotEntry? entry)
+    internal static Snapshot Open(string path, SnapshotEntry? entry, string cacheDirectory)
     {
         if (!File.Exists(path))
         {
@@ -73,7 +78,7 @@ public sealed class Snapshot : IDisposable
                 throw new DumpAnalysisException("No .NET runtime was found in this dump. Sherlock analyzes managed CLR dumps.");
             }
             ClrInfo clrInfo = dataTarget.ClrVersions[0];
-            return new Snapshot(path, dataTarget, clrInfo, clrInfo.CreateRuntime(), entry);
+            return new Snapshot(path, dataTarget, clrInfo, clrInfo.CreateRuntime(), entry, cacheDirectory);
         }
         catch
         {

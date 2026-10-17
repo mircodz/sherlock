@@ -21,9 +21,9 @@ public sealed class HeapGraphProviderTests
         int[] edges = [1, 0];
         using (var graph = new HeapGraph(addresses, sizes, offsets, edges))
         {
-            HeapGraphStore.Save(HeapGraphProvider.SidecarPath(dump), graph, dump);
+            HeapGraphStore.Save(Path.Combine(tmp.Path, "heapgraph.slab"), graph, dump);
         }
-        using var provider = new HeapGraphProvider(SnapshotOf(dump));
+        using var provider = new HeapGraphProvider(SnapshotOf(dump, tmp.Path));
 
         HeapGraph?[] graphs = OnceTests.RunTogether(16, () => provider.TryGetCachedOrOnDisk());
 
@@ -31,12 +31,15 @@ public sealed class HeapGraphProviderTests
         Assert.All(graphs, graph => Assert.Same(graphs[0], graph));
     }
 
-    // Only the dump path: loading a saved graph touches nothing else.
-    private static Snapshot SnapshotOf(string dumpPath)
+    // Only the dump path and cache folder: loading a saved graph touches nothing else.
+    private static Snapshot SnapshotOf(string dumpPath, string cacheDirectory)
     {
         var snapshot = (Snapshot)RuntimeHelpers.GetUninitializedObject(typeof(Snapshot));
-        typeof(Snapshot).GetField($"<{nameof(Snapshot.DumpPath)}>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(snapshot, dumpPath);
+        Set(snapshot, nameof(Snapshot.DumpPath), dumpPath);
+        Set(snapshot, nameof(Snapshot.CacheDirectory), cacheDirectory);
         return snapshot;
     }
+
+    private static void Set(Snapshot snapshot, string property, string value) =>
+        typeof(Snapshot).GetField($"<{property}>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(snapshot, value);
 }

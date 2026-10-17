@@ -14,17 +14,14 @@ public sealed class DominatorAnalyzer(Snapshot snapshot)
     /// and <see cref="Children"/> lists each node's dominated children from <see cref="ChildOffsets"/>, largest
     /// retained size first.
     /// </summary>
-    public readonly record struct DominatorResult(
-        ReadOnlyMemory<int> Idom, ReadOnlyMemory<ulong> Retained, ReadOnlyMemory<long> ChildOffsets, ReadOnlyMemory<int> Children);
+    public readonly record struct DominatorResult(ReadOnlyMemory<int> Idom, ReadOnlyMemory<ulong> Retained, ReadOnlyMemory<long> ChildOffsets, ReadOnlyMemory<int> Children);
 
     public DominatorTree Build(CancellationToken cancellationToken = default)
     {
         HeapGraph graph = snapshot.GetHeapGraph(cancellationToken);
-        string path = SidecarPath(snapshot.DumpPath);
+        string path = System.IO.Path.Combine(snapshot.CacheDirectory, "dominators.slab");
         return TryLoad(path, graph) ?? ComputeAndPersist(graph, path, cancellationToken);
     }
-
-    public static string SidecarPath(string dumpPath) => System.IO.Path.GetFileName(dumpPath) == "heap.dmp" ? System.IO.Path.Combine(System.IO.Path.GetDirectoryName(dumpPath)!, "dominators.slab") : dumpPath + ".dominators.slab";
 
     private static DominatorTree? TryLoad(string path, HeapGraph graph)
     {
@@ -48,6 +45,7 @@ public sealed class DominatorAnalyzer(Snapshot snapshot)
         DominatorResult r = Compute(graph, cancellationToken);
         try
         {
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
             DominatorTreeStore.Save(path, r, graph.Id);
         }
         catch
