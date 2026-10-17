@@ -36,9 +36,9 @@ public sealed class DiffReplCommand : IReplCommand
         (Dictionary<string, HeapTypeStat> baseline, Dictionary<string, HeapTypeStat> target) =
             context.Console.Status().Start("Comparing snapshots…", _ =>
             {
-                using Snapshot a = Snapshot.Open(baseSnap.Path);
-                using Snapshot b = Snapshot.Open(targetSnap.Path);
-                return (Index(a.Histogram), Index(b.Histogram));
+                using Snapshot a = context.Workspace.Store.Open(baseSnap.Id);
+                using Snapshot b = context.Workspace.Store.Open(targetSnap.Id);
+                return (Index(a.GetHistogram(context.Cancellation)), Index(b.GetHistogram(context.Cancellation)));
             });
 
         var rows = new List<(string Type, long DCount, long DBytes, bool IsNew)>();

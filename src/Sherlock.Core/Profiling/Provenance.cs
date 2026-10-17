@@ -18,19 +18,12 @@ public struct AllocationRecord
     public ulong SurvivedCount;
 }
 
-/// <summary>A live object's provenance: address -> allocating stack id. Stored sorted by address. Mirrors native <c>CorrelationRecord</c>.</summary>
-[StructLayout(LayoutKind.Sequential)]
-public struct CorrelationRecord
-{
-    public ulong Address;
-    public uint StackId;
-    public uint Reserved;
-}
-
-/// <summary>Version constant for the profile/correlation record sections (mirrors native <c>kProfileVersion</c>).</summary>
+/// <summary>The profile kind's version, covering every section (mirrors native <c>kProfileVersion</c>).</summary>
 public static class ProfileFormat
 {
-    public const ushort Version = 3;
+    public const uint Version = 2;
+
+    public static SlabFile Open(string path) => SlabFile.Open(path, SlabKind.Profile, Version);
 }
 
 /// <summary>
@@ -41,7 +34,8 @@ public sealed class ProvenanceWriter
 {
     private readonly SymbolWriter _symbols = new();
     private readonly List<AllocationRecord> _allocs = [];
-    private readonly List<CorrelationRecord> _corr = [];
+    private readonly List<ulong> _objectAddresses = [];
+    private readonly List<uint> _objectStacks = [];
 
     public uint InternType(string name) => _symbols.InternType(name);
 
@@ -69,29 +63,36 @@ public sealed class ProvenanceWriter
 
     /// <summary>Records that the live object at <paramref name="address"/> was allocated by <paramref name="stackId"/>.</summary>
     public void AddObject(ulong address, uint stackId)
-        => _corr.Add(new CorrelationRecord { Address = address, StackId = stackId });
+    {
+        _objectAddresses.Add(address);
+        _objectStacks.Add(stackId);
+    }
 
     public void WriteTo(ContainerWriter w)
     {
         _symbols.WriteTo(w);
         if (_allocs.Count > 0)
         {
-            w.AddRecords(SectionType.Allocations, ProfileFormat.Version, CollectionsMarshal.AsSpan(_allocs));
+            w.AddRecords(SectionType.Allocations, CollectionsMarshal.AsSpan(_allocs));
         }
-        if (_corr.Count > 0)
+        if (_objectAddresses.Count > 0)
         {
-            // Binary search requires address order; chunking matches the native writer.
-            _corr.Sort(static (a, b) => a.Address.CompareTo(b.Address));
-            w.AddChunkedRecords(SectionType.Correlation, ProfileFormat.Version, CollectionsMarshal.AsSpan(_corr));
+            // Readers binary-search by address.
+            ulong[] addresses = [.. _objectAddresses];
+            uint[] stacks = [.. _objectStacks];
+            Array.Sort(addresses, stacks);
+            w.AddRecords<ulong>(SectionType.ObjectAddresses, addresses);
+            w.AddRecords<uint>(SectionType.ObjectStacks, stacks);
         }
     }
 }
 
-/// <summary>Allocation and long-indexed correlation columns with their shared symbols.
+/// <summary>Allocation records and live objects' allocating stacks, with their shared symbols.
 /// The supplied slab must remain open while reading its columns.</summary>
 public sealed class ProvenanceReader
 {
-    private readonly Column<CorrelationRecord> _corr;
+    private readonly Column<ulong> _objectAddresses;
+    private readonly Column<uint> _objectStacks;
 
     public SymbolTable Symbols { get; }
 
@@ -101,15 +102,9 @@ public sealed class ProvenanceReader
     public ProvenanceReader(SlabFile slab)
     {
         Symbols = SymbolTable.Read(slab);
-        foreach (SectionType section in new[] { SectionType.Allocations, SectionType.Correlation })
-        {
-            if (slab.Has(section) && slab.SectionVersion(section) != ProfileFormat.Version)
-            {
-                throw new InvalidDataException($"The profile's {section} section has unsupported version {slab.SectionVersion(section)}.");
-            }
-        }
         Allocations = slab.GetColumn<AllocationRecord>(SectionType.Allocations);
-        _corr = slab.GetColumn<CorrelationRecord>(SectionType.Correlation);
+        _objectAddresses = slab.GetColumn<ulong>(SectionType.ObjectAddresses);
+        _objectStacks = slab.GetColumn<uint>(SectionType.ObjectStacks);
 
         // Every sum Sherlock computes is part of these totals, so bounding them keeps all arithmetic exact.
         ulong bytes = 0, count = 0, survivedBytes = 0, survivedCount = 0;
@@ -130,19 +125,20 @@ public sealed class ProvenanceReader
             survivedCount = Total(survivedCount, allocation.SurvivedCount);
         }
 
-        ulong previousAddress = 0;
-        for (long i = 0; i < _corr.Length; i++)
+        if (_objectStacks.Length != _objectAddresses.Length)
         {
-            CorrelationRecord correlation = _corr[i];
-            if (correlation.StackId >= Symbols.StackCount)
+            throw new InvalidDataException("live objects and their stacks differ in number");
+        }
+        for (long i = 0; i < _objectAddresses.Length; i++)
+        {
+            if (_objectStacks[i] >= Symbols.StackCount)
             {
-                throw new InvalidDataException("correlation references an unknown stack");
+                throw new InvalidDataException("a live object references an unknown stack");
             }
-            if (i > 0 && correlation.Address <= previousAddress)
+            if (i > 0 && _objectAddresses[i] <= _objectAddresses[i - 1])
             {
-                throw new InvalidDataException("correlation addresses are not strictly sorted");
+                throw new InvalidDataException("live object addresses are not strictly sorted");
             }
-            previousAddress = correlation.Address;
         }
     }
 
@@ -151,25 +147,24 @@ public sealed class ProvenanceReader
 
     public static void ValidateFile(string path)
     {
-        using SlabFile slab = SlabFile.Open(path);
+        using SlabFile slab = ProfileFormat.Open(path);
         _ = new ProvenanceReader(slab);
     }
 
-    /// <summary>The number of tracked live objects (correlation records).</summary>
-    public long CorrelationCount => _corr.Length;
+    /// <summary>The number of tracked live objects.</summary>
+    public long CorrelationCount => _objectAddresses.Length;
 
-    /// <summary>Binary-searches the address-sorted correlation column for an object's allocating stack
-    /// id. Long-indexed and chunk-transparent: the column may be several on-disk sections.</summary>
+    /// <summary>Binary-searches the sorted object addresses for an object's allocating stack id.</summary>
     public bool TryGetStack(ulong address, out uint stackId)
     {
-        long lo = 0, hi = _corr.Length - 1;
+        long lo = 0, hi = _objectAddresses.Length - 1;
         while (lo <= hi)
         {
             long mid = lo + ((hi - lo) >> 1);
-            ulong a = _corr[mid].Address;
+            ulong a = _objectAddresses[mid];
             if (a == address)
             {
-                stackId = _corr[mid].StackId;
+                stackId = _objectStacks[mid];
                 return true;
             }
             if (a < address)

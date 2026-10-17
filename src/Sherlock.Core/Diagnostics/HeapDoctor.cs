@@ -14,7 +14,7 @@ public sealed class HeapDoctor(Snapshot snapshot)
     public IReadOnlyList<Finding> Diagnose(CancellationToken cancellation = default)
     {
         cancellation.ThrowIfCancellationRequested();
-        IReadOnlyList<HeapTypeStat> histogram = snapshot.Histogram;
+        IReadOnlyList<HeapTypeStat> histogram = snapshot.GetHistogram(cancellation);
         long heapBytes = histogram.Sum(s => (long)s.TotalSize);
 
         var findings = new List<Finding>();

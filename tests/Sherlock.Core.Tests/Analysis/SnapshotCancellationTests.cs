@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using Sherlock.Core.Analysis;
+using Sherlock.Core.HeapModel;
 using Sherlock.Core.Diagnostics;
 using Xunit;
 
@@ -19,6 +21,7 @@ public sealed class SnapshotCancellationTests
         CancellationToken token = cancellation.Token;
 
         AssertCancelled(token, () => snapshot.GetDominatorTree(token));
+        AssertCancelled(token, () => snapshot.GetHistogram(token));
         AssertCancelled(token, () => snapshot.GetExceptions(token));
         AssertCancelled(token, () => snapshot.DuplicateStrings(cancellationToken: token));
         AssertCancelled(token, () => snapshot.Finalizers(token));
@@ -29,15 +32,16 @@ public sealed class SnapshotCancellationTests
     [Fact]
     public void CachedAnalysisRejectsCancellationAndPreservesCachedResults()
     {
-        var dominators = new DominatorTree(null!, [0], [0], [0], [0], []);
+        var empty = new HeapGraph(Array.Empty<ulong>(), Array.Empty<uint>(), new int[2], []);
+        var dominators = new DominatorTree(empty, DominatorAnalyzer.Compute(empty));
         ExceptionInfo[] exceptions = [new(0x1000, "App.Error", "message", 0, null)];
         var finalizers = new FinalizerReport(0, 0, []);
         Finding[] diagnosis = [new(FindingSeverity.Info, "growth", "title", "detail")];
         Snapshot snapshot = WithoutRuntime(
-            ("_dominators", dominators),
-            ("_exceptions", exceptions),
-            ("_finalizers", finalizers),
-            ("_diagnosis", diagnosis));
+            ("_dominators", new Once<DominatorTree>(dominators)),
+            ("_exceptions", new Once<IReadOnlyList<ExceptionInfo>>(exceptions)),
+            ("_finalizers", new Once<FinalizerReport>(finalizers)),
+            ("_diagnosis", new Once<IReadOnlyList<Finding>>(diagnosis)));
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         CancellationToken token = cancellation.Token;

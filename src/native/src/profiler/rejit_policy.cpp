@@ -151,8 +151,7 @@ const char* rejection(IMetaDataImport* metadata, mdMethodDef method) {
     ULONG methodLength = 0;
     mdTypeDef type = mdTypeDefNil;
     DWORD implementationFlags = 0;
-    if (FAILED(metadata->GetMethodProps(method, &type, methodName.data(), static_cast<ULONG>(methodName.size()),
-                                       &methodLength, nullptr, nullptr, nullptr, nullptr, &implementationFlags))) {
+    if (FAILED(metadata->GetMethodProps(method, &type, methodName.data(), static_cast<ULONG>(methodName.size()), &methodLength, nullptr, nullptr, nullptr, nullptr, &implementationFlags))) {
         return "cannot read method metadata";
     }
     if (const char* reason = rejection(implementationFlags)) {
@@ -185,8 +184,7 @@ const char* rejection(IMetaDataImport* metadata, mdMethodDef method) {
     }
     std::array<WCHAR, 64> assemblyName{};
     ULONG assemblyLength = 0;
-    if (FAILED(assemblyMetadata->GetAssemblyProps(assembly, nullptr, nullptr, nullptr, assemblyName.data(),
-                                                 static_cast<ULONG>(assemblyName.size()), &assemblyLength, nullptr, nullptr))) {
+    if (FAILED(assemblyMetadata->GetAssemblyProps(assembly, nullptr, nullptr, nullptr, assemblyName.data(), static_cast<ULONG>(assemblyName.size()), &assemblyLength, nullptr, nullptr))) {
         return "cannot read the helper's assembly name";
     }
     return rejection(asciiName(assemblyName, assemblyLength), declaringType, name);

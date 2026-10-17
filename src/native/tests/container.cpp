@@ -27,60 +27,55 @@ std::span<const std::byte> asBytes(const std::vector<std::uint8_t>& v) {
 
 // Keep this one-section fixture identical to the C# GoldenBytes test.
 TEST(Container, GoldenBytesMatchSpec) {
-    ContainerWriter w;
+    ContainerWriter w(SlabKind::Profile, 7);
     const std::vector<std::uint8_t> data = {0x01, 0x02, 0x03, 0x04};
-    w.addSection(SectionType::Frames, /*version*/ 1, /*recordSize*/ 0, asBytes(data), /*count*/ 2);
+    w.addBytes(SectionType::Strings, asBytes(data));
 
     const std::string bytes = w.finish();
 
-    const std::vector<std::uint8_t> expected = {
-        // header (16)
+    const std::vector<std::uint8_t> head = {
         0x53, 0x48, 0x52, 0x4B, // "SHRK"
-        0x01, 0x00,             // formatVersion = 1
-        0x01, 0x00,             // flags = little-endian
-        0x01, 0x00, 0x00, 0x00, // sectionCount = 1
-        0x00, 0x00, 0x00, 0x00, // reserved
-        // section entry (32)
-        0x02, 0x00, 0x00, 0x00, // type = Frames(2)
-        0x01, 0x00,             // version = 1
-        0x00, 0x00,             // recordSize = 0
-        0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // offset = 48
+        0x02, 0x00,             // container version = 2
+        0x01, 0x00,             // kind = Profile
+        0x07, 0x00, 0x00, 0x00, // kind version = 7
+        0x01, 0x00, 0x00, 0x00, // section count = 1
+        0x01, 0x00, 0x00, 0x00, // type = Strings
+        0x01, 0x00, 0x00, 0x00, // record size = 1
+        0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // offset = 4096
         0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // length = 4
-        0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // count = 2
-        // data (4)
-        0x01, 0x02, 0x03, 0x04,
     };
-
-    ASSERT_EQ(bytes.size(), expected.size());
-    for (std::size_t i = 0; i < expected.size(); ++i) {
-        EXPECT_EQ(static_cast<std::uint8_t>(bytes[i]), expected[i]) << "byte " << i;
+    ASSERT_EQ(bytes.size(), 4096u + 4u);
+    for (std::size_t i = 0; i < head.size(); ++i) {
+        EXPECT_EQ(static_cast<std::uint8_t>(bytes[i]), head[i]) << "byte " << i;
     }
+    for (std::size_t i = head.size(); i < 4096; ++i) {
+        ASSERT_EQ(bytes[i], '\0') << "padding byte " << i;
+    }
+    EXPECT_EQ(bytes.substr(4096), std::string("\x01\x02\x03\x04", 4));
 }
 
 TEST(Container, RoundTripsMultipleSections) {
-    ContainerWriter w;
+    ContainerWriter w(SlabKind::Profile, 3);
     const std::vector<std::uint8_t> strings = {'m', 'a', 'i', 'n'};
     const std::vector<std::uint32_t> recs = {10, 20, 30};
-    w.addSection(SectionType::Strings, 1, 0, asBytes(strings), strings.size());
-    w.addRecords<std::uint32_t>(SectionType::Allocations, 2, recs);
+    w.addBytes(SectionType::Strings, asBytes(strings));
+    w.addRecords<std::uint32_t>(SectionType::Allocations, recs);
 
     const std::string bytes = w.finish();
     ContainerReader r(asBytes(bytes));
 
     ASSERT_TRUE(r.valid());
-    EXPECT_EQ(r.version(), kFormatVersion);
+    EXPECT_EQ(r.kind(), SlabKind::Profile);
+    EXPECT_EQ(r.kindVersion(), 3u);
     ASSERT_EQ(r.sections().size(), 2u);
 
     auto str = r.find(SectionType::Strings);
     ASSERT_TRUE(str.has_value());
-    EXPECT_EQ(str->version, 1);
-    EXPECT_EQ(str->recordSize, 0);
-    EXPECT_EQ(str->count, 4u);
+    EXPECT_EQ(str->recordSize, 1u);
     EXPECT_EQ(str->data.size(), 4u);
 
     auto alloc = r.find(SectionType::Allocations);
     ASSERT_TRUE(alloc.has_value());
-    EXPECT_EQ(alloc->version, 2);
     EXPECT_EQ(alloc->recordSize, sizeof(std::uint32_t));
     std::span<const std::uint32_t> got = alloc->records<std::uint32_t>();
     ASSERT_EQ(got.size(), 3u);
@@ -89,11 +84,11 @@ TEST(Container, RoundTripsMultipleSections) {
     EXPECT_EQ(got[2], 30u);
 }
 
-TEST(Container, SectionsAreEightAligned) {
-    ContainerWriter w;
-    const std::vector<std::uint8_t> odd = {1, 2, 3}; // 3 bytes → next section must still align
-    w.addSection(SectionType::Strings, 1, 0, asBytes(odd), 3);
-    w.addSection(SectionType::Frames, 1, 0, asBytes(odd), 3);
+TEST(Container, SectionsStartOnPageBoundaries) {
+    ContainerWriter w(SlabKind::Profile, 1);
+    const std::vector<std::uint8_t> odd = {1, 2, 3}; // 3 bytes, so the next section must still align
+    w.addBytes(SectionType::Strings, asBytes(odd));
+    w.addBytes(SectionType::Types, asBytes(odd));
 
     const std::string bytes = w.finish();
     ContainerReader r(asBytes(bytes));
@@ -105,7 +100,7 @@ TEST(Container, SectionsAreEightAligned) {
 }
 
 TEST(Container, EmptyContainerIsJustHeader) {
-    ContainerWriter w;
+    ContainerWriter w(SlabKind::Profile, 1);
     const std::string bytes = w.finish();
     EXPECT_EQ(bytes.size(), kHeaderSize);
     ContainerReader r(asBytes(bytes));
@@ -113,74 +108,38 @@ TEST(Container, EmptyContainerIsJustHeader) {
     EXPECT_TRUE(r.sections().empty());
 }
 
-TEST(Container, RejectsBadMagicAndTruncation) {
+TEST(Container, RejectsBadMagicTruncationAndOtherVersions) {
     std::string bad = "NOPE............";
     EXPECT_FALSE(ContainerReader(asBytes(bad)).valid());
 
     std::string tooSmall = "SHR";
     EXPECT_FALSE(ContainerReader(asBytes(tooSmall)).valid());
+
+    std::string older = ContainerWriter(SlabKind::Profile, 1).finish();
+    older[4] = 0x01; // container version 1
+    EXPECT_FALSE(ContainerReader(asBytes(older)).valid());
 }
 
-// Tiny chunks exercise the uniform record count required by C# arithmetic indexing.
-TEST(Container, ChunkedRecordsSplitUniformlyAndReassemble) {
-    struct Rec { std::uint64_t a; std::uint64_t b; }; // 16 bytes
-    std::vector<Rec> recs;
-    for (std::uint64_t i = 0; i < 10; ++i) recs.push_back({i, i * 100});
-
-    ContainerWriter w;
-    // 48 bytes/chunk = 3 records/chunk → 10 records => 4 sections (3,3,3,1).
-    w.addChunkedRecords<Rec>(SectionType::Correlation, /*version*/ 2, recs, /*chunkBytes*/ 48);
-
+TEST(Container, OwnedSectionsOutliveTheirSource) {
+    ContainerWriter w(SlabKind::Profile, 1);
+    {
+        std::vector<std::uint32_t> stacks = {7, 8, 9};
+        w.addRecords(SectionType::ObjectStacks, std::move(stacks));
+    }
     const std::string bytes = w.finish();
     ContainerReader r(asBytes(bytes));
     ASSERT_TRUE(r.valid());
-
-    std::vector<SectionView> chunks = r.findAll(SectionType::Correlation);
-    ASSERT_EQ(chunks.size(), 4u);
-    EXPECT_EQ(chunks[0].count, 3u);
-    EXPECT_EQ(chunks[1].count, 3u);
-    EXPECT_EQ(chunks[2].count, 3u);
-    EXPECT_EQ(chunks[3].count, 1u); // short final chunk
-    for (const SectionView& s : chunks) {
-        EXPECT_EQ(s.version, 2u);
-        EXPECT_EQ(s.recordSize, sizeof(Rec));
-    }
-
-    // Chunk boundaries must preserve global record order.
-    std::vector<Rec> got;
-    for (const SectionView& s : chunks) {
-        std::span<const Rec> c = s.records<Rec>();
-        got.insert(got.end(), c.begin(), c.end());
-    }
-    ASSERT_EQ(got.size(), recs.size());
-    for (std::size_t i = 0; i < recs.size(); ++i) {
-        EXPECT_EQ(got[i].a, recs[i].a);
-        EXPECT_EQ(got[i].b, recs[i].b);
-    }
+    std::span<const std::uint32_t> got = r.find(SectionType::ObjectStacks)->records<std::uint32_t>();
+    ASSERT_EQ(got.size(), 3u);
+    EXPECT_EQ(got[2], 9u);
 }
 
-TEST(Container, ChunkedRecordsSingleChunkAndEmpty) {
-    struct Rec { std::uint32_t x; };
-    // Fits one chunk → exactly one section.
-    std::vector<Rec> one = {{1}, {2}};
-    ContainerWriter w;
-    w.addChunkedRecords<Rec>(SectionType::Allocations, 1, one, /*chunkBytes*/ 1024);
-    ContainerReader r(asBytes(w.finish()));
-    EXPECT_EQ(r.findAll(SectionType::Allocations).size(), 1u);
-
-    // Empty column → zero sections.
-    ContainerWriter w2;
-    w2.addChunkedRecords<Rec>(SectionType::Allocations, 1, std::span<const Rec>{});
-    ContainerReader r2(asBytes(w2.finish()));
-    EXPECT_TRUE(r2.findAll(SectionType::Allocations).empty());
-}
-
-TEST(Container, ChunkedWriteToMatchesFinish) {
-    struct Rec { std::uint64_t a; std::uint64_t b; };
-    std::vector<Rec> recs;
-    for (std::uint64_t i = 0; i < 7; ++i) recs.push_back({i, ~i});
-    ContainerWriter w;
-    w.addChunkedRecords<Rec>(SectionType::Correlation, 2, recs, /*chunkBytes*/ 32); // 2 recs/chunk
+TEST(Container, WriteToMatchesFinish) {
+    ContainerWriter w(SlabKind::Profile, 1);
+    const std::vector<std::uint64_t> recs = {1, 2, 3, 4, 5, 6, 7};
+    const std::string text = "abc"; // sections borrow their data until written
+    w.addRecords<std::uint64_t>(SectionType::ObjectAddresses, recs);
+    w.addBytes(SectionType::Strings, asBytes(text));
 
     const std::string viaFinish = w.finish();
     std::ostringstream os;

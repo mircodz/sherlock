@@ -1,117 +1,77 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using Microsoft.Diagnostics.Runtime;
+using Sherlock.Core.HeapModel;
 
 namespace Sherlock.Core.Analysis;
 
 /// <summary>
-/// X dominates Y when every GC-root path to Y passes through X; its retained size includes everything
-/// it dominates. Columns use reverse-postorder (RPO): the synthetic GC root is 0, and each immediate
-/// dominator has a smaller RPO than its child.
+/// X dominates Y when every GC-root path to Y passes through X; its retained size includes everything it
+/// dominates. Each object's dominated children are kept largest first, and no child retains more than its
+/// parent, so every query here reads only the objects it returns.
 /// </summary>
-public sealed class DominatorTree
+public sealed class DominatorTree : IDisposable
 {
-    private readonly ClrHeap _heap;
-    private readonly Func<ulong, string>? _typeNameByAddress;
-    private readonly ulong[] _address;              // RPO -> object address (0 for synthetic root)
-    private readonly ulong[] _ownSize;              // RPO -> shallow size
-    private readonly ulong[] _retained;             // RPO -> retained size
-    private readonly int[] _idom;                   // RPO -> immediate dominator (RPO)
-    private readonly Dictionary<ulong, int> _rpoOf; // address -> RPO (excludes synthetic root)
+    private readonly HeapGraph _graph;
+    private readonly DominatorAnalyzer.DominatorResult _result;
+    private readonly IDisposable? _backing;
 
-    internal DominatorTree(ClrHeap heap, ulong[] address, ulong[] ownSize, ulong[] retained, int[] idom,
-        Dictionary<ulong, int> rpoOf, Func<ulong, string>? typeNameByAddress = null)
+    internal DominatorTree(HeapGraph graph, DominatorAnalyzer.DominatorResult result, IDisposable? backing = null)
     {
-        _heap = heap;
-        _typeNameByAddress = typeNameByAddress;
-        _address = address;
-        _ownSize = ownSize;
-        _retained = retained;
-        _idom = idom;
-        _rpoOf = rpoOf;
+        _graph = graph;
+        _result = result;
+        _backing = backing;
     }
 
     /// <summary>Number of reachable objects in the tree (excluding the synthetic root).</summary>
-    public int ObjectCount => _address.Length - 1;
+    public int ObjectCount => _result.Children.Length;
 
     /// <summary>Total retained memory reachable from all GC roots.</summary>
-    public ulong TotalReachableBytes => _retained.Length == 0 ? 0 : _retained[0];
+    public ulong TotalReachableBytes => _result.Retained.Span[_graph.Root];
 
     /// <summary>Objects ordered by retained size, largest first.</summary>
     public IReadOnlyList<DominatorNode> TopDominators(int count)
     {
-        return Enumerable.Range(1, _address.Length - 1)
-            .OrderByDescending(rpo => _retained[rpo])
-            .Take(count)
-            .Select(NodeAt)
-            .ToList();
+        var nodes = new List<DominatorNode>();
+        foreach ((int node, _) in Largest(count))
+        {
+            nodes.Add(NodeAt(node));
+        }
+        return nodes;
     }
 
     /// <summary>Looks up a single object's retained size, or null if it isn't reachable.</summary>
-    public DominatorNode? Find(ulong address) =>
-        _rpoOf.TryGetValue(address, out int rpo) ? NodeAt(rpo) : null;
+    public DominatorNode? Find(ulong address) => Reachable(address, out int node) ? NodeAt(node) : null;
 
     /// <summary>Immediate dominator-tree children, largest retained size first.</summary>
     public IReadOnlyList<DominatorNode> ImmediateChildren(ulong address, int count)
     {
-        if (!_rpoOf.TryGetValue(address, out int parent))
+        if (!Reachable(address, out int parent))
         {
             return [];
         }
-
-        var children = new List<int>();
-        for (int rpo = 1; rpo < _idom.Length; rpo++)
+        ReadOnlySpan<int> children = ChildrenOf(parent);
+        var nodes = new List<DominatorNode>(Math.Min(count, children.Length));
+        foreach (int child in children[..Math.Min(count, children.Length)])
         {
-            if (rpo != parent && _idom[rpo] == parent)
-            {
-                children.Add(rpo);
-            }
+            nodes.Add(NodeAt(child));
         }
-
-        return children
-            .OrderByDescending(rpo => _retained[rpo])
-            .Take(count)
-            .Select(NodeAt)
-            .ToList();
+        return nodes;
     }
 
     /// <summary>
-    /// Keeps the heaviest objects by retained size, attaching each to its nearest included ancestor
-    /// or the synthetic GC root.
+    /// Keeps the heaviest objects by retained size, attaching each to its immediate dominator, which is always
+    /// among them, or to the synthetic GC root.
     /// </summary>
     public DominatorGraph BuildGraph(int maxNodes)
     {
-        if (maxNodes < 1)
+        var nodes = new List<DominatorGraphNode>();
+        foreach ((int node, int parent) in Largest(Math.Max(1, maxNodes)))
         {
-            maxNodes = 1;
+            DominatorNode n = NodeAt(node);
+            nodes.Add(new DominatorGraphNode(node, n.Address, n.TypeName, n.OwnSize, n.RetainedSize, parent == _graph.Root ? null : parent));
         }
-
-        List<int> top = Enumerable.Range(1, _address.Length - 1)
-            .OrderByDescending(rpo => _retained[rpo])
-            .Take(maxNodes)
-            .ToList();
-
-        var included = new HashSet<int>(top);
-
-        var nodes = new List<DominatorGraphNode>(top.Count);
-        foreach (int rpo in top)
-        {
-            int parent = _idom[rpo];
-            while (parent != 0 && !included.Contains(parent))
-            {
-                parent = _idom[parent];
-            }
-
-            int? parentId = parent == 0 ? null : parent;
-            nodes.Add(new DominatorGraphNode(rpo, _address[rpo], TypeNameAt(rpo), _ownSize[rpo], _retained[rpo], parentId));
-        }
-
         return new DominatorGraph(nodes, TotalReachableBytes);
     }
-
-    private DominatorNode NodeAt(int rpo) =>
-        new(_address[rpo], TypeNameAt(rpo), _ownSize[rpo], _retained[rpo]);
 
     /// <summary>
     /// Returns the immediate-dominator chain, root-most object first and target last, excluding the
@@ -122,27 +82,68 @@ public sealed class DominatorTree
     /// </remarks>
     public IReadOnlyList<(ulong Address, string TypeName)>? RetentionPath(ulong address)
     {
-        if (!_rpoOf.TryGetValue(address, out int rpo))
+        if (!Reachable(address, out int node))
         {
             return null;
         }
-
+        ReadOnlySpan<int> idom = _result.Idom.Span;
         var chain = new List<(ulong, string)>();
-        for (int cur = rpo; cur != 0; cur = _idom[cur])
+        for (int cur = node; cur != _graph.Root; cur = idom[cur])
         {
-            chain.Add((_address[cur], TypeNameAt(cur)));
+            chain.Add((_graph.Addresses.Span[cur], _graph.TypeNameOf(cur)));
         }
         chain.Reverse();
         return chain;
     }
 
-    private string TypeNameAt(int rpo) =>
-        _typeNameByAddress?.Invoke(_address[rpo]) ?? _heap.GetObject(_address[rpo]).Type?.Name ?? "<unknown>";
+    public void Dispose() => _backing?.Dispose();
+
+    // The `count` largest objects by retained size, largest first, with their immediate dominators. Children are
+    // sorted and never retain more than their parent, so taking the largest of the frontier (each expanded
+    // object's first child and the next sibling of each taken one) yields objects in order.
+    private IEnumerable<(int Node, int Parent)> Largest(int count)
+    {
+        ReadOnlySpan<long> starts = _result.ChildOffsets.Span;
+        var frontier = new PriorityQueue<(int Parent, long Slot), ulong>(Comparer<ulong>.Create(static (a, b) => b.CompareTo(a)));
+        Push(frontier, _graph.Root, starts[_graph.Root]);
+        var taken = new List<(int, int)>();
+        while (taken.Count < count && frontier.TryDequeue(out (int Parent, long Slot) entry, out _))
+        {
+            int node = _result.Children.Span[(int)entry.Slot];
+            taken.Add((node, entry.Parent));
+            Push(frontier, entry.Parent, entry.Slot + 1);
+            Push(frontier, node, starts[node]);
+        }
+        return taken;
+    }
+
+    private void Push(PriorityQueue<(int Parent, long Slot), ulong> frontier, int parent, long slot)
+    {
+        if (slot < _result.ChildOffsets.Span[parent + 1])
+        {
+            frontier.Enqueue((parent, slot), _result.Retained.Span[_result.Children.Span[(int)slot]]);
+        }
+    }
+
+    private ReadOnlySpan<int> ChildrenOf(int node)
+    {
+        ReadOnlySpan<long> starts = _result.ChildOffsets.Span;
+        return _result.Children.Span[(int)starts[node]..(int)starts[node + 1]];
+    }
+
+    private bool Reachable(ulong address, out int node)
+    {
+        node = _graph.IndexOf(address);
+        return node >= 0 && _result.Idom.Span[node] >= 0;
+    }
+
+    private DominatorNode NodeAt(int node) =>
+        new(_graph.Addresses.Span[node], _graph.TypeNameOf(node), _graph.SizeOf(node), _result.Retained.Span[node]);
 }
 
 /// <summary>
-/// A pruned graph node identified by its RPO. <see cref="ParentId"/> is the nearest included ancestor,
-/// or null for a child of the synthetic GC root.
+/// A pruned graph node identified by its object id. <see cref="ParentId"/> is its immediate dominator, or null for
+/// a child of the synthetic GC root.
 /// </summary>
 public sealed record DominatorGraphNode(
     int Id,

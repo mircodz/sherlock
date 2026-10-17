@@ -18,7 +18,7 @@ public sealed class SymbolTableTests : IDisposable
 
     private SymbolTable RoundTrip(SymbolWriter writer)
     {
-        var container = new ContainerWriter();
+        var container = new ContainerWriter(SlabKind.Profile, ProfileFormat.Version);
         writer.WriteTo(container);
         using SlabFile slab = _tmp.WriteSlab(container);
         return SymbolTable.Read(slab);
@@ -180,31 +180,10 @@ public sealed class SymbolTableTests : IDisposable
     }
 
     [Fact]
-    public void RejectsProfilesFromEarlierVersions()
-    {
-        var container = new ContainerWriter();
-        new SymbolWriter().WriteTo(container);
-        container.AddSection(SectionType.Frames, 1, 0, new byte[8], 1);
-        using SlabFile slab = _tmp.WriteSlab(container);
-
-        var error = Assert.Throws<InvalidDataException>(() => SymbolTable.Read(slab));
-
-        Assert.Contains("earlier version of Sherlock", error.Message);
-    }
-
-    [Fact]
-    public void RejectsAnUnsupportedVersion()
-    {
-        using SlabFile slab = Sections(ProgramMain(), new StackRecord { FrameCount = 1 }, [0], SymbolFormat.Version + 1);
-
-        Assert.Contains("unsupported version", Assert.Throws<InvalidDataException>(() => SymbolTable.Read(slab)).Message);
-    }
-
-    [Fact]
     public void RejectsAMissingSection()
     {
-        var container = new ContainerWriter();
-        container.AddSection(SectionType.Strings, SymbolFormat.Version, 0, [], 0);
+        var container = new ContainerWriter(SlabKind.Profile, ProfileFormat.Version);
+        container.AddBytes(SectionType.Strings, []);
         using SlabFile slab = _tmp.WriteSlab(container);
 
         Assert.Contains("no Modules section", Assert.Throws<InvalidDataException>(() => SymbolTable.Read(slab)).Message);
@@ -263,16 +242,15 @@ public sealed class SymbolTableTests : IDisposable
         Parameters = new StringRef { Offset = 11, Length = 2 },
     };
 
-    private SlabFile Sections(MethodRecord method, StackRecord stack, uint[] frames, ushort version = SymbolFormat.Version)
+    private SlabFile Sections(MethodRecord method, StackRecord stack, uint[] frames)
     {
-        byte[] strings = "MainProgram()"u8.ToArray();
-        var container = new ContainerWriter();
-        container.AddSection(SectionType.Strings, version, 0, strings, (ulong)strings.Length);
-        container.AddRecords(SectionType.Modules, version, [new ModuleRecord { Mvid = Guid.NewGuid() }]);
-        container.AddRecords(SectionType.Methods, version, [method]);
-        container.AddRecords<TypeRecord>(SectionType.Types, version, []);
-        container.AddRecords(SectionType.Stacks, version, [stack]);
-        container.AddRecords(SectionType.StackFrames, version, frames);
+        var container = new ContainerWriter(SlabKind.Profile, ProfileFormat.Version);
+        container.AddBytes(SectionType.Strings, "MainProgram()"u8);
+        container.AddRecords(SectionType.Modules, [new ModuleRecord { Mvid = Guid.NewGuid() }]);
+        container.AddRecords(SectionType.Methods, [method]);
+        container.AddRecords<TypeRecord>(SectionType.Types, []);
+        container.AddRecords(SectionType.Stacks, [stack]);
+        container.AddRecords(SectionType.StackFrames, frames);
         return _tmp.WriteSlab(container);
     }
 }

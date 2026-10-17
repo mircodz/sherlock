@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using Sherlock.Core.Analysis;
+using Sherlock.Core.HeapModel;
 using Sherlock.Core.Diagnostics;
 using Xunit;
 
@@ -169,22 +170,24 @@ public sealed class HeapDoctorTests
         return RootedTree(objects.ToArray());
     }
 
-    // Independent root objects; type names resolve without a ClrHeap or dump.
+    // Independent root objects, one type each.
     private static DominatorTree RootedTree(params (string Type, ulong Bytes)[] objects)
     {
-        var address = new ulong[objects.Length + 1];
-        var ownSize = new ulong[address.Length];
-        var retained = new ulong[address.Length];
-        var rpoOf = new Dictionary<ulong, int>();
-        for (int i = 0; i < objects.Length; i++)
+        int n = objects.Length;
+        var addresses = new ulong[n];
+        var sizes = new uint[n];
+        var typeIds = new int[n];
+        var offsets = new int[n + 2];
+        var roots = new int[n];
+        for (int i = 0; i < n; i++)
         {
-            int rpo = i + 1;
-            address[rpo] = 0x1000UL + (ulong)i * 0x100;
-            ownSize[rpo] = retained[rpo] = objects[i].Bytes;
-            retained[0] += objects[i].Bytes;
-            rpoOf[address[rpo]] = rpo;
+            addresses[i] = 0x1000UL + (ulong)i * 0x100;
+            sizes[i] = checked((uint)objects[i].Bytes);
+            typeIds[i] = i;
+            roots[i] = i;
         }
-        return new DominatorTree(null!, address, ownSize, retained, new int[address.Length], rpoOf,
-            addr => objects[rpoOf[addr] - 1].Type);
+        offsets[n + 1] = n;
+        var graph = new HeapGraph(addresses, sizes, offsets, roots, typeIds, objects.Select(o => o.Type).ToArray());
+        return new DominatorTree(graph, DominatorAnalyzer.Compute(graph));
     }
 }

@@ -46,6 +46,7 @@ public sealed class HeapGraphExtractor(Snapshot snapshot)
         // Assign dense ids in address order.
         var addressList = new List<ulong>();
         var sizeList = new List<uint>();
+        var largeSizes = new List<LargeSize>();
         var typeList = new List<int>();
         ulong freeBytes = 0;
         long freeCount = 0;
@@ -89,16 +90,16 @@ public sealed class HeapGraphExtractor(Snapshot snapshot)
                 // Store ClrMD's clamped, unaligned size; alignment only advances the walk.
                 if (!t.IsFree)
                 {
-                    if (size > uint.MaxValue)
-                    {
-                        throw new NotSupportedException($"Object 0x{obj:x} is larger than the 4 GB graph-size limit.");
-                    }
                     if (t.HasPointers && size > int.MaxValue)
                     {
                         throw new NotSupportedException($"Object 0x{obj:x} is too large for reference extraction.");
                     }
+                    if (size >= uint.MaxValue)
+                    {
+                        largeSizes.Add(new LargeSize(addressList.Count, size));
+                    }
                     addressList.Add(obj);
-                    sizeList.Add((uint)size);
+                    sizeList.Add((uint)Math.Min(size, uint.MaxValue));
                     typeList.Add(typeIndex);
                 }
                 else
@@ -232,7 +233,8 @@ public sealed class HeapGraphExtractor(Snapshot snapshot)
         edgeSegments.Add(roots.ToArray());
         var edges = EdgeColumn.Build(edgeSegments, offsets, MaxEdgesPerChunk);
 
-        return new HeapGraph(addresses, sizes, offsets, edges, typeOf, types.Names(), freeBytes, freeCount, rootRecords.ToArray());
+        return new HeapGraph(Guid.NewGuid(), addresses, sizes, largeSizes.ToArray(), offsets, edges, typeOf, types.Names(),
+            freeBytes, freeCount, rootRecords.ToArray());
     }
 
     // Resolved from ClrMD once per method table.

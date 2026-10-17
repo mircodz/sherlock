@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -18,7 +19,7 @@ public class ProvenanceTests : IDisposable
 
     private SlabFile Write(ProvenanceWriter w)
     {
-        var cw = new ContainerWriter();
+        var cw = new ContainerWriter(SlabKind.Profile, ProfileFormat.Version);
         w.WriteTo(cw);
         return _tmp.WriteSlab(cw);
     }
@@ -70,9 +71,16 @@ public class ProvenanceTests : IDisposable
     }
 
     [Fact]
-    public void CorrelationRecordLayoutMatchesNative()
+    public void LiveObjectsAreTwoColumnsOfTwelveBytesEach()
     {
-        Assert.Equal(16, Marshal.SizeOf<CorrelationRecord>());
+        var w = new ProvenanceWriter();
+        uint stack = w.InternStack(Stack("A"));
+        w.AddObject(0x2000, stack);
+        w.AddObject(0x1000, stack);
+        using SlabFile slab = Write(w);
+
+        Assert.Equal(new ulong[] { 0x1000, 0x2000 }, slab.GetColumn<ulong>(SectionType.ObjectAddresses).AsMemory().ToArray());
+        Assert.Equal(new uint[] { stack, stack }, slab.GetColumn<uint>(SectionType.ObjectStacks).AsMemory().ToArray());
     }
 
     [Fact]
@@ -135,23 +143,30 @@ public class ProvenanceTests : IDisposable
     }
 
     [Theory]
-    [InlineData(SectionType.Allocations)]
-    [InlineData(SectionType.Correlation)]
-    public void RejectsRecordsOfAnotherVersion(SectionType section)
+    [InlineData(ContainerFormat.Version, ProfileFormat.Version + 1)]
+    [InlineData(1, ProfileFormat.Version)]
+    public void RejectsProfilesFromOtherVersionsWithWhatToDo(ushort container, uint profile)
     {
-        var symbols = new ContainerWriter();
-        new ProvenanceWriter().WriteTo(symbols);
-        if (section == SectionType.Allocations)
-        {
-            symbols.AddRecords(section, ProfileFormat.Version - 1, new AllocationRecord[1]);
-        }
-        else
-        {
-            symbols.AddRecords(section, ProfileFormat.Version - 1, new CorrelationRecord[1]);
-        }
-        using SlabFile slab = _tmp.WriteSlab(symbols);
+        var writer = new ContainerWriter(SlabKind.Profile, profile);
+        new ProvenanceWriter().WriteTo(writer);
+        byte[] bytes = writer.ToArray();
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(4), container);
+        string path = _tmp.File();
+        File.WriteAllBytes(path, bytes);
 
-        Assert.Contains("unsupported version", Assert.Throws<InvalidDataException>(() => new ProvenanceReader(slab)).Message);
+        var error = Assert.Throws<InvalidDataException>(() => ProvenanceReader.ValidateFile(path));
+
+        Assert.Contains("record it again", error.Message);
+    }
+
+    [Fact]
+    public void RejectsAFileOfAnotherKind()
+    {
+        string path = _tmp.File();
+        new ContainerWriter(SlabKind.Graph, 1).Save(path);
+
+        Assert.Contains("holds a heap graph, not an allocation profile",
+            Assert.Throws<InvalidDataException>(() => ProvenanceReader.ValidateFile(path)).Message);
     }
 
     [Theory]
@@ -172,8 +187,8 @@ public class ProvenanceTests : IDisposable
     [Fact]
     public void RejectsMissingStackTable()
     {
-        var writer = new ContainerWriter();
-        writer.AddRecords(SectionType.Allocations, ProfileFormat.Version, new AllocationRecord[1]);
+        var writer = new ContainerWriter(SlabKind.Profile, ProfileFormat.Version);
+        writer.AddRecords(SectionType.Allocations, new AllocationRecord[1]);
         using SlabFile slab = _tmp.WriteSlab(writer);
 
         Assert.Throws<InvalidDataException>(() => new ProvenanceReader(slab));

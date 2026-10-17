@@ -23,7 +23,8 @@ class ProvenanceWriter;
 }
 
 // Aggregates sampled allocations by stack and type, tracking survival through the first GC.
-// Each thread owns a shard; shard locks let control-thread snapshots copy a coherent view.
+// Each recording thread holds a shard and gives it back when it exits, for the next thread to reuse; shard locks let
+// control-thread snapshots copy a coherent view.
 class Aggregator {
 public:
     struct Stats {
@@ -88,7 +89,11 @@ public:
     // Owned copy for diagnostics.
     std::vector<LiveObjectInfo> inspectLiveObjects() const;
 
+    // Shards in use or free, the overflow shard included: about as many as threads recorded at once, not in total.
+    [[nodiscard]] std::size_t shardCount() const;
+
 private:
+    // Threads recording at once that get a shard of their own; any more share the overflow shard.
     static constexpr int kMaxShards = 1024;
 
     // IDs follow objects across moves. The live set stays address-sorted by merging
@@ -100,6 +105,15 @@ private:
     };
 
     Shard& localShard();
+    Shard& takeShard();                    // a free shard, a new one, or the overflow shard
+    static void releaseThreadShard() noexcept; // give the calling thread's shard back to its aggregator
+
+    // Gives a thread's shard back when the thread exits; see aggregator.cpp.
+    struct ThreadExit {
+        bool armed = false;
+        ~ThreadExit();
+    };
+    static thread_local ThreadExit threadExit_;
     std::string resolveTypeNameUncached(ClassID classId); // array/nested-aware, ClrMD-compatible spelling
     bool survived(ObjectID addr) const;    // is addr in this GC's survivor spans?
     bool condemned(ObjectID addr) const;   // is addr in a generation this GC collected?
@@ -126,6 +140,10 @@ private:
     // Publish claimed shard slots atomically for concurrent control-thread snapshots.
     std::atomic<int> shardCount_{0};
     std::array<std::atomic<Shard*>, kMaxShards> shards_{};
+    std::mutex shardsMutex_;               // guards freeShards_ and claiming slots
+    std::vector<Shard*> freeShards_;       // registered shards whose thread exited
+    mutable Shard overflow_;               // shared by the threads past kMaxShards; listed with the registered ones
+    bool overflowReported_ = false;
 
     // Survivor spans [start, end) by old address for this GC.
     std::vector<intervals::AddrRange> survivorRanges_;

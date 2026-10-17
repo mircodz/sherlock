@@ -1,6 +1,6 @@
 // Methods keep their identities, and every name part survives a container round trip.
 
-#include "sherlock/storage/symbols.hpp"
+#include "sherlock/storage/profile.hpp"
 
 #include <gtest/gtest.h>
 
@@ -38,7 +38,7 @@ MethodDescription method(const Mvid& mvid, std::uint32_t token, std::string_view
 }
 
 SymbolTable roundTrip(const SymbolWriter& symbols, std::string& bytes) {
-    ContainerWriter w;
+    ContainerWriter w(SlabKind::Profile, kProfileVersion);
     symbols.writeTo(w);
     bytes = w.finish();
     ContainerReader c(asBytes(bytes));
