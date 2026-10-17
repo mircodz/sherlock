@@ -32,14 +32,13 @@ public sealed class DominatorTreeStoreTests : IDisposable
         DominatorAnalyzer.DominatorResult computed = DominatorAnalyzer.Compute(g);
 
         DominatorTreeStore.Save(_path, computed, g.Id);
-        DominatorAnalyzer.DominatorResult? loaded = DominatorTreeStore.Load(_path, g);
+        using DominatorTree loaded = DominatorTreeStore.Load(_path, g)!;
+        var fresh = new DominatorTree(g, computed);
 
-        Assert.NotNull(loaded);
-        Assert.Equal(computed.Address, loaded!.Value.Address);
-        Assert.Equal(computed.Own, loaded.Value.Own);
-        Assert.Equal(computed.Retained, loaded.Value.Retained);
-        Assert.Equal(computed.Idom, loaded.Value.Idom);
-        Assert.Equal(computed.NodeByRpo, loaded.Value.NodeByRpo);
+        Assert.Equal(fresh.ObjectCount, loaded.ObjectCount);
+        Assert.Equal(fresh.TotalReachableBytes, loaded.TotalReachableBytes);
+        Assert.Equal(fresh.TopDominators(10), loaded.TopDominators(10));
+        Assert.Equal(fresh.ImmediateChildren(0x1000, 10), loaded.ImmediateChildren(0x1000, 10));
     }
 
     [Fact]

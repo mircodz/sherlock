@@ -35,15 +35,7 @@ public sealed class RetentionPathTests
         return new HeapGraph(addresses, sizes, offsets, edgeList.ToArray(), typeIds, typeNames);
     }
 
-    // Resolve names from the graph so the null ClrHeap is never dereferenced.
-    private static DominatorTree TreeOf(HeapGraph g)
-    {
-        DominatorAnalyzer.DominatorResult r = DominatorAnalyzer.Compute(g);
-        var rpoOf = new Dictionary<ulong, int>(r.Address.Length);
-        for (int rpo = 1; rpo < r.Address.Length; rpo++) rpoOf[r.Address[rpo]] = rpo;
-        string Resolve(ulong addr) { int id = g.IndexOf(addr); return id >= 0 ? g.TypeNameOf(id) : "?"; }
-        return new DominatorTree(r.Address, r.Own, r.Retained, r.Idom, rpoOf, Resolve);
-    }
+    private static DominatorTree TreeOf(HeapGraph g) => new(g, DominatorAnalyzer.Compute(g));
 
     private static string[] PathTypes(DominatorTree t, HeapGraph g, int obj) =>
         (t.RetentionPath(g.Addresses.Span[obj]) ?? []).Select(n => n.TypeName).ToArray();

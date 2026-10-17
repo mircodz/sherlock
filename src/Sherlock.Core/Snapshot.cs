@@ -246,6 +246,7 @@ public sealed class Snapshot : IDisposable
         }
         _disposed = true;
         _slab?.Dispose();
+        _dominators.Value?.Dispose();
         _heapGraph.Dispose();
         Runtime.Dispose();
         _dataTarget.Dispose();

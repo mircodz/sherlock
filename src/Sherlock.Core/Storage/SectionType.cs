@@ -27,9 +27,10 @@ public enum SectionType : uint
     GraphEdges = 22,      // int per reference
     GraphRoots = 23,      // HeapRootRecord per CLR root
 
-    // Dominators, in reverse postorder with the synthetic root first.
-    DomMeta = 32,      // Guid: the id of the graph the tree was computed from
-    DomNodeByRpo = 33, // int: object id
-    DomRetained = 34,  // ulong: retained bytes
-    DomIdom = 35,      // int: immediate dominator
+    // Dominators, by graph node: object ids, then the synthetic root.
+    DomMeta = 32,         // Guid: the id of the graph the tree was computed from
+    DomIdom = 33,         // int per node: immediate dominator; the root's is itself, an unreachable object's -1
+    DomRetained = 34,     // ulong per node: retained bytes
+    DomChildOffsets = 35, // long per node, then the total: each node's first entry in DomChildren
+    DomChildren = 36,     // int per reachable object: its dominator's children, largest retained first
 }

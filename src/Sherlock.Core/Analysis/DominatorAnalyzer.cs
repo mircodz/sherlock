@@ -8,28 +8,25 @@ namespace Sherlock.Core.Analysis;
 /// <summary>Computes and caches dominators over a persisted heap graph.</summary>
 public sealed class DominatorAnalyzer(Snapshot snapshot)
 {
-    /// <summary>RPO-indexed dominator columns. Index 0 is the synthetic root.</summary>
-    public readonly record struct DominatorResult(ulong[] Address, ulong[] Own, ulong[] Retained, int[] Idom, int[] NodeByRpo);
+    /// <summary>
+    /// Dominator columns by graph node: object ids, then the synthetic root at <see cref="HeapGraph.Root"/>.
+    /// <see cref="Idom"/> is each node's immediate dominator (the root's is itself, an unreachable object's is -1),
+    /// and <see cref="Children"/> lists each node's dominated children from <see cref="ChildOffsets"/>, largest
+    /// retained size first.
+    /// </summary>
+    public readonly record struct DominatorResult(
+        ReadOnlyMemory<int> Idom, ReadOnlyMemory<ulong> Retained, ReadOnlyMemory<long> ChildOffsets, ReadOnlyMemory<int> Children);
 
     public DominatorTree Build(CancellationToken cancellationToken = default)
     {
         HeapGraph graph = snapshot.GetHeapGraph(cancellationToken);
-
         string path = SidecarPath(snapshot.DumpPath);
-        DominatorResult r = TryLoad(path, graph)
-            ?? ComputeAndPersist(graph, path, cancellationToken);
-
-        var rpoOf = new Dictionary<ulong, int>(r.Address.Length);
-        for (int rpo = 1; rpo < r.Address.Length; rpo++)
-            rpoOf[r.Address[rpo]] = rpo;
-
-        return new DominatorTree(r.Address, r.Own, r.Retained, r.Idom, rpoOf,
-            address => graph.IndexOf(address) is var id and >= 0 ? graph.TypeNameOf(id) : "<unknown>");
+        return TryLoad(path, graph) ?? ComputeAndPersist(graph, path, cancellationToken);
     }
 
     public static string SidecarPath(string dumpPath) => System.IO.Path.GetFileName(dumpPath) == "heap.dmp" ? System.IO.Path.Combine(System.IO.Path.GetDirectoryName(dumpPath)!, "dominators.slab") : dumpPath + ".dominators.slab";
 
-    private static DominatorResult? TryLoad(string path, HeapGraph graph)
+    private static DominatorTree? TryLoad(string path, HeapGraph graph)
     {
         if (!System.IO.File.Exists(path))
         {
@@ -45,7 +42,8 @@ public sealed class DominatorAnalyzer(Snapshot snapshot)
         }
     }
 
-    private static DominatorResult ComputeAndPersist(HeapGraph graph, string path, CancellationToken cancellationToken)
+    // Reads the saved tree back, so the computed arrays can be released.
+    private static DominatorTree ComputeAndPersist(HeapGraph graph, string path, CancellationToken cancellationToken)
     {
         DominatorResult r = Compute(graph, cancellationToken);
         try
@@ -55,8 +53,9 @@ public sealed class DominatorAnalyzer(Snapshot snapshot)
         catch
         {
             // Analysis remains usable when the dump directory is read-only.
+            return new DominatorTree(graph, r);
         }
-        return r;
+        return TryLoad(path, graph) ?? new DominatorTree(graph, r);
     }
 
     /// <summary>Computes immediate dominators and retained sizes without ClrMD.</summary>
@@ -141,25 +140,58 @@ public sealed class DominatorAnalyzer(Snapshot snapshot)
         }
 
         // Descendants have higher RPO, so reverse accumulation sums children before their dominator.
-        var address = new ulong[m];
-        var own = new ulong[m];
-        ReadOnlySpan<ulong> gAddr = graph.Addresses.Span;
-        ReadOnlySpan<uint> gSize = graph.Sizes.Span;
+        ReadOnlySpan<uint> sizes = graph.Sizes.Span;
+        var retainedByRpo = new ulong[m];
+        for (int rpo = 1; rpo < m; rpo++)
+        {
+            int node = nodeByRpo[rpo];
+            retainedByRpo[rpo] = sizes[node] != uint.MaxValue ? sizes[node] : graph.SizeOf(node);
+        }
+        for (int rpo = m - 1; rpo >= 1; rpo--)
+            retainedByRpo[idom[rpo]] += retainedByRpo[rpo];
+
+        return ByNode(nodeCount, nodeByRpo, idom, retainedByRpo, cancellationToken);
+    }
+
+    // Moves the columns from reverse postorder to node ids and lists each node's children, largest first.
+    private static DominatorResult ByNode(int nodeCount, int[] nodeByRpo, int[] idomByRpo, ulong[] retainedByRpo, CancellationToken cancellationToken)
+    {
+        int m = nodeByRpo.Length;
+        var idom = new int[nodeCount];
+        var retained = new ulong[nodeCount];
+        Array.Fill(idom, -1);
+        var childOffsets = new long[nodeCount + 1];
         for (int rpo = 0; rpo < m; rpo++)
         {
             int node = nodeByRpo[rpo];
-            if (node != root)
+            idom[node] = nodeByRpo[idomByRpo[rpo]];
+            retained[node] = retainedByRpo[rpo];
+            if (rpo > 0)
             {
-                address[rpo] = gAddr[node];
-                own[rpo] = gSize[node] != uint.MaxValue ? gSize[node] : graph.SizeOf(node);
+                childOffsets[idom[node] + 1]++;
             }
         }
+        for (int node = 0; node < nodeCount; node++)
+            childOffsets[node + 1] += childOffsets[node];
 
-        var retained = (ulong[])own.Clone();
-        for (int rpo = m - 1; rpo >= 1; rpo--)
-            retained[idom[rpo]] += retained[rpo];
-
-        return new DominatorResult(address, own, retained, idom, nodeByRpo);
+        var children = new int[m - 1];
+        var cursor = (long[])childOffsets.Clone();
+        for (int rpo = 1; rpo < m; rpo++)
+        {
+            int node = nodeByRpo[rpo];
+            children[cursor[idom[node]]++] = node;
+        }
+        Comparison<int> largestFirst = (a, b) => retained[b] != retained[a] ? retained[b].CompareTo(retained[a]) : a.CompareTo(b);
+        for (int node = 0; node < nodeCount; node++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Span<int> mine = children.AsSpan((int)childOffsets[node], (int)(childOffsets[node + 1] - childOffsets[node]));
+            if (mine.Length > 1)
+            {
+                mine.Sort(largestFirst);
+            }
+        }
+        return new DominatorResult(idom, retained, childOffsets, children);
     }
 
     private static int[] BuildReversePostorder(HeapGraph graph, int root, int nodeCount, CancellationToken cancellationToken, out int[] nodeByRpo)

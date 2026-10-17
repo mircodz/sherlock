@@ -17,6 +17,9 @@ internal sealed class Once<T> where T : class
 
     public Once(T value) => _value = value;
 
+    /// <summary>The value if it has been computed, without computing it.</summary>
+    public T? Value => Volatile.Read(ref _value);
+
     /// <summary>The value, computing it with <paramref name="compute"/> if no caller has yet. Waiting for another
     /// caller's computation stops when <paramref name="cancellationToken"/> is cancelled.</summary>
     public T Get(Func<T> compute, CancellationToken cancellationToken = default)

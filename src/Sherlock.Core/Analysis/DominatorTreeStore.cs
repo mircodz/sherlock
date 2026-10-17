@@ -8,59 +8,48 @@ namespace Sherlock.Core.Analysis;
 /// <summary>Persists the columns derived by dominator analysis.</summary>
 public static class DominatorTreeStore
 {
-    private const uint Version = 3;
+    private const uint Version = 4;
 
     public static void Save(string path, DominatorAnalyzer.DominatorResult result, Guid graphId)
     {
         var writer = new ContainerWriter(SlabKind.Dominators, Version);
         writer.AddRecords(SectionType.DomMeta, [graphId]);
-        writer.AddMemory<int>(SectionType.DomNodeByRpo, result.NodeByRpo);
-        writer.AddMemory<ulong>(SectionType.DomRetained, result.Retained);
-        writer.AddMemory<int>(SectionType.DomIdom, result.Idom);
+        writer.AddMemory(SectionType.DomIdom, result.Idom);
+        writer.AddMemory(SectionType.DomRetained, result.Retained);
+        writer.AddMemory(SectionType.DomChildOffsets, result.ChildOffsets);
+        writer.AddMemory(SectionType.DomChildren, result.Children);
         writer.Save(path);
     }
 
-    /// <summary>Loads a result built from <paramref name="graph"/>, or null when it was built from another, and
-    /// reconstructs graph-owned columns.</summary>
-    public static DominatorAnalyzer.DominatorResult? Load(string path, HeapGraph graph)
+    /// <summary>Opens a tree computed from <paramref name="graph"/>, or null when it was computed from another.
+    /// Columns stay in the mapping, which the tree owns.</summary>
+    public static DominatorTree? Load(string path, HeapGraph graph)
     {
-        using SlabFile slab = SlabFile.Open(path, SlabKind.Dominators, Version);
-        Column<Guid> meta = slab.GetColumn<Guid>(SectionType.DomMeta);
-        if (meta.Length != 1 || meta[0] != graph.Id)
+        SlabFile slab = SlabFile.Open(path, SlabKind.Dominators, Version);
+        try
         {
-            return null;
-        }
-
-        int[] nodeByRpo = ToArray(slab.GetColumn<int>(SectionType.DomNodeByRpo));
-        ulong[] retained = ToArray(slab.GetColumn<ulong>(SectionType.DomRetained));
-        int[] idom = ToArray(slab.GetColumn<int>(SectionType.DomIdom));
-
-        int m = nodeByRpo.Length;
-        if (retained.Length != m || idom.Length != m || m == 0)
-        {
-            return null;
-        }
-        int root = graph.Root;
-        ReadOnlySpan<ulong> gAddr = graph.Addresses.Span;
-        var address = new ulong[m];
-        var own = new ulong[m];
-        for (int rpo = 0; rpo < m; rpo++)
-        {
-            int node = nodeByRpo[rpo];
-            if (node != root && node >= 0)
+            Column<Guid> meta = slab.GetColumn<Guid>(SectionType.DomMeta);
+            if (meta.Length != 1 || meta[0] != graph.Id)
             {
-                address[rpo] = gAddr[node];
-                own[rpo] = graph.SizeOf(node);
+                slab.Dispose();
+                return null;
             }
+            var result = new DominatorAnalyzer.DominatorResult(
+                slab.GetColumn<int>(SectionType.DomIdom).AsMemory(),
+                slab.GetColumn<ulong>(SectionType.DomRetained).AsMemory(),
+                slab.GetColumn<long>(SectionType.DomChildOffsets).AsMemory(),
+                slab.GetColumn<int>(SectionType.DomChildren).AsMemory());
+            if (result.Idom.Length != graph.NodeCount || result.Retained.Length != graph.NodeCount ||
+                result.ChildOffsets.Length != graph.NodeCount + 1 || result.ChildOffsets.Span[^1] != result.Children.Length)
+            {
+                throw new InvalidDataException("The dominator tree doesn't fit its graph.");
+            }
+            return new DominatorTree(graph, result, slab);
         }
-
-        return new DominatorAnalyzer.DominatorResult(address, own, retained, idom, nodeByRpo);
-    }
-
-    private static T[] ToArray<T>(Column<T> col) where T : unmanaged
-    {
-        var arr = new T[checked((int)col.Length)];
-        col.CopyTo(0, arr);
-        return arr;
+        catch
+        {
+            slab.Dispose();
+            throw;
+        }
     }
 }
