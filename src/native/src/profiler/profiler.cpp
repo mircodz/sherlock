@@ -758,7 +758,8 @@ HRESULT STDMETHODCALLTYPE Profiler::RuntimeThreadSuspended(ThreadID) { return S_
 HRESULT STDMETHODCALLTYPE Profiler::RuntimeThreadResumed(ThreadID) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::MovedReferences(ULONG, ObjectID[], ObjectID[], ULONG[]) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ObjectsAllocatedByClass(ULONG, ClassID[], ULONG[]) { return S_OK; }
-HRESULT STDMETHODCALLTYPE Profiler::ObjectReferences(ObjectID, ClassID, ULONG, ObjectID[]) { return S_OK; }
+// COR_PRF_MONITOR_GC walks the whole heap after every GC to call this; failing stops the walk.
+HRESULT STDMETHODCALLTYPE Profiler::ObjectReferences(ObjectID, ClassID, ULONG, ObjectID[]) { return E_FAIL; }
 HRESULT STDMETHODCALLTYPE Profiler::RootReferences(ULONG, ObjectID[]) { return S_OK; }
 HRESULT STDMETHODCALLTYPE Profiler::ExceptionThrown(ObjectID thrownObjectId) {
     if (triggers && triggers->wantsThrow() && aggregator) {
