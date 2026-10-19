@@ -7,36 +7,9 @@ using Microsoft.Diagnostics.Runtime;
 
 namespace Sherlock.Core.Analysis;
 
-/// <summary>Walks the managed heap and aggregates object statistics by type.</summary>
+/// <summary>Lists instances and finds duplicate strings.</summary>
 public sealed class HeapAnalyzer(Snapshot snapshot)
 {
-    /// <summary>
-    /// Groups live objects by type name with counts and total sizes, ordered by total size descending.
-    /// Mirrors SOS <c>dumpheap -stat</c>.
-    /// </summary>
-    public IReadOnlyList<HeapTypeStat> GetStatistics(CancellationToken cancellationToken = default)
-    {
-        var stats = new Dictionary<string, (long Count, ulong Size)>(StringComparer.Ordinal);
-
-        foreach (ClrObject obj in snapshot.Runtime.Heap.EnumerateObjects())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (obj.Type is null)
-            {
-                continue;
-            }
-
-            ref var entry = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(stats, obj.Type.Name ?? "<unknown>", out _);
-            entry.Count++;
-            entry.Size += obj.Size;
-        }
-
-        return stats
-            .Select(kvp => new HeapTypeStat(kvp.Key, kvp.Value.Count, kvp.Value.Size))
-            .OrderByDescending(s => s.TotalSize)
-            .ToList();
-    }
-
     /// <summary>
     /// Lists instances whose type name matches <paramref name="typeFilter"/>, returning the
     /// <paramref name="limit"/> largest by size descending, plus totals over all matches.

@@ -31,6 +31,7 @@ public sealed class Snapshot : IDisposable
     private readonly Once<IReadOnlyList<ThreadInfo>> _threads = new();
     private readonly Once<IReadOnlyList<ExceptionInfo>> _exceptions = new();
     private readonly Once<IReadOnlyList<HeapTypeStat>> _histogram = new();
+    private readonly Once<DumpHeap> _dumpHeap = new();
     private readonly Once<DominatorTree> _dominators = new();
     private readonly Once<FinalizerReport> _finalizers = new();
     private readonly Once<IReadOnlyList<Finding>> _diagnosis = new();
@@ -107,6 +108,13 @@ public sealed class Snapshot : IDisposable
     {
         cancellationToken.ThrowIfCancellationRequested();
         return _histogram.Get(() => BuildHistogram(cancellationToken), cancellationToken);
+    }
+
+    /// <summary>The heap's segments and types, with its bytes mapped from the dump, for parallel walks.</summary>
+    internal DumpHeap GetDumpHeap(CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return _dumpHeap.Get(() => DumpHeap.Open(DumpPath, Runtime), cancellationToken);
     }
 
     public DominatorTree GetDominatorTree(CancellationToken cancellationToken = default)
@@ -227,7 +235,7 @@ public sealed class Snapshot : IDisposable
     {
         if (TryGetCachedHeapGraph(cancellationToken) is not { } graph)
         {
-            return new HeapAnalyzer(this).GetStatistics(cancellationToken);
+            return HeapWalk.Histogram(GetDumpHeap(cancellationToken), cancellationToken);
         }
 
         var rows = graph.Histogram();
@@ -253,6 +261,7 @@ public sealed class Snapshot : IDisposable
         _slab?.Dispose();
         _dominators.Value?.Dispose();
         _heapGraph.Dispose();
+        _dumpHeap.Value?.Dispose();
         Runtime.Dispose();
         _dataTarget.Dispose();
     }

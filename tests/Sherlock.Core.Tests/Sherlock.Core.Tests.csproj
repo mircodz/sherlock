@@ -31,6 +31,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Sherlock.Core\Sherlock.Core.csproj" />
+    <ProjectReference Include="..\Sherlock.TestTarget\Sherlock.TestTarget.csproj" />
   </ItemGroup>
 
 </Project>
