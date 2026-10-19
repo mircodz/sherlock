@@ -2,8 +2,8 @@ using System.Runtime.InteropServices;
 
 // A small heap of known shapes for the heap walk and graph tests: a long chain of objects, strings, dictionaries,
 // arrays of structs holding references, a pinned buffer, a large array whose untouched tail a dump may leave out,
-// events with many subscribers, and caught exceptions kept alive. Prints "ready" once built, then waits for stdin to
-// close.
+// events with many subscribers, caught exceptions kept alive, and repeated strings. Prints "ready" once built, then
+// waits for stdin to close.
 
 var nodes = new Node[50_000];
 for (int i = 0; i < nodes.Length; i++)
@@ -42,6 +42,17 @@ foreach (string message in new[] { "first", "second" })
         errors.Add(ex);
     }
 }
+var copies = new List<string>();
+for (int i = 0; i < 3_000; i++)
+{
+    copies.Add(new string('x', 40));
+}
+for (int i = 0; i < 500; i++)
+{
+    copies.Add(string.Concat("city-", (i % 5).ToString()));
+}
+copies.Add(new string('y', 100_000));
+copies.Add(new string('y', 100_000));
 GC.Collect();
 
 Console.WriteLine("ready");
@@ -51,6 +62,7 @@ GC.KeepAlive(pairs);
 GC.KeepAlive(sparse);
 GC.KeepAlive(publishers);
 GC.KeepAlive(errors);
+GC.KeepAlive(copies);
 pinned.Free();
 
 sealed record Node(string Name, Node? Next, Dictionary<string, object>? Properties)

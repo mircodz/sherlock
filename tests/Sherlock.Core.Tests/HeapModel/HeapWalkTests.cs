@@ -91,6 +91,28 @@ public sealed class HeapWalkTests(TargetDump dump)
     }
 
     [Fact]
+    public void DuplicateStringsMatchGroupingEveryValue()
+    {
+        using Snapshot snapshot = dump.Open();
+        var groups = new Dictionary<string, (long Count, ulong Size, ulong First)>(StringComparer.Ordinal);
+        foreach (ClrObject obj in snapshot.Runtime.Heap.EnumerateObjects().Where(o => o.Type?.IsString == true))
+        {
+            string value = obj.AsString(int.MaxValue)!;
+            (long count, ulong size, ulong first) = groups.GetValueOrDefault(value, (0, obj.Size, ulong.MaxValue));
+            groups[value] = (count + 1, size, Math.Min(first, obj.Address));
+        }
+        var expected = groups.Where(g => g.Value.Count > 1)
+            .Select(g => (Value: g.Key.Length > 65536 ? g.Key[..65536] : g.Key, g.Value.Count, Total: (ulong)g.Value.Count * g.Value.Size, Wasted: (ulong)(g.Value.Count - 1) * g.Value.Size, g.Value.First))
+            .OrderByDescending(g => g.Wasted).ThenBy(g => g.First).Take(50).ToList();
+
+        IReadOnlyList<DuplicateString> found = snapshot.DuplicateStrings(50);
+
+        Assert.Contains(found, d => d.Value == new string('x', 40) && d.Count == 3_000);
+        Assert.Contains(found, d => d.Value.Length == 65536 && d.Count == 2);
+        Assert.Equal(expected.Select(g => (g.Value, g.Count, g.Total, g.Wasted)), found.Select(d => (d.Value, d.Count, d.TotalSize, d.WastedBytes)));
+    }
+
+    [Fact]
     public void CancelledWalkStops()
     {
         using Snapshot snapshot = dump.Open();
