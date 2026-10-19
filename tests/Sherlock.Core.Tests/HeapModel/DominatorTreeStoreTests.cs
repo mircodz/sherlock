@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using Sherlock.Core.Analysis;
 using Sherlock.Core.HeapModel;
 using Sherlock.Core.Tests.Common;
@@ -25,29 +26,34 @@ public sealed class DominatorTreeStoreTests : IDisposable
         return new HeapGraph(addresses, sizes, offsets, edges);
     }
 
+    private DominatorTree Compute(HeapGraph g)
+    {
+        using InboundIndex inbound = InboundIndex.Open(g, _tmp.File(), CancellationToken.None);
+        return DominatorAnalyzer.Compute(g, inbound, _path, CancellationToken.None);
+    }
+
     [Fact]
-    public void RoundTrips_ResultIdenticalToCompute()
+    public void ReopensTheTreeItWrote()
     {
         HeapGraph g = DiamondGraph();
-        DominatorAnalyzer.DominatorResult computed = DominatorAnalyzer.Compute(g);
+        using DominatorTree computed = Compute(g);
 
-        DominatorTreeStore.Save(_path, computed, g.Id);
         using DominatorTree loaded = DominatorTreeStore.Load(_path, g)!;
-        var fresh = new DominatorTree(g, computed);
 
-        Assert.Equal(fresh.ObjectCount, loaded.ObjectCount);
-        Assert.Equal(fresh.TotalReachableBytes, loaded.TotalReachableBytes);
-        Assert.Equal(fresh.TopDominators(10), loaded.TopDominators(10));
-        Assert.Equal(fresh.ImmediateChildren(0x1000, 10), loaded.ImmediateChildren(0x1000, 10));
+        Assert.Equal(computed.ObjectCount, loaded.ObjectCount);
+        Assert.Equal(computed.TotalReachableBytes, loaded.TotalReachableBytes);
+        Assert.Equal(computed.TopDominators(10), loaded.TopDominators(10));
+        Assert.Equal(computed.ImmediateChildren(0x1000, 10), loaded.ImmediateChildren(0x1000, 10));
     }
 
     [Fact]
     public void Load_RejectsATreeOfAnotherGraph()
     {
-        HeapGraph g = DiamondGraph();
-        DominatorTreeStore.Save(_path, DominatorAnalyzer.Compute(g), DiamondGraph().Id);
+        using (Compute(DiamondGraph()))
+        {
+        }
 
-        Assert.Null(DominatorTreeStore.Load(_path, g));
+        Assert.Null(DominatorTreeStore.Load(_path, DiamondGraph()));
     }
 
     [Fact]

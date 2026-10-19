@@ -25,6 +25,8 @@ public sealed class DominatorTree : IDisposable
     /// <summary>Number of reachable objects in the tree (excluding the synthetic root).</summary>
     public int ObjectCount => _result.Children.Length;
 
+    internal DominatorAnalyzer.DominatorResult Result => _result;
+
     /// <summary>Total retained memory reachable from all GC roots.</summary>
     public ulong TotalReachableBytes => _result.Retained.Span[_graph.Root];
 

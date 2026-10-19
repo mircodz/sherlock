@@ -8,6 +8,7 @@ public enum SlabKind : ushort
     Profile = 1,
     Graph = 2,
     Dominators = 3,
+    Inbound = 4,
 }
 
 /// <summary>

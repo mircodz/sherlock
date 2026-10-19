@@ -58,6 +58,13 @@ jobs:
       - name: Build (Release)
         run: dotnet build Sherlock.slnx -c Release --no-restore --warnaserror
 
+      # createdump needs to debug the test target, which macOS asks the user to allow; a runner can't answer.
+      - name: Allow debugging (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          sudo DevToolsSecurity -enable
+          sudo security authorizationdb write system.privilege.taskport allow
+
       - name: Test (Release)
         run: dotnet test --project tests/Sherlock.Core.Tests/Sherlock.Core.Tests.csproj --configuration Release --no-build --no-restore
 

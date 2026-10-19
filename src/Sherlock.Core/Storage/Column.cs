@@ -27,6 +27,9 @@ public sealed unsafe class Column<T> where T : unmanaged
 
     private T* Items => (T*)(_file!.Pointer + _offset);
 
+    /// <summary>The first record, valid while the file is open; null for <see cref="Empty"/>.</summary>
+    internal T* Pointer => _file is null ? null : Items;
+
     public T this[long i] => (ulong)i < (ulong)Length ? Items[i] : throw new ArgumentOutOfRangeException(nameof(i));
 
     /// <summary><paramref name="length"/> records at <paramref name="start"/>, without copying.</summary>

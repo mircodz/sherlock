@@ -3,10 +3,12 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using Microsoft.Diagnostics.Runtime;
+using Sherlock.Core.HeapModel;
 
 namespace Sherlock.Core.Analysis;
 
-/// <summary>Finds managed exception objects, both on threads and loose on the heap.</summary>
+/// <summary>Finds managed exception objects, both on threads and loose on the heap. A parallel walk over the mapped dump
+/// finds them, and ClrMD reads only those.</summary>
 public sealed class ExceptionAnalyzer(Snapshot snapshot)
 {
     public IReadOnlyList<ExceptionInfo> FindExceptions(CancellationToken cancellationToken = default)
@@ -22,24 +24,20 @@ public sealed class ExceptionAnalyzer(Snapshot snapshot)
             }
         }
 
-        foreach (ClrObject obj in snapshot.Runtime.Heap.EnumerateObjects())
+        ClrHeap heap = snapshot.Runtime.Heap;
+        foreach (ulong address in HeapWalk.Select(snapshot.GetDumpHeap(cancellationToken), type => type.IsException, static (_, _, _) => true, cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!obj.IsException || byAddress.ContainsKey(obj.Address))
+            if (!byAddress.ContainsKey(address) && heap.GetObject(address).AsException() is { } ex)
             {
-                continue;
-            }
-
-            ClrException? ex = obj.AsException();
-            if (ex is not null)
-            {
-                byAddress[obj.Address] = Describe(ex, threadId: null);
+                byAddress[address] = Describe(ex, threadId: null);
             }
         }
 
         return byAddress.Values
             .OrderByDescending(e => e.ThreadId.HasValue)
             .ThenBy(e => e.TypeName, StringComparer.Ordinal)
+            .ThenBy(e => e.Address)
             .ToList();
     }
 

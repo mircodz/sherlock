@@ -33,4 +33,9 @@ public enum SectionType : uint
     DomRetained = 34,     // ulong per node: retained bytes
     DomChildOffsets = 35, // long per node, then the total: each node's first entry in DomChildren
     DomChildren = 36,     // int per reachable object: its dominator's children, largest retained first
+
+    // Inbound references, by graph node: the graph's edges reversed.
+    InboundMeta = 48,     // Guid: the id of the graph the index was built from
+    InboundOffsets = 49,  // long per node, then the total: each node's first entry in InboundSources
+    InboundSources = 50,  // int per reference: each node's referrers, ascending; the synthetic root for rooted objects
 }

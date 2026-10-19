@@ -137,6 +137,7 @@ public sealed class SlabFile : IDisposable
         SlabKind.Profile => "an allocation profile",
         SlabKind.Graph => "a heap graph",
         SlabKind.Dominators => "a dominator tree",
+        SlabKind.Inbound => "a reference index",
         _ => $"an unknown kind of data ({(ushort)kind})",
     };
 }

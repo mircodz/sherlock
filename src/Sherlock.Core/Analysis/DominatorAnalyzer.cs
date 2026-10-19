@@ -1,12 +1,19 @@
 using System;
-using System.Collections.Generic;
+using System.Buffers;
+using System.IO;
 using System.Threading;
 using Sherlock.Core.HeapModel;
+using Sherlock.Core.Storage;
 
 namespace Sherlock.Core.Analysis;
 
-/// <summary>Computes and caches dominators over a persisted heap graph.</summary>
-public sealed class DominatorAnalyzer(Snapshot snapshot)
+/// <summary>
+/// Computes and caches dominators over a persisted heap graph. Lengauer–Tarjan semidominators with path compression
+/// give each object's semidominator in one backwards pass over its referrers; each immediate dominator is then the
+/// nearest common ancestor of the object's DFS parent and its semidominator (semi-NCA). Working arrays, indexed by
+/// DFS preorder number, are scratch files beside the result, so memory stays bounded however large the heap.
+/// </summary>
+public sealed unsafe class DominatorAnalyzer(Snapshot snapshot)
 {
     /// <summary>
     /// Dominator columns by graph node: object ids, then the synthetic root at <see cref="HeapGraph.Root"/>.
@@ -19,13 +26,20 @@ public sealed class DominatorAnalyzer(Snapshot snapshot)
     public DominatorTree Build(CancellationToken cancellationToken = default)
     {
         HeapGraph graph = snapshot.GetHeapGraph(cancellationToken);
-        string path = System.IO.Path.Combine(snapshot.CacheDirectory, "dominators.slab");
-        return TryLoad(path, graph) ?? ComputeAndPersist(graph, path, cancellationToken);
+        string path = Path.Combine(snapshot.CacheDirectory, "dominators.slab");
+        return TryLoad(path, graph) ?? Compute(graph, snapshot.GetInbound(cancellationToken), path, cancellationToken);
+    }
+
+    /// <summary>Writes the dominator tree of <paramref name="graph"/> to <paramref name="path"/> and opens it.</summary>
+    internal static DominatorTree Compute(HeapGraph graph, InboundIndex inbound, string path, CancellationToken cancellationToken)
+    {
+        Write(graph, inbound, path, cancellationToken);
+        return DominatorTreeStore.Load(path, graph) ?? throw new InvalidDataException($"The dominator tree written to '{path}' doesn't match its graph.");
     }
 
     private static DominatorTree? TryLoad(string path, HeapGraph graph)
     {
-        if (!System.IO.File.Exists(path))
+        if (!File.Exists(path))
         {
             return null;
         }
@@ -33,210 +47,265 @@ public sealed class DominatorAnalyzer(Snapshot snapshot)
         {
             return DominatorTreeStore.Load(path, graph);
         }
-        catch
+        catch (InvalidDataException)
         {
-            return null;
+            return null; // recomputed over it
         }
     }
 
-    // Reads the saved tree back, so the computed arrays can be released.
-    private static DominatorTree ComputeAndPersist(HeapGraph graph, string path, CancellationToken cancellationToken)
+    private static void Write(HeapGraph graph, InboundIndex inbound, string path, CancellationToken cancellationToken)
     {
-        DominatorResult r = Compute(graph, cancellationToken);
-        try
+        string scratch = Path.GetDirectoryName(Path.GetFullPath(path))!;
+        int nodes = graph.NodeCount;
+        using var number = new ScratchArray<int>(scratch, nodes);  // node -> preorder number + 1; 0 when unreachable
+        using var vertex = new ScratchArray<int>(scratch, nodes);  // preorder number -> node
+        using var parent = new ScratchArray<int>(scratch, nodes);  // preorder number -> its DFS parent's
+        int reachable;
+        using (var frames = new ScratchArray<Frame>(scratch, nodes))
         {
-            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
-            DominatorTreeStore.Save(path, r, graph.Id);
+            reachable = Preorder(graph, number.Pointer, vertex.Pointer, parent.Pointer, frames.Pointer, cancellationToken);
         }
-        catch
+
+        using var semi = new ScratchArray<int>(scratch, reachable);
+        using (var ancestor = new ScratchArray<int>(scratch, reachable))
+        using (var label = new ScratchArray<int>(scratch, reachable))
+        using (var trail = new ScratchArray<int>(scratch, reachable))
         {
-            // Analysis remains usable when the dump directory is read-only.
-            return new DominatorTree(graph, r);
+            Semidominators(inbound, reachable, number.Pointer, vertex.Pointer, parent.Pointer, semi.Pointer,
+                ancestor.Pointer, label.Pointer, trail.Pointer, cancellationToken);
         }
-        return TryLoad(path, graph) ?? new DominatorTree(graph, r);
+        using var idom = new ScratchArray<int>(scratch, reachable);
+        ImmediateDominators(reachable, parent.Pointer, semi.Pointer, idom.Pointer, cancellationToken);
+
+        using var retained = new ScratchArray<ulong>(scratch, reachable);
+        Retained(graph, reachable, vertex.Pointer, idom.Pointer, retained.Pointer, cancellationToken);
+        WriteTree(graph, path, scratch, reachable, vertex.Pointer, idom.Pointer, retained.Pointer, cancellationToken);
     }
 
-    /// <summary>Computes immediate dominators and retained sizes without ClrMD.</summary>
-    public static DominatorResult Compute(HeapGraph graph, CancellationToken cancellationToken = default)
+    // A DFS frame: the node and the next of its edges to follow.
+    private record struct Frame(int Node, long Next);
+
+    // Numbers the nodes reachable from the root in DFS preorder, iteratively; returns how many there are.
+    private static int Preorder(HeapGraph graph, int* number, int* vertex, int* parent, Frame* frames, CancellationToken cancellationToken)
     {
-        int root = graph.Root;
-        int nodeCount = graph.NodeCount;
-
-        int[] rpoNumber = BuildReversePostorder(graph, root, nodeCount, cancellationToken, out int[] nodeByRpo);
-        int m = nodeByRpo.Length;
-
-        // Reverse-CSR in RPO space: count predecessors, prefix-sum offsets, then scatter edges.
-        var predOffsets = new int[m + 1];
-        long reachableEdges = 0;
-        for (int node = 0; node < nodeCount; node++)
+        ReadOnlySpan<long> rows = graph.Offsets.Span;
+        int* edges = graph.Edges.Pin(out MemoryHandle pin);
+        using (pin)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (rpoNumber[node] < 0)
+            int root = graph.Root;
+            number[root] = 1;
+            vertex[0] = root;
+            frames[0] = new Frame(root, rows[root]);
+            int count = 1;
+            for (int depth = 1; depth > 0;)
             {
-                continue;
-            }
-
-            foreach (int v in graph.Successors(node))
-            {
-                int vRpo = rpoNumber[v];
-                if (vRpo >= 0) { predOffsets[vRpo + 1]++; reachableEdges++; }
-            }
-        }
-        // Predecessors occupy one int[]; reject overflow even though graph edges are long-indexed.
-        if (reachableEdges > int.MaxValue)
-        {
-            throw new NotSupportedException(
-                $"{reachableEdges:N0} reachable edges exceed the 2.1B dominator limit; chunked predecessor storage is not yet implemented.");
-        }
-        for (int i = 0; i < m; i++)
-            predOffsets[i + 1] += predOffsets[i];
-        var predEdges = new int[predOffsets[m]];
-        var cursor = (int[])predOffsets.Clone();
-        for (int node = 0; node < nodeCount; node++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            int uRpo = rpoNumber[node];
-            if (uRpo < 0)
-            {
-                continue;
-            }
-
-            foreach (int v in graph.Successors(node))
-            {
-                int vRpo = rpoNumber[v];
-                if (vRpo >= 0)
+                ref Frame top = ref frames[depth - 1];
+                long end = rows[top.Node + 1];
+                int next = -1;
+                while (top.Next < end)
                 {
-                    predEdges[cursor[vRpo]++] = uRpo;
-                }
-            }
-        }
-
-        // Iterative dominators (CHK). idom in RPO space; root dominates itself.
-        var idom = new int[m];
-        Array.Fill(idom, -1);
-        idom[0] = 0;
-        bool changed = true;
-        while (changed)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            changed = false;
-            for (int b = 1; b < m; b++)
-            {
-                int newIdom = -1;
-                for (int e = predOffsets[b]; e < predOffsets[b + 1]; e++)
-                {
-                    int p = predEdges[e];
-                    if (idom[p] == -1)
+                    int target = edges[top.Next++];
+                    if (number[target] == 0)
                     {
-                        continue;
+                        next = target;
+                        break;
                     }
-
-                    newIdom = newIdom == -1 ? p : Intersect(p, newIdom, idom);
                 }
-                if (newIdom != -1 && idom[b] != newIdom) { idom[b] = newIdom; changed = true; }
+                if (next < 0)
+                {
+                    depth--;
+                    continue;
+                }
+                if ((count & 0xffff) == 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+                number[next] = count + 1;
+                vertex[count] = next;
+                parent[count] = number[top.Node] - 1;
+                count++;
+                frames[depth++] = new Frame(next, rows[next]);
             }
+            return count;
         }
+    }
 
-        // Descendants have higher RPO, so reverse accumulation sums children before their dominator.
+    // Each node's semidominator: the smallest preorder number from which a path reaches it through larger numbers
+    // only. Nodes are linked into a forest in decreasing order; label holds the smallest semidominator on each node's
+    // compressed path up the forest, so a referrer numbered after the node contributes in near-constant time.
+    private static void Semidominators(InboundIndex inbound, int reachable, int* number, int* vertex, int* parent, int* semi,
+        int* ancestor, int* label, int* trail, CancellationToken cancellationToken)
+    {
+        new Span<int>(ancestor, reachable).Fill(-1);
+        for (int i = reachable - 1; i > 0; i--)
+        {
+            if ((i & 0xffff) == 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            int s = parent[i];
+            foreach (int referrer in inbound.Of(vertex[i]))
+            {
+                int j = number[referrer] - 1;
+                if (j < 0 || j == i)
+                {
+                    continue; // an unreachable referrer, or the node itself
+                }
+                int candidate = j < i ? j : Eval(j, ancestor, label, trail);
+                if (candidate < s)
+                {
+                    s = candidate;
+                    if (s == 0)
+                    {
+                        break; // the root: nothing is smaller
+                    }
+                }
+            }
+            semi[i] = s;
+            label[i] = s;
+            ancestor[i] = parent[i];
+        }
+    }
+
+    // The smallest semidominator on the forest path from v up to, not including, its tree's root; compresses the path.
+    private static int Eval(int v, int* ancestor, int* label, int* trail)
+    {
+        int depth = 0;
+        for (int x = v; ancestor[ancestor[x]] >= 0; x = ancestor[x])
+        {
+            trail[depth++] = x;
+        }
+        while (depth > 0)
+        {
+            int x = trail[--depth];
+            int up = ancestor[x];
+            if (label[up] < label[x])
+            {
+                label[x] = label[up];
+            }
+            ancestor[x] = ancestor[up];
+        }
+        return label[v];
+    }
+
+    // The immediate dominator is the nearest common ancestor, in the dominator tree built so far, of the DFS parent and
+    // the semidominator: climb from the parent until reaching a number no larger than the semidominator.
+    private static void ImmediateDominators(int reachable, int* parent, int* semi, int* idom, CancellationToken cancellationToken)
+    {
+        idom[0] = 0;
+        for (int i = 1; i < reachable; i++)
+        {
+            if ((i & 0xffff) == 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            int d = parent[i];
+            while (d > semi[i])
+            {
+                d = idom[d];
+            }
+            idom[i] = d;
+        }
+    }
+
+    // Dominators precede what they dominate in preorder, so one backwards pass adds each node into its dominator.
+    private static void Retained(HeapGraph graph, int reachable, int* vertex, int* idom, ulong* retained, CancellationToken cancellationToken)
+    {
         ReadOnlySpan<uint> sizes = graph.Sizes.Span;
-        var retainedByRpo = new ulong[m];
-        for (int rpo = 1; rpo < m; rpo++)
+        for (int i = 1; i < reachable; i++)
         {
-            int node = nodeByRpo[rpo];
-            retainedByRpo[rpo] = sizes[node] != uint.MaxValue ? sizes[node] : graph.SizeOf(node);
+            int node = vertex[i];
+            retained[i] = sizes[node] != uint.MaxValue ? sizes[node] : graph.SizeOf(node);
         }
-        for (int rpo = m - 1; rpo >= 1; rpo--)
-            retainedByRpo[idom[rpo]] += retainedByRpo[rpo];
-
-        return ByNode(nodeCount, nodeByRpo, idom, retainedByRpo, cancellationToken);
+        for (int i = reachable - 1; i > 0; i--)
+        {
+            if ((i & 0xffff) == 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            retained[idom[i]] += retained[i];
+        }
     }
 
-    // Moves the columns from reverse postorder to node ids and lists each node's children, largest first.
-    private static DominatorResult ByNode(int nodeCount, int[] nodeByRpo, int[] idomByRpo, ulong[] retainedByRpo, CancellationToken cancellationToken)
+    // The columns by node id, each node's children listed largest first, written straight into the slab.
+    private static void WriteTree(HeapGraph graph, string path, string scratch, int reachable, int* vertex, int* idom, ulong* retained,
+        CancellationToken cancellationToken)
     {
-        int m = nodeByRpo.Length;
-        var idom = new int[nodeCount];
-        var retained = new ulong[nodeCount];
-        Array.Fill(idom, -1);
-        var childOffsets = new long[nodeCount + 1];
-        for (int rpo = 0; rpo < m; rpo++)
-        {
-            int node = nodeByRpo[rpo];
-            idom[node] = nodeByRpo[idomByRpo[rpo]];
-            retained[node] = retainedByRpo[rpo];
-            if (rpo > 0)
-            {
-                childOffsets[idom[node] + 1]++;
-            }
-        }
-        for (int node = 0; node < nodeCount; node++)
-            childOffsets[node + 1] += childOffsets[node];
+        int nodes = graph.NodeCount;
+        using var slab = new SlabBuilder(path, sectionCount: 5);
+        long metaAt = slab.Place(SectionType.DomMeta, sizeof(Guid), 1);
+        long idomAt = slab.Place(SectionType.DomIdom, sizeof(int), nodes);
+        long retainedAt = slab.Place(SectionType.DomRetained, sizeof(ulong), nodes);
+        long offsetsAt = slab.Place(SectionType.DomChildOffsets, sizeof(long), nodes + 1L);
+        long childrenAt = slab.Place(SectionType.DomChildren, sizeof(int), reachable - 1L);
+        byte* file = slab.Map();
+        *(Guid*)(file + metaAt) = graph.Id;
+        int* dominatorOf = (int*)(file + idomAt);
+        ulong* retainedOf = (ulong*)(file + retainedAt);
+        long* offsets = (long*)(file + offsetsAt);
+        int* children = (int*)(file + childrenAt);
 
-        var children = new int[m - 1];
-        var cursor = (long[])childOffsets.Clone();
-        for (int rpo = 1; rpo < m; rpo++)
+        new Span<int>(dominatorOf, nodes).Fill(-1);
+        for (int i = 0; i < reachable; i++)
         {
-            int node = nodeByRpo[rpo];
-            children[cursor[idom[node]]++] = node;
-        }
-        Comparison<int> largestFirst = (a, b) => retained[b] != retained[a] ? retained[b].CompareTo(retained[a]) : a.CompareTo(b);
-        for (int node = 0; node < nodeCount; node++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            Span<int> mine = children.AsSpan((int)childOffsets[node], (int)(childOffsets[node + 1] - childOffsets[node]));
-            if (mine.Length > 1)
+            int node = vertex[i];
+            int dominator = vertex[idom[i]];
+            dominatorOf[node] = dominator;
+            retainedOf[node] = retained[i];
+            if (i > 0)
             {
-                mine.Sort(largestFirst);
+                offsets[dominator + 1]++;
             }
         }
-        return new DominatorResult(idom, retained, childOffsets, children);
+        for (int node = 0; node < nodes; node++)
+        {
+            offsets[node + 1] += offsets[node];
+        }
+        // Each node's start is its cursor while placing, ending at the next node's start; shifting restores them.
+        for (int i = 1; i < reachable; i++)
+        {
+            children[offsets[vertex[idom[i]]]++] = vertex[i];
+        }
+        Buffer.MemoryCopy(offsets, offsets + 1, (long)nodes * sizeof(long), (long)nodes * sizeof(long));
+        offsets[0] = 0;
+
+        // Each row is sorted with its retained sizes gathered beside the ids, so comparisons read memory in order.
+        long widest = 0;
+        for (int node = 0; node < nodes; node++)
+        {
+            widest = Math.Max(widest, offsets[node + 1] - offsets[node]);
+        }
+        using var keyed = new ScratchArray<Keyed>(scratch, widest);
+        for (int node = 0; node < nodes; node++)
+        {
+            if ((node & 0xffff) == 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            long start = offsets[node];
+            int count = (int)(offsets[node + 1] - start);
+            if (count < 2)
+            {
+                continue;
+            }
+            var row = new Span<Keyed>(keyed.Pointer, count);
+            for (int k = 0; k < count; k++)
+            {
+                int child = children[start + k];
+                row[k] = new Keyed(retainedOf[child], child);
+            }
+            row.Sort();
+            for (int k = 0; k < count; k++)
+            {
+                children[start + k] = row[k].Node;
+            }
+        }
+        slab.Commit(SlabKind.Dominators, DominatorTreeStore.Version);
     }
 
-    private static int[] BuildReversePostorder(HeapGraph graph, int root, int nodeCount, CancellationToken cancellationToken, out int[] nodeByRpo)
+    // Largest retained size first, then lowest id.
+    private readonly record struct Keyed(ulong Retained, int Node) : IComparable<Keyed>
     {
-        var rpoNumber = new int[nodeCount];
-        Array.Fill(rpoNumber, -1);
-
-        var postorder = new List<int>();
-        var visited = new bool[nodeCount];
-        var stack = new Stack<(int Node, int Index)>();
-        visited[root] = true;
-        stack.Push((root, 0));
-        while (stack.Count > 0)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            (int node, int index) = stack.Pop();
-            ReadOnlySpan<int> succ = graph.Successors(node);
-            if (index < succ.Length)
-            {
-                stack.Push((node, index + 1));
-                int w = succ[index];
-                if (!visited[w]) { visited[w] = true; stack.Push((w, 0)); }
-            }
-            else
-            {
-                postorder.Add(node);
-            }
-        }
-
-        int m = postorder.Count;
-        nodeByRpo = new int[m];
-        for (int k = 0; k < m; k++)
-        {
-            int node = postorder[m - 1 - k];
-            rpoNumber[node] = k;
-            nodeByRpo[k] = node;
-        }
-        return rpoNumber;
-    }
-
-    private static int Intersect(int a, int b, int[] idom)
-    {
-        while (a != b)
-        {
-            while (a > b) a = idom[a];
-            while (b > a) b = idom[b];
-        }
-        return a;
+        public int CompareTo(Keyed other) => Retained != other.Retained ? other.Retained.CompareTo(Retained) : Node.CompareTo(other.Node);
     }
 }

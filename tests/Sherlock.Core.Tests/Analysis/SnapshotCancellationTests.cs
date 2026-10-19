@@ -7,6 +7,7 @@ using Sherlock.Core.Analysis;
 using Sherlock.Core.HeapModel;
 using Sherlock.Core.Diagnostics;
 using Xunit;
+using Sherlock.Core.Tests.Common;
 
 namespace Sherlock.Core.Tests.Analysis;
 
@@ -33,7 +34,7 @@ public sealed class SnapshotCancellationTests
     public void CachedAnalysisRejectsCancellationAndPreservesCachedResults()
     {
         var empty = new HeapGraph(Array.Empty<ulong>(), Array.Empty<uint>(), new int[2], []);
-        var dominators = new DominatorTree(empty, DominatorAnalyzer.Compute(empty));
+        DominatorTree dominators = GraphAnalysis.Dominators(empty);
         ExceptionInfo[] exceptions = [new(0x1000, "App.Error", "message", 0, null)];
         var finalizers = new FinalizerReport(0, 0, []);
         Finding[] diagnosis = [new(FindingSeverity.Info, "growth", "title", "detail")];

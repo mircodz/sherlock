@@ -3,6 +3,7 @@
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsPackable>false</IsPackable>
     <NoWarn>xUnit1051</NoWarn>
   </PropertyGroup>
@@ -30,6 +31,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Sherlock.Core\Sherlock.Core.csproj" />
+    <ProjectReference Include="..\Sherlock.TestTarget\Sherlock.TestTarget.csproj" />
   </ItemGroup>
 
 </Project>

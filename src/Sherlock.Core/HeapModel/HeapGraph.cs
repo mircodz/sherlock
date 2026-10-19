@@ -45,8 +45,6 @@ public sealed class HeapGraph : IDisposable
     // Keeps mmap-backed columns alive.
     private readonly IDisposable? _backing;
 
-    private readonly Once<AddressIndex> _index = new();
-    private readonly Once<Predecessors> _predecessors = new();
     private bool _disposed;
 
     /// <summary>Creates an in-memory graph whose roots are the synthetic root's successors. Without type columns,
@@ -163,18 +161,14 @@ public sealed class HeapGraph : IDisposable
         return Edges.Slice(start, (int)(offsets[node + 1] - start)); // out-degree always fits int
     }
 
-    /// <summary>Returns the object id for an address, or -1.</summary>
+    /// <summary>Returns the object id for an address, or -1. A binary search over the address column, which stays mapped;
+    /// for one-off lookups such as the target of a root search.</summary>
     public int IndexOf(ulong address)
     {
         ThrowIfDisposed();
-        return _index.Get(() => new AddressIndex(Addresses)).IndexOf(address);
-    }
-
-    /// <summary>Who references each object, built on first use and kept with the graph.</summary>
-    internal Predecessors GetPredecessors(CancellationToken cancellationToken = default)
-    {
-        ThrowIfDisposed();
-        return _predecessors.Get(() => Predecessors.Build(this, cancellationToken), cancellationToken);
+        ReadOnlySpan<ulong> addresses = Addresses.Span;
+        int index = addresses.BinarySearch(address);
+        return index >= 0 ? index : -1;
     }
 
     public string TypeNameOf(int objectId)
