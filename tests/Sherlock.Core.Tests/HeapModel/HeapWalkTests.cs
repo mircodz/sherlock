@@ -32,6 +32,24 @@ public sealed class HeapWalkTests(TargetDump dump)
             actual.OrderBy(r => r.TypeName, StringComparer.Ordinal).Select(r => (r.TypeName, r.Count, r.TotalSize)));
     }
 
+    [Theory]
+    [InlineData("string", false)]
+    [InlineData("Node", true)]
+    public void InstancesMatchClrMDsWalk(string filter, bool exact)
+    {
+        using Snapshot snapshot = dump.Open();
+        Func<string, bool> matches = name => exact ? name == filter : name.Contains(filter, StringComparison.OrdinalIgnoreCase);
+        ClrObject[] matching = [.. snapshot.Runtime.Heap.EnumerateObjects().Where(o => !o.IsFree && matches(o.Type!.Name ?? "<unknown>"))];
+
+        InstanceListing listing = HeapWalk.Instances(snapshot.GetDumpHeap(), matches, 25, CancellationToken.None);
+
+        Assert.True(matching.Length > 25, "the filter should match more objects than the limit");
+        Assert.Equal(matching.Length, listing.TotalMatched);
+        Assert.Equal(matching.Aggregate(0UL, (sum, o) => sum + o.Size), listing.TotalMatchedSize);
+        Assert.Equal(matching.OrderByDescending(o => o.Size).ThenBy(o => o.Address).Take(25).Select(o => (o.Address, o.Size, o.Type!.Name)),
+            listing.Instances.Select(i => (i.Address, i.Size, (string?)i.TypeName)));
+    }
+
     [Fact]
     public void CancelledWalkStops()
     {

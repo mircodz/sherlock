@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Threading;
 using Microsoft.Diagnostics.Runtime;
+using Sherlock.Core.HeapModel;
 
 namespace Sherlock.Core.Analysis;
 
@@ -14,74 +15,27 @@ public sealed class HeapAnalyzer(Snapshot snapshot)
     /// Lists instances whose type name matches <paramref name="typeFilter"/>, returning the
     /// <paramref name="limit"/> largest by size descending, plus totals over all matches.
     /// </summary>
-    /// <remarks>Uses cached type columns when available, with bounded top-K selection on either path.</remarks>
+    /// <remarks>Uses the cached graph's type columns when there are any; otherwise walks the heap in parallel. Either way
+    /// memory grows with the limit, not the matches.</remarks>
     /// <param name="exact">Match the full type name exactly instead of any name containing <paramref name="typeFilter"/>.</param>
     public InstanceListing ListInstances(string typeFilter, int limit = 20, CancellationToken cancellationToken = default, bool exact = false)
     {
         ArgumentException.ThrowIfNullOrEmpty(typeFilter);
         ArgumentOutOfRangeException.ThrowIfNegative(limit);
         cancellationToken.ThrowIfCancellationRequested();
-        if (snapshot.TryGetCachedHeapGraph(cancellationToken)?.ListInstances(typeFilter, limit, cancellationToken, exact) is { } listing)
-        {
-            var selected = new ObjectInstance[listing.Instances.Count];
-            for (int i = 0; i < selected.Length; i++)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                ObjectInstance instance = listing.Instances[i];
-                ClrObject obj = snapshot.Runtime.Heap.GetObject(instance.Address);
-                selected[i] = instance with { Preview = Preview(obj, obj.Type) };
-            }
-            return listing with { Instances = selected };
-        }
+        InstanceListing listing = snapshot.TryGetCachedHeapGraph(cancellationToken)?.ListInstances(typeFilter, limit, cancellationToken, exact)
+            ?? HeapWalk.Instances(snapshot.GetDumpHeap(cancellationToken),
+                name => exact ? name == typeFilter : name.Contains(typeFilter, StringComparison.OrdinalIgnoreCase), limit, cancellationToken);
 
-        // Keep the smallest selected instance at the front for eviction.
-        var top = new PriorityQueue<ObjectInstance, ulong>(limit);
-        long totalMatched = 0;
-        ulong totalSize = 0;
-
-        foreach (ClrObject obj in snapshot.Runtime.Heap.EnumerateObjects())
+        var selected = new ObjectInstance[listing.Instances.Count];
+        for (int i = 0; i < selected.Length; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-
-            ClrType? type = obj.Type;
-            if (type is null || obj.IsFree)
-            {
-                continue;
-            }
-
-            string name = type.Name ?? "<unknown>";
-            if (exact ? name != typeFilter : !name.Contains(typeFilter, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            totalMatched++;
-            totalSize += obj.Size;
-
-            if (limit <= 0)
-            {
-                continue;
-            }
-
-            if (top.Count < limit)
-            {
-                top.Enqueue(BuildInstance(obj, type, name), obj.Size);
-            }
-            else if (obj.Size > top.Peek().Size)
-            {
-                top.EnqueueDequeue(BuildInstance(obj, type, name), obj.Size);
-            }
+            ObjectInstance instance = listing.Instances[i];
+            ClrObject obj = snapshot.Runtime.Heap.GetObject(instance.Address);
+            selected[i] = instance with { Preview = Preview(obj, obj.Type) };
         }
-
-        var instances = new List<ObjectInstance>(top.Count);
-        while (top.Count > 0)
-        {
-            instances.Add(top.Dequeue());
-        }
-
-        instances.Reverse();
-
-        return new InstanceListing(instances, totalMatched, totalSize);
+        return listing with { Instances = selected };
     }
 
     /// <summary>
@@ -121,9 +75,6 @@ public sealed class HeapAnalyzer(Snapshot snapshot)
             .Take(limit)
             .ToList();
     }
-
-    private static ObjectInstance BuildInstance(ClrObject obj, ClrType type, string name) =>
-        new(obj.Address, name, obj.Size, Preview(obj, type));
 
     private const int PreviewLength = 256;
 

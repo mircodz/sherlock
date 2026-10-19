@@ -189,6 +189,30 @@ internal static unsafe class HeapWalk
         return [.. rows.Select(r => new HeapTypeStat(r.Key, r.Value.Count, r.Value.Bytes)).OrderByDescending(s => s.TotalSize)];
     }
 
+    /// <summary>The <paramref name="limit"/> largest objects whose type name <paramref name="matches"/>, largest first, with totals
+    /// over every match; previews are left to the caller. Each worker decides once per type and keeps its own top
+    /// objects, so memory grows with types and the limit, not objects. Ties keep the lower address.</summary>
+    public static InstanceListing Instances(DumpHeap heap, Func<string, bool> matches, int limit, CancellationToken cancellationToken)
+    {
+        HeapSegment[] largestFirst = [.. heap.Segments.OrderByDescending(s => s.Bytes)];
+        var parts = new InstanceSearch[Environment.ProcessorCount];
+        int next = -1;
+        Run(parts.Length, (w, stop) =>
+        {
+            var sink = new InstanceSink(parts[w] = new InstanceSearch(matches, limit));
+            var types = new TypeCache(heap.Types);
+            using var cursor = new DumpCursor(heap.Memory);
+            for (int i; (i = Interlocked.Increment(ref next)) < largestFirst.Length;)
+            {
+                Walk(largestFirst[i], cursor, largestFirst[i].Start, ulong.MaxValue, types, ref sink, stop);
+            }
+        }, cancellationToken);
+
+        ObjectInstance[] largest = [.. parts.SelectMany(p => p.Top.UnorderedItems.Select(item => item.Element))
+            .OrderByDescending(o => o.Size).ThenBy(o => o.Address).Take(limit)];
+        return new InstanceListing(largest, parts.Sum(p => p.Matched), parts.Aggregate(0UL, (sum, p) => sum + p.MatchedBytes));
+    }
+
     public static int LowerBound(ulong[] sorted, ulong value)
     {
         int lo = 0, hi = sorted.Length;
@@ -234,6 +258,58 @@ internal static unsafe class HeapWalk
         {
             histogram.FreeCount++;
             histogram.FreeBytes += size;
+        }
+    }
+
+    /// <summary>One worker's matches: a min-heap of the largest so far, evicting the smallest (and of equal sizes, the
+    /// higher address) first.</summary>
+    private sealed class InstanceSearch(Func<string, bool> matches, int limit)
+    {
+        private sbyte[] _decided = new sbyte[256]; // per type index: 1 matches, -1 doesn't, 0 not asked yet
+
+        public readonly PriorityQueue<ObjectInstance, (ulong Size, ulong Address)> Top = new(Comparer<(ulong Size, ulong Address)>.Create(
+            (a, b) => a.Size != b.Size ? a.Size.CompareTo(b.Size) : b.Address.CompareTo(a.Address)));
+        public long Matched;
+        public ulong MatchedBytes;
+
+        public void Consider(ulong address, ulong size, HeapType type)
+        {
+            int t = type.Index;
+            if (t >= _decided.Length)
+            {
+                Array.Resize(ref _decided, Math.Max(_decided.Length * 2, t + 1));
+            }
+            if (_decided[t] == 0)
+            {
+                _decided[t] = matches(type.Name) ? (sbyte)1 : (sbyte)-1;
+            }
+            if (_decided[t] < 0)
+            {
+                return;
+            }
+            Matched++;
+            MatchedBytes += size;
+            if (limit == 0)
+            {
+                return;
+            }
+            if (Top.Count < limit)
+            {
+                Top.Enqueue(new ObjectInstance(address, type.Name, size, null), (size, address));
+            }
+            else if (Top.TryPeek(out _, out (ulong Size, ulong Address) smallest) && (size > smallest.Size || size == smallest.Size && address < smallest.Address))
+            {
+                Top.EnqueueDequeue(new ObjectInstance(address, type.Name, size, null), (size, address));
+            }
+        }
+    }
+
+    private readonly struct InstanceSink(InstanceSearch search) : IObjectSink
+    {
+        public void Object(ulong address, ulong size, HeapType type, DumpCursor cursor) => search.Consider(address, size, type);
+
+        public void Free(ulong size)
+        {
         }
     }
 }
