@@ -5,21 +5,10 @@ using Sherlock.Core.Storage;
 
 namespace Sherlock.Core.Analysis;
 
-/// <summary>Persists the columns derived by dominator analysis.</summary>
+/// <summary>Opens the columns written by dominator analysis.</summary>
 public static class DominatorTreeStore
 {
-    private const uint Version = 4;
-
-    public static void Save(string path, DominatorAnalyzer.DominatorResult result, Guid graphId)
-    {
-        var writer = new ContainerWriter(SlabKind.Dominators, Version);
-        writer.AddRecords(SectionType.DomMeta, [graphId]);
-        writer.AddMemory(SectionType.DomIdom, result.Idom);
-        writer.AddMemory(SectionType.DomRetained, result.Retained);
-        writer.AddMemory(SectionType.DomChildOffsets, result.ChildOffsets);
-        writer.AddMemory(SectionType.DomChildren, result.Children);
-        writer.Save(path);
-    }
+    internal const uint Version = 4;
 
     /// <summary>Opens a tree computed from <paramref name="graph"/>, or null when it was computed from another.
     /// Columns stay in the mapping, which the tree owns.</summary>

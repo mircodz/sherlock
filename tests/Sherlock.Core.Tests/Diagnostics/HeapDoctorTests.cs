@@ -6,6 +6,7 @@ using Sherlock.Core.Analysis;
 using Sherlock.Core.HeapModel;
 using Sherlock.Core.Diagnostics;
 using Xunit;
+using Sherlock.Core.Tests.Common;
 
 namespace Sherlock.Core.Tests.Diagnostics;
 
@@ -188,6 +189,6 @@ public sealed class HeapDoctorTests
         }
         offsets[n + 1] = n;
         var graph = new HeapGraph(addresses, sizes, offsets, roots, typeIds, objects.Select(o => o.Type).ToArray());
-        return new DominatorTree(graph, DominatorAnalyzer.Compute(graph));
+        return GraphAnalysis.Dominators(graph);
     }
 }

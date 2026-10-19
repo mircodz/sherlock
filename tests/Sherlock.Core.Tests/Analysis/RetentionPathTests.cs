@@ -37,7 +37,7 @@ public sealed class RetentionPathTests
         return new HeapGraph(addresses, sizes, offsets, edgeList.ToArray(), typeIds, typeNames);
     }
 
-    private static DominatorTree TreeOf(HeapGraph g) => new(g, DominatorAnalyzer.Compute(g));
+    private static DominatorTree TreeOf(HeapGraph g) => GraphAnalysis.Dominators(g);
 
     private static string[] PathTypes(DominatorTree t, HeapGraph g, int obj) =>
         (t.RetentionPath(g.Addresses.Span[obj]) ?? []).Select(n => n.TypeName).ToArray();

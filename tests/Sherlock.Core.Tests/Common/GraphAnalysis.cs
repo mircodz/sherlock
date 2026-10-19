@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using Sherlock.Core.Analysis;
@@ -13,5 +14,31 @@ internal static class GraphAnalysis
         using var tmp = new TempDir();
         using InboundIndex inbound = InboundIndex.Open(graph, tmp.File(), CancellationToken.None);
         return RootAnalyzer.Find(graph, inbound, tmp.Path, address);
+    }
+
+    /// <summary>The graph's dominator tree; disposing it deletes its files.</summary>
+    public static DominatorTree Dominators(HeapGraph graph)
+    {
+        var tmp = new TempDir();
+        try
+        {
+            using InboundIndex inbound = InboundIndex.Open(graph, tmp.File(), CancellationToken.None);
+            DominatorTree tree = DominatorAnalyzer.Compute(graph, inbound, tmp.File(), CancellationToken.None);
+            return new DominatorTree(graph, tree.Result, new Owner(tree, tmp));
+        }
+        catch
+        {
+            tmp.Dispose();
+            throw;
+        }
+    }
+
+    private sealed class Owner(IDisposable tree, IDisposable directory) : IDisposable
+    {
+        public void Dispose()
+        {
+            tree.Dispose();
+            directory.Dispose();
+        }
     }
 }
