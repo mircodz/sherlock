@@ -312,7 +312,67 @@ internal static unsafe class HeapWalk
         {
         }
     }
+
+    /// <summary>The objects <paramref name="keep"/> accepts, in address order. It's asked only about objects of types
+    /// <paramref name="candidate"/> accepts, which each worker decides once per type, so a walk that wants a few
+    /// objects reads little more than their headers.</summary>
+    public static ulong[] Select(DumpHeap heap, Func<HeapType, bool> candidate, ObjectFilter keep, CancellationToken cancellationToken)
+    {
+        HeapSegment[] largestFirst = [.. heap.Segments.OrderByDescending(s => s.Bytes)];
+        var parts = new Selection[Environment.ProcessorCount];
+        int next = -1;
+        Run(parts.Length, (w, stop) =>
+        {
+            var sink = new SelectionSink(parts[w] = new Selection(candidate, keep));
+            var types = new TypeCache(heap.Types);
+            using var cursor = new DumpCursor(heap.Memory);
+            for (int i; (i = Interlocked.Increment(ref next)) < largestFirst.Length;)
+            {
+                Walk(largestFirst[i], cursor, largestFirst[i].Start, ulong.MaxValue, types, ref sink, stop);
+            }
+        }, cancellationToken);
+
+        ulong[] found = [.. parts.SelectMany(p => p.Found)];
+        Array.Sort(found);
+        return found;
+    }
+
+    private sealed class Selection(Func<HeapType, bool> candidate, ObjectFilter keep)
+    {
+        private sbyte[] _decided = new sbyte[256]; // per type index: 1 a candidate, -1 not, 0 not asked yet
+
+        public readonly List<ulong> Found = [];
+
+        public void Consider(ulong address, HeapType type, DumpCursor cursor)
+        {
+            int t = type.Index;
+            if (t >= _decided.Length)
+            {
+                Array.Resize(ref _decided, Math.Max(_decided.Length * 2, t + 1));
+            }
+            if (_decided[t] == 0)
+            {
+                _decided[t] = candidate(type) ? (sbyte)1 : (sbyte)-1;
+            }
+            if (_decided[t] > 0 && keep(address, type, cursor))
+            {
+                Found.Add(address);
+            }
+        }
+    }
+
+    private readonly struct SelectionSink(Selection selection) : IObjectSink
+    {
+        public void Object(ulong address, ulong size, HeapType type, DumpCursor cursor) => selection.Consider(address, type, cursor);
+
+        public void Free(ulong size)
+        {
+        }
+    }
 }
+
+/// <summary>Whether a walk keeps an object, judged from its bytes in the dump.</summary>
+internal delegate bool ObjectFilter(ulong address, HeapType type, DumpCursor cursor);
 
 /// <summary>One worker's place in the dump: the run it's reading, looked up again only when a read leaves it, and a
 /// buffer for the rare object whose bytes span two runs.</summary>

@@ -3,20 +3,32 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using Microsoft.Diagnostics.Runtime;
+using Sherlock.Core.HeapModel;
 
 namespace Sherlock.Core.Analysis;
 
 /// <summary>Finds large delegate invocation lists and the subscriber types retained by their targets.</summary>
-public sealed class EventHandlerAnalyzer(Snapshot snapshot)
+public sealed unsafe class EventHandlerAnalyzer(Snapshot snapshot)
 {
     public IReadOnlyList<EventSubscription> Analyze(int minSubscribers = 16, int limit = 25, CancellationToken cancellation = default)
     {
         var results = new List<EventSubscription>();
 
-        foreach (ClrObject obj in snapshot.Runtime.Heap.EnumerateObjects())
+        // The walk keeps delegates whose invocation list is at least that long, reading the list's length in place.
+        ulong[] candidates = HeapWalk.Select(snapshot.GetDumpHeap(cancellation), type => type.InvocationList != 0, (address, type, cursor) =>
+        {
+            byte* field = cursor.At(address + (ulong)type.InvocationList, sizeof(ulong));
+            ulong list = field == null ? 0 : *(ulong*)field;
+            byte* length = list == 0 ? null : cursor.At(list + sizeof(ulong), sizeof(uint));
+            return length != null && *(uint*)length >= (uint)minSubscribers;
+        }, cancellation);
+
+        ClrHeap heap = snapshot.Runtime.Heap;
+        foreach (ulong address in candidates)
         {
             cancellation.ThrowIfCancellationRequested();
-            if (obj.Type is not { } type || !IsDelegate(type))
+            ClrObject obj = heap.GetObject(address);
+            if (obj.Type is not { } type)
             {
                 continue;
             }
@@ -62,18 +74,6 @@ public sealed class EventHandlerAnalyzer(Snapshot snapshot)
             results.Add(new EventSubscription(obj.Address, type.Name ?? "<delegate>", subscribers, byTarget));
         }
 
-        return results.OrderByDescending(r => r.SubscriberCount).Take(limit).ToList();
-    }
-
-    private static bool IsDelegate(ClrType type)
-    {
-        for (ClrType? t = type; t is not null; t = t.BaseType)
-        {
-            if (t.Name is "System.MulticastDelegate" or "System.Delegate")
-            {
-                return true;
-            }
-        }
-        return false;
+        return results.OrderByDescending(r => r.SubscriberCount).ThenBy(r => r.DelegateAddress).Take(limit).ToList();
     }
 }

@@ -19,6 +19,10 @@ internal sealed class HeapType
     public required bool IsString { get; init; }
     public required bool IsFree { get; init; }
     public GCDescriptor? References { get; init; }
+    public bool IsException { get; init; }
+
+    /// <summary>For a delegate, where its invocation list is from the object's start; otherwise 0.</summary>
+    public int InvocationList { get; init; }
 }
 
 /// <summary>Method tables resolved through ClrMD, once each, shared by every walk over one dump.</summary>
@@ -47,6 +51,8 @@ internal sealed class TypeTable(ClrHeap heap, IMemoryReader reader)
                 IsString = clr.IsString,
                 IsFree = clr.IsFree,
                 References = clr.ContainsPointers ? GCDescriptor.Read(reader, methodTable) : null,
+                IsException = clr.IsException,
+                InvocationList = IsDelegate(clr) && clr.GetFieldByName("_invocationList") is { } list ? IntPtr.Size + list.Offset : 0,
             };
             if (type is not null)
             {
@@ -55,6 +61,18 @@ internal sealed class TypeTable(ClrHeap heap, IMemoryReader reader)
             _byMethodTable[methodTable] = type;
             return type;
         }
+    }
+
+    private static bool IsDelegate(ClrType type)
+    {
+        for (ClrType? t = type; t is not null; t = t.BaseType)
+        {
+            if (t.Name is "System.MulticastDelegate" or "System.Delegate")
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /// <summary>The types resolved so far, by index; every index a finished walk handed out is in it.</summary>

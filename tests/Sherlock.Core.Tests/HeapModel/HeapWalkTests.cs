@@ -51,6 +51,46 @@ public sealed class HeapWalkTests(TargetDump dump)
     }
 
     [Fact]
+    public void ExceptionsMatchClrMDsWalk()
+    {
+        using Snapshot snapshot = dump.Open();
+        ulong[] expected = [.. snapshot.Runtime.Heap.EnumerateObjects().Where(o => o.IsException).Select(o => o.Address).Order()];
+
+        ulong[] found = HeapWalk.Select(snapshot.GetDumpHeap(), type => type.IsException, static (_, _, _) => true, CancellationToken.None);
+
+        Assert.True(expected.Length >= 2, "the target keeps two caught exceptions");
+        Assert.Equal(expected, found);
+        Assert.Equal(2, snapshot.GetExceptions().Count(e => e.TypeName == "System.InvalidOperationException"));
+    }
+
+    [Fact]
+    public void EventLeaksMatchClrMDsWalk()
+    {
+        using Snapshot snapshot = dump.Open();
+        var expected = new List<(ulong, int)>();
+        foreach (ClrObject obj in snapshot.Runtime.Heap.EnumerateObjects())
+        {
+            if (obj.Type?.BaseType?.Name == "System.MulticastDelegate" && obj.ReadObjectField("_invocationList") is { IsValid: true, IsArray: true } list)
+            {
+                ClrArray invocation = list.AsArray();
+                int subscribers = Enumerable.Range(0, invocation.Length).Count(i => invocation.GetObjectValue(i).IsValid);
+                if (subscribers >= 16)
+                {
+                    expected.Add((obj.Address, subscribers));
+                }
+            }
+        }
+
+        IReadOnlyList<EventSubscription> found = snapshot.EventHandlerLeaks();
+
+        Assert.Equal(expected.OrderByDescending(e => e.Item2).ThenBy(e => e.Item1), found.Select(e => (e.DelegateAddress, e.SubscriberCount)));
+        Assert.Equal([60, 40, 20], found.Select(e => e.SubscriberCount).Where(count => count is 60 or 40 or 20));
+        EventSubscription largest = found.First(e => e.SubscriberCount == 60);
+        Assert.Contains(("Node", 30), largest.Targets.Select(t => (t.TypeName, t.Count)));
+        Assert.Equal(60, largest.Targets.Sum(t => t.Count));
+    }
+
+    [Fact]
     public void CancelledWalkStops()
     {
         using Snapshot snapshot = dump.Open();
