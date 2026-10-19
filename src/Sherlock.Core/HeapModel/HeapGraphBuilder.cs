@@ -1,5 +1,4 @@
 using System;
-using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.MemoryMappedFiles;
@@ -91,7 +90,7 @@ internal static unsafe class HeapGraphBuilder
             }
         }
 
-        using var file = new GraphFile(path);
+        using var file = new SlabBuilder(path, sectionCount: 10);
         (long sourceLength, long sourceModified) = HeapGraphStore.SourceStamp(dumpPath);
         GraphMeta[] meta = [new GraphMeta(Guid.NewGuid(), freeBytes, freeCount, sourceLength, sourceModified)];
         file.Write(MemoryMarshal.AsBytes(meta.AsSpan()), file.Place(SectionType.GraphMeta, sizeof(GraphMeta), 1));
@@ -602,80 +601,5 @@ internal static unsafe class HeapGraphBuilder
                 return id + BitOperations.PopCount(bits & (mask - 1));
             }
         }
-    }
-
-    /// <summary>A graph file being written: sections placed in file order and filled with positional writes from any
-    /// thread, then published by rename once synced.</summary>
-    private sealed class GraphFile : IDisposable
-    {
-        private const int SectionCount = 10;
-
-        private readonly List<(SectionType Type, uint RecordSize, long Offset, long Length)> _sections = [];
-        private readonly FileStream _stream;
-        private readonly string _path;
-        private readonly string _temp;
-        private bool _committed;
-
-        public GraphFile(string path)
-        {
-            _path = path;
-            _temp = $"{path}.{Guid.NewGuid():N}.tmp";
-            _stream = new FileStream(_temp, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 1);
-        }
-
-        public SafeFileHandle Handle => _stream.SafeFileHandle;
-
-        /// <summary>Where the next placed section starts.</summary>
-        public long Next { get; private set; } = Align(ContainerFormat.HeaderSize + SectionCount * ContainerFormat.SectionEntrySize);
-
-        public long Place(SectionType type, int recordSize, long count)
-        {
-            long offset = Next;
-            long length = checked(recordSize * count);
-            _sections.Add((type, (uint)recordSize, offset, length));
-            Next = Align(offset + length);
-            return offset;
-        }
-
-        public void Write(ReadOnlySpan<byte> bytes, long offset) => RandomAccess.Write(Handle, bytes, offset);
-
-        public void Commit(SlabKind kind, uint version)
-        {
-            if (_sections.Count != SectionCount)
-            {
-                throw new InvalidOperationException($"The graph placed {_sections.Count} sections, not {SectionCount}.");
-            }
-            var header = new byte[ContainerFormat.HeaderSize + SectionCount * ContainerFormat.SectionEntrySize];
-            ContainerFormat.Magic.CopyTo(header);
-            BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(4), ContainerFormat.Version);
-            BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(6), (ushort)kind);
-            BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(8), version);
-            BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(12), SectionCount);
-            for (int i = 0; i < SectionCount; i++)
-            {
-                Span<byte> entry = header.AsSpan(ContainerFormat.HeaderSize + i * ContainerFormat.SectionEntrySize);
-                BinaryPrimitives.WriteUInt32LittleEndian(entry, (uint)_sections[i].Type);
-                BinaryPrimitives.WriteUInt32LittleEndian(entry[4..], _sections[i].RecordSize);
-                BinaryPrimitives.WriteUInt64LittleEndian(entry[8..], (ulong)_sections[i].Offset);
-                BinaryPrimitives.WriteUInt64LittleEndian(entry[16..], (ulong)_sections[i].Length);
-            }
-            Write(header, 0);
-            _stream.SetLength(_sections[^1].Offset + _sections[^1].Length);
-            _stream.Flush(flushToDisk: true);
-            _stream.Dispose();
-            File.Move(_temp, _path, overwrite: true);
-            _committed = true;
-        }
-
-        public void Dispose()
-        {
-            _stream.Dispose();
-            if (!_committed)
-            {
-                try { File.Delete(_temp); } catch (IOException) { } // best effort
-            }
-        }
-
-        private static long Align(long n) => (n + ContainerFormat.Alignment - 1) & ~((long)ContainerFormat.Alignment - 1);
     }
 }
