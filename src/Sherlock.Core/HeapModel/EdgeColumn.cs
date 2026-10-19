@@ -4,42 +4,56 @@ using Sherlock.Core.Storage;
 
 namespace Sherlock.Core.HeapModel;
 
-/// <summary>A long-indexed edge column split only at CSR row boundaries.</summary>
+/// <summary>A long-indexed edge column: one mapped section for a loaded graph, or chunks split only at CSR row
+/// boundaries for one built in memory.</summary>
 public sealed class EdgeColumn
 {
     private readonly ReadOnlyMemory<int>[] _chunks;
     private readonly long[] _chunkStartEdge;
+    private readonly Column<int>? _mapped;
 
-    /// <summary>Total number of edges across every chunk.</summary>
-    public long Count => _chunkStartEdge[^1];
+    /// <summary>Total number of edges.</summary>
+    public long Count => _mapped?.Length ?? _chunkStartEdge[^1];
 
-    /// <summary>Number of physical chunks.</summary>
+    /// <summary>Number of in-memory chunks; zero for a mapped column.</summary>
     public int ChunkCount => _chunks.Length;
 
-    /// <summary>Materializes columns that fit one CLR array.</summary>
+    /// <summary>Copies the edges into one array, for columns that fit one.</summary>
     public int[] ToArray()
     {
         var all = new int[checked((int)Count)];
+        if (_mapped is { } mapped)
+        {
+            mapped.CopyTo(0, all);
+            return all;
+        }
         int p = 0;
         foreach (ReadOnlyMemory<int> c in _chunks) { c.Span.CopyTo(all.AsSpan(p)); p += c.Length; }
         return all;
     }
 
-    public ReadOnlyMemory<int> Chunk(int i) => _chunks[i];
-
-    /// <summary>Global start of each chunk, followed by the total edge count.</summary>
-    public long[] ChunkStarts => _chunkStartEdge;
-
-    public IReadOnlyList<ReadOnlyMemory<byte>> ChunksAsBytes()
+    /// <summary>The edges as consecutive runs, for writing them out as one section.</summary>
+    public IReadOnlyList<ReadOnlyMemory<int>> Parts()
     {
-        var result = new ReadOnlyMemory<byte>[_chunks.Length];
-        for (int i = 0; i < _chunks.Length; i++)
+        if (_mapped is not { } mapped)
         {
-            result[i] = _chunks[i].Length == 0
-                ? ReadOnlyMemory<byte>.Empty
-                : new UnmanagedByteMemory<int>(_chunks[i]).Memory;
+            return _chunks;
         }
-        return result;
+        const int maxRun = 1 << 28;
+        var parts = new List<ReadOnlyMemory<int>>();
+        for (long start = 0; start < mapped.Length; start += maxRun)
+        {
+            parts.Add(mapped.AsMemory(start, (int)Math.Min(maxRun, mapped.Length - start)));
+        }
+        return parts;
+    }
+
+    /// <summary>Edges read from a mapped section, which the graph keeps open.</summary>
+    public EdgeColumn(Column<int> mapped)
+    {
+        _mapped = mapped;
+        _chunks = [];
+        _chunkStartEdge = [0];
     }
 
     public EdgeColumn(ReadOnlyMemory<int> edges)
@@ -70,9 +84,13 @@ public sealed class EdgeColumn
         _chunkStartEdge = chunkStartEdge;
     }
 
-    /// <summary>Returns a range that lies within one chunk.</summary>
+    /// <summary>Returns a range that lies within one CSR row.</summary>
     public ReadOnlySpan<int> Slice(long start, int length)
     {
+        if (_mapped is { } mapped)
+        {
+            return mapped.Slice(start, length);
+        }
         if (length == 0)
         {
             return default;
@@ -158,21 +176,5 @@ public sealed class EdgeColumn
             }
         }
         return lo;
-    }
-
-    /// <summary>Samples values across all chunks.</summary>
-    public void Sample(int approxPoints, Action<int> mix)
-    {
-        long total = Count;
-        if (total == 0)
-        {
-            return;
-        }
-        long step = Math.Max(1, total / Math.Max(1, approxPoints));
-        for (long pos = 0; pos < total; pos += step)
-        {
-            int c = ChunkOf(pos);
-            mix(_chunks[c].Span[(int)(pos - _chunkStartEdge[c])]);
-        }
     }
 }

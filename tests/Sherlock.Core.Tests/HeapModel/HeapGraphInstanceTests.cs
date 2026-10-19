@@ -21,7 +21,7 @@ public sealed class HeapGraphInstanceTests
     {
         using HeapGraph graph = SampleGraph();
 
-        InstanceListing result = Assert.IsType<InstanceListing>(graph.ListInstances("oRdEr", 2));
+        InstanceListing result = graph.ListInstances("oRdEr", 2);
 
         Assert.Equal(4, result.TotalMatched);
         Assert.Equal(344UL, result.TotalMatchedSize);
@@ -36,11 +36,11 @@ public sealed class HeapGraphInstanceTests
     {
         using HeapGraph graph = SampleGraph();
 
-        InstanceListing result = Assert.IsType<InstanceListing>(graph.ListInstances("App.Order", 10, exact: true));
+        InstanceListing result = graph.ListInstances("App.Order", 10, exact: true);
 
         Assert.Equal(3, result.TotalMatched);
         Assert.All(result.Instances, instance => Assert.Equal("App.Order", instance.TypeName));
-        Assert.Equal(0, Assert.IsType<InstanceListing>(graph.ListInstances("app.order", 10, exact: true)).TotalMatched);
+        Assert.Equal(0, graph.ListInstances("app.order", 10, exact: true).TotalMatched);
     }
 
     [Fact]
@@ -48,7 +48,7 @@ public sealed class HeapGraphInstanceTests
     {
         using HeapGraph graph = SampleGraph();
 
-        InstanceListing result = Assert.IsType<InstanceListing>(graph.ListInstances("Order", 100));
+        InstanceListing result = graph.ListInstances("Order", 100);
 
         Assert.Equal(4, result.Instances.Count);
         Assert.Equal(new ulong[] { 160, 80, 64, 40 }, result.Instances.Select(o => o.Size));
@@ -60,7 +60,7 @@ public sealed class HeapGraphInstanceTests
     {
         using HeapGraph graph = SampleGraph();
 
-        InstanceListing result = Assert.IsType<InstanceListing>(graph.ListInstances("Order", 0));
+        InstanceListing result = graph.ListInstances("Order", 0);
 
         Assert.Empty(result.Instances);
         Assert.Equal(4, result.TotalMatched);
@@ -74,7 +74,7 @@ public sealed class HeapGraphInstanceTests
     {
         using HeapGraph graph = SampleGraph();
 
-        InstanceListing result = Assert.IsType<InstanceListing>(graph.ListInstances(filter));
+        InstanceListing result = graph.ListInstances(filter);
 
         Assert.Empty(result.Instances);
         Assert.Equal(0, result.TotalMatched);
@@ -87,19 +87,11 @@ public sealed class HeapGraphInstanceTests
         using var graph = new HeapGraph(Array.Empty<ulong>(), Array.Empty<uint>(), new int[2], [],
             Array.Empty<int>(), ["App.Order"]);
 
-        InstanceListing result = Assert.IsType<InstanceListing>(graph.ListInstances("Order"));
+        InstanceListing result = graph.ListInstances("Order");
 
         Assert.Empty(result.Instances);
         Assert.Equal(0, result.TotalMatched);
         Assert.Equal(0UL, result.TotalMatchedSize);
-    }
-
-    [Fact]
-    public void MissingTypeColumnsReturnNullForTheClrMdFallback()
-    {
-        using var graph = new HeapGraph(new ulong[] { 0x1000 }, new uint[] { 24 }, new int[3], []);
-
-        Assert.Null(graph.ListInstances("Order"));
     }
 
     [Fact]
@@ -108,7 +100,7 @@ public sealed class HeapGraphInstanceTests
         using var graph = new HeapGraph(new ulong[] { 0x1000, 0x2000, 0x3000 },
             new uint[] { 24, 24, 24 }, new int[5], [], new int[3], ["App.Order"]);
 
-        InstanceListing result = Assert.IsType<InstanceListing>(graph.ListInstances("Order", 2));
+        InstanceListing result = graph.ListInstances("Order", 2);
 
         Assert.Equal(new ulong[] { 0x1000, 0x2000 }, result.Instances.Select(o => o.Address).Order());
         Assert.Equal(3, result.TotalMatched);
@@ -119,13 +111,13 @@ public sealed class HeapGraphInstanceTests
     public void TotalSizeDoesNotOverflowTheSizeColumn()
     {
         using var graph = new HeapGraph(new ulong[] { 0x1000, 0x2000 },
-            new uint[] { uint.MaxValue, uint.MaxValue }, new int[4], [], new int[2], ["App.Order"]);
+            new uint[] { uint.MaxValue - 1, uint.MaxValue - 1 }, new int[4], [], new int[2], ["App.Order"]);
 
-        InstanceListing result = Assert.IsType<InstanceListing>(graph.ListInstances("Order", 1));
+        InstanceListing result = graph.ListInstances("Order", 1);
 
         Assert.Single(result.Instances);
         Assert.Equal(2, result.TotalMatched);
-        Assert.Equal(2UL * uint.MaxValue, result.TotalMatchedSize);
+        Assert.Equal(2UL * (uint.MaxValue - 1), result.TotalMatchedSize);
     }
 
     [Fact]
@@ -137,8 +129,8 @@ public sealed class HeapGraphInstanceTests
         HeapGraphStore.Save(path, graph);
         using HeapGraph loaded = Assert.IsType<HeapGraph>(HeapGraphStore.Load(path));
 
-        InstanceListing expected = Assert.IsType<InstanceListing>(graph.ListInstances("Order", 3));
-        InstanceListing actual = Assert.IsType<InstanceListing>(loaded.ListInstances("Order", 3));
+        InstanceListing expected = graph.ListInstances("Order", 3);
+        InstanceListing actual = loaded.ListInstances("Order", 3);
 
         Assert.Equal(expected.TotalMatched, actual.TotalMatched);
         Assert.Equal(expected.TotalMatchedSize, actual.TotalMatchedSize);

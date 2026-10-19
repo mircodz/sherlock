@@ -56,11 +56,8 @@ public struct StackRecord
     public uint FrameCount;
 }
 
-/// <summary>Version of the symbol sections (mirrors native <c>kSymbolsVersion</c>).</summary>
 public static class SymbolFormat
 {
-    public const ushort Version = 2;
-
     /// <summary>The deepest stack a reader accepts. The profiler records at most 64 frames; the margin leaves room
     /// to record more without letting a crafted file make every allocation record cost a huge stack.</summary>
     public const int MaxStackDepth = 4096;
@@ -88,19 +85,11 @@ public sealed class SymbolTable
 
     public static SymbolTable Read(SlabFile slab)
     {
-        if (slab.Has(SectionType.Frames))
-        {
-            throw new InvalidDataException("This profile was recorded by an earlier version of Sherlock and can't be read; record it again.");
-        }
         foreach (SectionType section in Sections)
         {
             if (!slab.Has(section))
             {
                 throw new InvalidDataException($"The profile has no {section} section.");
-            }
-            if (slab.SectionVersion(section) != SymbolFormat.Version)
-            {
-                throw new InvalidDataException($"The profile's {section} section has unsupported version {slab.SectionVersion(section)}.");
             }
         }
 
@@ -277,12 +266,12 @@ public sealed class SymbolWriter
             stacks[i] = new StackRecord { FirstFrame = (uint)pool.Count, FrameCount = (uint)_stacks[i].Length };
             pool.AddRange(_stacks[i]);
         }
-        w.AddSection(SectionType.Strings, SymbolFormat.Version, 0, CollectionsMarshal.AsSpan(_strings), (ulong)_strings.Count);
-        w.AddRecords(SectionType.Modules, SymbolFormat.Version, CollectionsMarshal.AsSpan(_modules));
-        w.AddRecords(SectionType.Methods, SymbolFormat.Version, CollectionsMarshal.AsSpan(_methods));
-        w.AddRecords(SectionType.Types, SymbolFormat.Version, CollectionsMarshal.AsSpan(_types));
-        w.AddRecords(SectionType.Stacks, SymbolFormat.Version, stacks);
-        w.AddRecords(SectionType.StackFrames, SymbolFormat.Version, CollectionsMarshal.AsSpan(pool));
+        w.AddBytes(SectionType.Strings, CollectionsMarshal.AsSpan(_strings));
+        w.AddRecords(SectionType.Modules, CollectionsMarshal.AsSpan(_modules));
+        w.AddRecords(SectionType.Methods, CollectionsMarshal.AsSpan(_methods));
+        w.AddRecords(SectionType.Types, CollectionsMarshal.AsSpan(_types));
+        w.AddRecords<StackRecord>(SectionType.Stacks, stacks);
+        w.AddRecords(SectionType.StackFrames, CollectionsMarshal.AsSpan(pool));
     }
 
     private StringRef InternString(string text)

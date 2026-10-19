@@ -14,25 +14,19 @@ public sealed class HeapAnalyzer(Snapshot snapshot)
     /// Groups live objects by type name with counts and total sizes, ordered by total size descending.
     /// Mirrors SOS <c>dumpheap -stat</c>.
     /// </summary>
-    /// <param name="typeFilter">Optional case-insensitive substring filter on the type name.</param>
-    public IReadOnlyList<HeapTypeStat> GetStatistics(string? typeFilter = null)
+    public IReadOnlyList<HeapTypeStat> GetStatistics(CancellationToken cancellationToken = default)
     {
         var stats = new Dictionary<string, (long Count, ulong Size)>(StringComparer.Ordinal);
 
         foreach (ClrObject obj in snapshot.Runtime.Heap.EnumerateObjects())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (obj.Type is null)
             {
                 continue;
             }
 
-            string name = obj.Type.Name ?? "<unknown>";
-            if (typeFilter is not null && !name.Contains(typeFilter, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            ref var entry = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(stats, name, out _);
+            ref var entry = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(stats, obj.Type.Name ?? "<unknown>", out _);
             entry.Count++;
             entry.Size += obj.Size;
         }
@@ -54,7 +48,7 @@ public sealed class HeapAnalyzer(Snapshot snapshot)
         ArgumentException.ThrowIfNullOrEmpty(typeFilter);
         ArgumentOutOfRangeException.ThrowIfNegative(limit);
         cancellationToken.ThrowIfCancellationRequested();
-        if (snapshot.TryGetCachedHeapGraph()?.ListInstances(typeFilter, limit, cancellationToken, exact) is { } listing)
+        if (snapshot.TryGetCachedHeapGraph(cancellationToken)?.ListInstances(typeFilter, limit, cancellationToken, exact) is { } listing)
         {
             var selected = new ObjectInstance[listing.Instances.Count];
             for (int i = 0; i < selected.Length; i++)

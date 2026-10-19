@@ -34,29 +34,13 @@ public sealed class DominatorGroundTruthTests
         return new HeapGraph(addresses, sizes, offsets, edgeList.ToArray());
     }
 
-    private static ulong RetainedOf(DominatorAnalyzer.DominatorResult r, HeapGraph g, int obj)
-    {
-        int rpo = FindRpo(r, g, obj);
-        return rpo < 0 ? 0 : r.Retained[rpo];
-    }
-
-    private static int FindRpo(DominatorAnalyzer.DominatorResult r, HeapGraph g, int obj)
-    {
-        ulong addr = g.Addresses.Span[obj];
-        for (int rpo = 1; rpo < r.Address.Length; rpo++)
-            if (r.Address[rpo] == addr)
-            {
-                return rpo;
-            }
-
-        return -1;
-    }
+    private static ulong RetainedOf(DominatorAnalyzer.DominatorResult r, HeapGraph g, int obj) => r.Retained.Span[obj];
 
     // The immediate dominator of object `obj` as an object id, or -1 if it's the synthetic root.
     private static int IdomObjectOf(DominatorAnalyzer.DominatorResult r, HeapGraph g, int obj)
     {
-        int domNode = r.NodeByRpo[r.Idom[FindRpo(r, g, obj)]];
-        return domNode == g.Root ? -1 : domNode;
+        int dominator = r.Idom.Span[obj];
+        return dominator == g.Root ? -1 : dominator;
     }
 
     [Fact]
@@ -71,7 +55,7 @@ public sealed class DominatorGroundTruthTests
         Assert.Equal(90u, RetainedOf(r, g, 1));  // 20+30+40
         Assert.Equal(70u, RetainedOf(r, g, 2));  // 30+40
         Assert.Equal(40u, RetainedOf(r, g, 3));  // 40
-        Assert.Equal(100u, r.Retained[0]);       // total reachable (the synthetic root)
+        Assert.Equal(100u, r.Retained.Span[g.Root]); // total reachable (the synthetic root)
     }
 
     [Fact]
@@ -114,10 +98,9 @@ public sealed class DominatorGroundTruthTests
         Assert.Equal(10u, RetainedOf(r, g, 0)); // A retains only itself (not S)
         Assert.Equal(20u, RetainedOf(r, g, 1)); // B retains only itself
         Assert.Equal(30u, RetainedOf(r, g, 2)); // S retains itself
-        Assert.Equal(60u, r.Retained[0]);       // total reachable = 10+20+30
+        Assert.Equal(60u, r.Retained.Span[g.Root]); // total reachable = 10+20+30
 
-        int sRpo = FindRpo(r, g, 2);
-        Assert.Equal(g.Root, r.NodeByRpo[r.Idom[sRpo]]); // idom(S) == synthetic root
+        Assert.Equal(-1, IdomObjectOf(r, g, 2)); // idom(S) == synthetic root
     }
 
     [Fact]
@@ -130,7 +113,7 @@ public sealed class DominatorGroundTruthTests
 
         Assert.Equal(30u, RetainedOf(r, g, 0)); // A retains A+B
         Assert.Equal(20u, RetainedOf(r, g, 1)); // B retains itself
-        Assert.Equal(30u, r.Retained[0]);
+        Assert.Equal(30u, r.Retained.Span[g.Root]);
     }
 
     [Fact]
@@ -140,8 +123,45 @@ public sealed class DominatorGroundTruthTests
         var g = Build(sizes: [10, 20], roots: [0]);
         var r = DominatorAnalyzer.Compute(g);
 
-        Assert.Equal(10u, r.Retained[0]); // only A is reachable; B excluded from the total
-        // B has no RPO number, so it never appears in the result address array.
-        Assert.DoesNotContain(g.Addresses.Span[1], r.Address.Skip(1));
+        Assert.Equal(10u, r.Retained.Span[g.Root]); // only A is reachable; B excluded from the total
+        Assert.Equal(-1, r.Idom.Span[1]);            // B has no dominator
+        Assert.DoesNotContain(1, r.Children.ToArray());
+    }
+
+    [Fact]
+    public void ChildrenAreListedLargestFirst()
+    {
+        // root -> A(0); A -> B(1), C(2), D(3), each retaining only itself.
+        var g = Build(sizes: [10, 20, 40, 30], roots: [0], (0, 1), (0, 2), (0, 3));
+        var tree = new DominatorTree(g, DominatorAnalyzer.Compute(g));
+
+        Assert.Equal([40UL, 30UL, 20UL], tree.ImmediateChildren(g.Addresses.Span[0], 10).Select(n => n.RetainedSize));
+        Assert.Equal([40UL, 30UL], tree.ImmediateChildren(g.Addresses.Span[0], 2).Select(n => n.RetainedSize));
+    }
+
+    [Fact]
+    public void TopDominatorsMatchSortingEveryObjectOnRandomGraphs()
+    {
+        var random = new System.Random(7);
+        for (int round = 0; round < 200; round++)
+        {
+            int n = random.Next(1, 40);
+            uint[] sizes = Enumerable.Range(0, n).Select(_ => (uint)random.Next(1, 100)).ToArray();
+            int[] roots = Enumerable.Range(0, random.Next(1, 4)).Select(_ => random.Next(n)).Distinct().ToArray();
+            var edges = Enumerable.Range(0, random.Next(0, n * 3)).Select(_ => (random.Next(n), random.Next(n))).ToArray();
+            var g = Build(sizes, roots, edges);
+            var r = DominatorAnalyzer.Compute(g);
+            var tree = new DominatorTree(g, r);
+
+            ulong[] expected = Enumerable.Range(0, n).Where(i => r.Idom.Span[i] >= 0)
+                .Select(i => r.Retained.Span[i]).OrderByDescending(v => v).ToArray();
+            Assert.Equal(expected, tree.TopDominators(n).Select(node => node.RetainedSize));
+            Assert.Equal(expected.Length, tree.ObjectCount);
+            foreach (DominatorGraphNode node in tree.BuildGraph(n).Nodes)
+            {
+                int dominator = r.Idom.Span[node.Id];
+                Assert.Equal(dominator == g.Root ? null : dominator, node.ParentId);
+            }
+        }
     }
 }

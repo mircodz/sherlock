@@ -63,9 +63,6 @@ struct StackRecord {
 };
 static_assert(sizeof(StackRecord) == 8, "StackRecord must be a packed 8-byte record");
 
-// Version 2: methods with identities in Modules/Methods, types in Types; version 1 interned names in Frames.
-inline constexpr std::uint16_t kSymbolsVersion = 2;
-
 // What a writer knows about one method. Views must stay valid until internMethod returns.
 struct MethodDescription {
     Mvid mvid{};                     // all zero when unknown; the method then has no shared identity
@@ -128,6 +125,7 @@ public:
     [[nodiscard]] std::size_t typeCount() const { return types_.size(); }
     [[nodiscard]] std::size_t stackCount() const { return stacks_.size(); }
 
+    // The writer borrows the tables, so this writer must outlive it.
     void writeTo(ContainerWriter& w) const {
         std::vector<StackRecord> stackRecords(stacks_.size());
         std::vector<std::uint32_t> pool;
@@ -135,13 +133,12 @@ public:
             stackRecords[i] = {static_cast<std::uint32_t>(pool.size()), static_cast<std::uint32_t>(stacks_[i].size())};
             pool.insert(pool.end(), stacks_[i].begin(), stacks_[i].end());
         }
-        const auto strings = std::span<const std::byte>(reinterpret_cast<const std::byte*>(strings_.data()), strings_.size());
-        w.addSection(SectionType::Strings, kSymbolsVersion, 0, strings, strings_.size());
-        w.addRecords<ModuleRecord>(SectionType::Modules, kSymbolsVersion, modules_);
-        w.addRecords<MethodRecord>(SectionType::Methods, kSymbolsVersion, methods_);
-        w.addRecords<TypeRecord>(SectionType::Types, kSymbolsVersion, types_);
-        w.addRecords<StackRecord>(SectionType::Stacks, kSymbolsVersion, stackRecords);
-        w.addRecords<std::uint32_t>(SectionType::StackFrames, kSymbolsVersion, pool);
+        w.addBytes(SectionType::Strings, std::as_bytes(std::span(strings_)));
+        w.addRecords<ModuleRecord>(SectionType::Modules, modules_);
+        w.addRecords<MethodRecord>(SectionType::Methods, methods_);
+        w.addRecords<TypeRecord>(SectionType::Types, types_);
+        w.addRecords(SectionType::Stacks, std::move(stackRecords));
+        w.addRecords(SectionType::StackFrames, std::move(pool));
     }
 
 private:

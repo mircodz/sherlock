@@ -6,6 +6,7 @@
 #include "sherlock/profiler/rejit_policy.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <format>
 #include <limits>
@@ -17,18 +18,44 @@ namespace Sherlock {
 namespace shadow {
 thread_local ThreadStack* t_stack = nullptr;
 
-// Out of memory, a thread goes without a shadow stack rather than retrying on every call.
-thread_local bool t_stackFailed = false;
+// Out of memory, or once the thread is exiting, a thread goes without a shadow stack rather than allocating one on
+// every call.
+thread_local bool t_noStack = false;
+
+namespace {
+std::atomic<std::size_t> g_liveStacks{0};
+
+// Frees the thread's stack when the thread exits. Touched only when a stack is allocated, so pushes and pops keep
+// using plain thread-local storage.
+struct StackRelease {
+    bool armed = false;
+    ~StackRelease() {
+        if (t_stack != nullptr) {
+            delete t_stack;
+            t_stack = nullptr;
+            g_liveStacks.fetch_sub(1, std::memory_order_relaxed);
+        }
+        t_noStack = true; // a call during thread teardown goes without a stack instead of allocating another
+    }
+};
+thread_local StackRelease t_stackRelease;
+} // namespace
 
 ThreadStack* ensureStack() noexcept {
-    if (t_stack == nullptr && !t_stackFailed) {
+    if (t_stack == nullptr && !t_noStack) {
         try {
-            t_stack = new ThreadStack(); // retained for the process lifetime
+            t_stack = new ThreadStack();
+            t_stackRelease.armed = true;
+            g_liveStacks.fetch_add(1, std::memory_order_relaxed);
         } catch (...) {
-            t_stackFailed = true; // reached from managed code: no exception may escape
+            t_noStack = true; // reached from managed code: no exception may escape
         }
     }
     return t_stack;
+}
+
+std::size_t liveStacks() noexcept {
+    return g_liveStacks.load(std::memory_order_relaxed);
 }
 } // namespace shadow
 
@@ -359,6 +386,7 @@ const char* ShadowStackInstrumenter::buildIL(FrameId frameId, ModuleID moduleId,
             if (oldOff == codeSize) { res = tryEnd; return true; }
             return mapOff(oldOff, res);
         };
+
         auto relocate = [&](il::EHClause e) -> std::optional<il::EHClause> {
             std::uint32_t ts, te, hs, he;
             if (!mapOff(e.tryOffset, ts)) return std::nullopt;
@@ -370,6 +398,7 @@ const char* ShadowStackInstrumenter::buildIL(FrameId frameId, ModuleID moduleId,
             if (e.flags & il::kClauseFilter) { std::uint32_t f; if (!mapOff(e.classTokenOrFilter, f)) return std::nullopt; e.classTokenOrFilter = f; }
             return e;
         };
+
         for (const il::EHClause& oc : original) {
             auto e = relocate(oc);
             if (!e) { return "an exception clause doesn't line up with its instructions"; }
@@ -385,27 +414,26 @@ const char* ShadowStackInstrumenter::buildIL(FrameId frameId, ModuleID moduleId,
             endStream, probe.cookie,
             reinterpret_cast<std::uintptr_t>(&Sherlock_ProbeReturn), sigs.probe);
     }
+
     if (nonVoid) endStream.ldloc(retLocalIndex);
     endStream.bytes().push_back(0x2A); // ret
     const std::vector<BYTE>& endSeq = endStream.bytes();
 
     const std::vector<BYTE>& prologueBytes = prologue.bytes();
     const std::vector<BYTE>& finallyBytes = finallyBody.bytes();
-    const std::uint64_t newCodeSize64 =
-        prologueBytes.size() + body.size() + finallyBytes.size() + endSeq.size();
-    if (newCodeSize64 > std::numeric_limits<std::uint32_t>::max() ||
-        maxStack > std::numeric_limits<std::uint16_t>::max() - 2) {
+    const std::uint64_t newCodeSize64 = prologueBytes.size() + body.size() + finallyBytes.size() + endSeq.size();
+
+    if (newCodeSize64 > std::numeric_limits<std::uint32_t>::max() || maxStack > std::numeric_limits<std::uint16_t>::max() - 2) {
         return "the rewritten body would be too large";
     }
+
     const std::uint32_t newCodeSize = static_cast<std::uint32_t>(newCodeSize64);
 
     // Reject implausible growth: a layout bug must not hand malformed IL to the runtime.
     constexpr std::uint32_t kFixedOverhead = 256; // prologue + finally + end + slack
     if (newCodeSize > static_cast<std::uint64_t>(codeSize) * 2 + kFixedOverhead) {
         if (logger_)
-            logger_->warn(
-                "shadow rewrite produced an implausible body size ({} from {}); skipping method",
-                newCodeSize, codeSize);
+            logger_->warn("shadow rewrite produced an implausible body size ({} from {}); skipping method", newCodeSize, codeSize);
         return "the rewrite produced an implausible body size";
     }
 

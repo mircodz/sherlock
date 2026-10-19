@@ -1,8 +1,7 @@
 using System;
-using System.Buffers.Binary;
-using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using Sherlock.Core.Profiling;
 using Sherlock.Core.Storage;
 
 namespace Sherlock.Core.HeapModel;
@@ -10,100 +9,75 @@ namespace Sherlock.Core.HeapModel;
 /// <summary>Persists a heap graph as typed slab columns.</summary>
 public static class HeapGraphStore
 {
-    private const ushort Version = 6;
+    private const uint Version = 3;
+
+    private static readonly SectionType[] Required =
+    [
+        SectionType.GraphMeta, SectionType.GraphAddresses, SectionType.GraphSizes, SectionType.GraphTypeIds, SectionType.Strings,
+        SectionType.Types, SectionType.GraphOffsets, SectionType.GraphEdges, SectionType.GraphRoots,
+    ];
 
     public static void Save(string path, HeapGraph graph, string? sourcePath = null)
     {
-        var writer = new ContainerWriter();
-        writer.AddChunkedMemoryRecords(SectionType.GraphAddresses, Version, graph.Addresses);
-        writer.AddChunkedMemoryRecords(SectionType.GraphSizes, Version, graph.Sizes);
-        writer.AddChunkedMemoryRecords(SectionType.GraphOffsets, Version, graph.Offsets);
-
-        EdgeColumn edges = graph.Edges;
-        IReadOnlyList<ReadOnlyMemory<byte>> edgeChunks = edges.ChunksAsBytes();
-        for (int i = 0; i < edgeChunks.Count; i++)
-        {
-            writer.AddChunkedSection(SectionType.GraphEdgesChunk, Version, sizeof(int), [edgeChunks[i]],
-                (ulong)(edges.ChunkStarts[i + 1] - edges.ChunkStarts[i]));
-        }
-        writer.AddRecords(SectionType.GraphEdgeChunkMeta, Version, edges.ChunkStarts);
-        writer.AddMemoryRecords(SectionType.GraphRoots, Version, graph.Roots);
-
+        var writer = new ContainerWriter(SlabKind.Graph, Version);
         (long sourceLength, long sourceModified) = SourceStamp(sourcePath);
-        writer.AddRecords(SectionType.GraphMeta, Version, [graph.FreeBytes, (ulong)graph.FreeCount, (ulong)sourceLength, (ulong)sourceModified]);
-        if (graph.TypeIds is { } typeIds && graph.TypeNames is { } typeNames)
-        {
-            writer.AddChunkedMemoryRecords(SectionType.GraphTypeIds, Version, typeIds);
-            byte[] namesBlob = EncodeNames(typeNames);
-            writer.AddSection(SectionType.GraphTypeNames, Version, 0, namesBlob, (ulong)typeNames.Length);
-        }
+        writer.AddRecords(SectionType.GraphMeta, [new GraphMeta(graph.Id, graph.FreeBytes, graph.FreeCount, sourceLength, sourceModified)]);
+        writer.AddMemory(SectionType.GraphAddresses, graph.Addresses);
+        writer.AddMemory(SectionType.GraphSizes, graph.Sizes);
+        writer.AddMemory(SectionType.GraphLargeSizes, graph.LargeSizes);
+        writer.AddMemory(SectionType.GraphTypeIds, graph.TypeIds);
+        (byte[] strings, TypeRecord[] types) = EncodeNames(graph.TypeNames);
+        writer.AddBytes(SectionType.Strings, strings);
+        writer.AddRecords<TypeRecord>(SectionType.Types, types);
+        writer.AddMemory(SectionType.GraphOffsets, graph.Offsets);
+        writer.AddMemory(SectionType.GraphEdges, graph.Edges.Parts());
+        writer.AddMemory(SectionType.GraphRoots, graph.Roots);
         writer.Save(path);
     }
 
-    /// <summary>Loads a compatible graph, keeping edge chunks memory-mapped.</summary>
+    /// <summary>Loads a graph that matches <paramref name="sourcePath"/>, or null when it doesn't. Columns stay in
+    /// the mapping, which the graph owns.</summary>
     public static HeapGraph? Load(string path, string? sourcePath = null)
     {
-        SlabFile slab = SlabFile.Open(path);
+        SlabFile slab = SlabFile.Open(path, SlabKind.Graph, Version);
         try
         {
-            if (!slab.Has(SectionType.GraphOffsets) || !slab.Has(SectionType.GraphEdgeChunkMeta) || !slab.Has(SectionType.GraphRoots))
+            foreach (SectionType section in Required)
             {
-                slab.Dispose();
-                return null;
+                if (!slab.Has(section))
+                {
+                    throw new InvalidDataException($"The heap graph has no {section} section.");
+                }
             }
-            if (slab.SectionVersion(SectionType.GraphOffsets) != Version || slab.SectionVersion(SectionType.GraphMeta) != Version ||
-                slab.SectionVersion(SectionType.GraphRoots) != Version)
+            Column<GraphMeta> metaColumn = slab.GetColumn<GraphMeta>(SectionType.GraphMeta);
+            if (metaColumn.Length != 1)
             {
-                slab.Dispose();
-                return null;
+                throw new InvalidDataException("The heap graph's metadata is malformed.");
             }
-
-            Column<ulong> meta = slab.GetColumn<ulong>(SectionType.GraphMeta);
+            GraphMeta meta = metaColumn[0];
             if (sourcePath is not null)
             {
                 (long sourceLength, long sourceModified) = SourceStamp(sourcePath);
-                if (meta.Length < 4 || meta[2] != (ulong)sourceLength || meta[3] != (ulong)sourceModified)
+                if (meta.SourceLength != sourceLength || meta.SourceModified != sourceModified)
                 {
                     slab.Dispose();
                     return null;
                 }
             }
 
-            ReadOnlyMemory<ulong> addresses = Materialize(slab.GetColumn<ulong>(SectionType.GraphAddresses));
-            ReadOnlyMemory<uint> sizes = Materialize(slab.GetColumn<uint>(SectionType.GraphSizes));
-            ReadOnlyMemory<long> offsets = Materialize(slab.GetColumn<long>(SectionType.GraphOffsets));
-            ReadOnlyMemory<HeapRootRecord> roots = Materialize(slab.GetColumn<HeapRootRecord>(SectionType.GraphRoots));
-
-            long[] chunkStarts = Materialize(slab.GetColumn<long>(SectionType.GraphEdgeChunkMeta));
-            IReadOnlyList<Column<int>> edgeSections = slab.SectionColumns<int>(SectionType.GraphEdgesChunk);
-            var chunks = new ReadOnlyMemory<int>[edgeSections.Count];
-            for (int i = 0; i < chunks.Length; i++)
-            {
-                chunks[i] = edgeSections[i].AsMemory();
-            }
-            var edges = new EdgeColumn(chunks, chunkStarts);
-
-            ReadOnlyMemory<int>? typeIds = null;
-            string[]? typeNames = null;
-            if (slab.Has(SectionType.GraphTypeIds) && slab.Has(SectionType.GraphTypeNames))
-            {
-                typeIds = Materialize(slab.GetColumn<int>(SectionType.GraphTypeIds));
-                typeNames = DecodeNames(slab.Blob(SectionType.GraphTypeNames));
-            }
-
-            ulong freeBytes = 0;
-            long freeCount = 0;
-            if (meta.Length >= 1)
-            {
-                freeBytes = meta[0];
-            }
-
-            if (meta.Length >= 2)
-            {
-                freeCount = (long)meta[1];
-            }
-
-            return new HeapGraph(addresses, sizes, offsets, edges, typeIds, typeNames, freeBytes, freeCount, roots, slab);
+            return new HeapGraph(
+                meta.Id,
+                slab.GetColumn<ulong>(SectionType.GraphAddresses).AsMemory(),
+                slab.GetColumn<uint>(SectionType.GraphSizes).AsMemory(),
+                slab.GetColumn<LargeSize>(SectionType.GraphLargeSizes).AsMemory(),
+                slab.GetColumn<long>(SectionType.GraphOffsets).AsMemory(),
+                new EdgeColumn(slab.GetColumn<int>(SectionType.GraphEdges)),
+                slab.GetColumn<int>(SectionType.GraphTypeIds).AsMemory(),
+                DecodeNames(slab.Blob(SectionType.Strings), slab.GetColumn<TypeRecord>(SectionType.Types)),
+                meta.FreeBytes,
+                meta.FreeCount,
+                slab.GetColumn<HeapRootRecord>(SectionType.GraphRoots).AsMemory(),
+                slab);
         }
         catch
         {
@@ -122,41 +96,30 @@ public static class HeapGraphStore
         return (file.Length, file.LastWriteTimeUtc.Ticks);
     }
 
-    private static T[] Materialize<T>(Column<T> col) where T : unmanaged
+    private static (byte[] Strings, TypeRecord[] Types) EncodeNames(string[] names)
     {
-        var arr = GC.AllocateUninitializedArray<T>(checked((int)col.Length));
-        col.CopyTo(0, arr);
-        return arr;
-    }
-
-    // [u32 count][ (u32 byteLen, utf8 bytes) x count ], little-endian.
-    private static byte[] EncodeNames(string[] names)
-    {
-        var buffer = new List<byte>(names.Length * 24);
-        Span<byte> u32 = stackalloc byte[4];
-        BinaryPrimitives.WriteUInt32LittleEndian(u32, (uint)names.Length);
-        buffer.AddRange(u32);
-        foreach (string name in names)
+        var types = new TypeRecord[names.Length];
+        var strings = new MemoryStream();
+        for (int i = 0; i < names.Length; i++)
         {
-            byte[] utf8 = Encoding.UTF8.GetBytes(name);
-            BinaryPrimitives.WriteUInt32LittleEndian(u32, (uint)utf8.Length);
-            buffer.AddRange(u32);
-            buffer.AddRange(utf8);
+            byte[] utf8 = Encoding.UTF8.GetBytes(names[i]);
+            types[i] = new TypeRecord { Name = new StringRef { Offset = checked((uint)strings.Length), Length = (uint)utf8.Length } };
+            strings.Write(utf8);
         }
-        return buffer.ToArray();
+        return (strings.ToArray(), types);
     }
 
-    private static string[] DecodeNames(ReadOnlySpan<byte> blob)
+    private static string[] DecodeNames(byte[] strings, Column<TypeRecord> types)
     {
-        int count = (int)BinaryPrimitives.ReadUInt32LittleEndian(blob);
-        var names = new string[count];
-        int pos = 4;
-        for (int i = 0; i < count; i++)
+        var names = new string[types.Length];
+        for (int i = 0; i < names.Length; i++)
         {
-            int len = (int)BinaryPrimitives.ReadUInt32LittleEndian(blob[pos..]);
-            pos += 4;
-            names[i] = Encoding.UTF8.GetString(blob.Slice(pos, len));
-            pos += len;
+            StringRef name = types[i].Name;
+            if ((ulong)name.Offset + name.Length > (ulong)strings.Length)
+            {
+                throw new InvalidDataException("A type name runs past the string table.");
+            }
+            names[i] = Encoding.UTF8.GetString(strings, (int)name.Offset, (int)name.Length);
         }
         return names;
     }

@@ -3,7 +3,6 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 
 namespace Sherlock.Core.Storage;
 
@@ -13,84 +12,76 @@ namespace Sherlock.Core.Storage;
 /// </summary>
 public sealed class SlabFile : IDisposable
 {
-    // Descriptor only; columns resolve bytes lazily through the mmap, so a >2 GB section is fine.
-    private readonly record struct SectionInfo(SectionType Type, ushort Version, ushort RecordSize, long ByteOffset, long ByteLength, long Count);
+    private readonly record struct Section(uint RecordSize, long Offset, long Length);
 
-    private readonly ChunkedMmap _mmap;
-    private readonly List<SectionInfo> _sections = [];
+    private readonly MappedFile _file;
+    private readonly Dictionary<SectionType, Section> _sections = [];
 
-    public ushort Version { get; }
-
-    private SlabFile(ChunkedMmap mmap)
+    private SlabFile(MappedFile file, SlabKind kind, uint version)
     {
-        _mmap = mmap;
+        _file = file;
 
-        if (mmap.Length < ContainerFormat.HeaderSize)
+        if (file.Length < ContainerFormat.HeaderSize)
         {
-            throw new InvalidDataException("file smaller than container header (truncated)");
+            throw new InvalidDataException("The file is too short to hold a Sherlock container.");
         }
-        Span<byte> head = stackalloc byte[ContainerFormat.HeaderSize];
-        mmap.CopyTo(0, head);
+        ReadOnlySpan<byte> head = file.Span(0, ContainerFormat.HeaderSize);
         if (!head[..4].SequenceEqual(ContainerFormat.Magic))
         {
-            throw new InvalidDataException("bad container magic");
+            throw new InvalidDataException("The file isn't a Sherlock container.");
         }
-        Version = BinaryPrimitives.ReadUInt16LittleEndian(head[4..]);
-        if (Version != ContainerFormat.FormatVersion)
+        var actualKind = (SlabKind)BinaryPrimitives.ReadUInt16LittleEndian(head[6..]);
+        if (BinaryPrimitives.ReadUInt16LittleEndian(head[4..]) != ContainerFormat.Version ||
+            (actualKind == kind && BinaryPrimitives.ReadUInt32LittleEndian(head[8..]) != version))
         {
-            throw new InvalidDataException($"unsupported container version {Version}");
+            throw new InvalidDataException(kind == SlabKind.Profile
+                ? "The profile was recorded by an incompatible version of Sherlock; record it again."
+                : $"The file holds {Describe(kind)} written by an incompatible version of Sherlock.");
         }
-        ushort flags = BinaryPrimitives.ReadUInt16LittleEndian(head[6..]);
-        if ((flags & ContainerFormat.FlagLittleEndian) == 0)
+        if (actualKind != kind)
         {
-            throw new InvalidDataException("only little-endian containers are supported");
+            throw new InvalidDataException($"The file holds {Describe(actualKind)}, not {Describe(kind)}.");
         }
-        uint count = BinaryPrimitives.ReadUInt32LittleEndian(head[8..]);
 
+        uint count = BinaryPrimitives.ReadUInt32LittleEndian(head[12..]);
         long tableEnd = ContainerFormat.HeaderSize + (long)count * ContainerFormat.SectionEntrySize;
-        if (tableEnd > mmap.Length || tableEnd > int.MaxValue)
+        if (tableEnd > file.Length || tableEnd > int.MaxValue)
         {
-            throw new InvalidDataException("section table exceeds container");
+            throw new InvalidDataException("The section table runs past the end of the file.");
         }
-
-        var table = new byte[checked((int)(count * (long)ContainerFormat.SectionEntrySize))];
-        mmap.CopyTo(ContainerFormat.HeaderSize, table);
-        var occupied = new List<(long Start, long End)>(checked((int)count));
+        ReadOnlySpan<byte> table = file.Span(ContainerFormat.HeaderSize, (int)(tableEnd - ContainerFormat.HeaderSize));
+        var occupied = new List<(long Start, long End, SectionType Type)>((int)count);
         for (int i = 0; i < count; i++)
         {
-            ReadOnlySpan<byte> e = table.AsSpan(i * ContainerFormat.SectionEntrySize, ContainerFormat.SectionEntrySize);
-            ulong offset = BinaryPrimitives.ReadUInt64LittleEndian(e[8..]);
-            ulong length = BinaryPrimitives.ReadUInt64LittleEndian(e[16..]);
-            ulong records = BinaryPrimitives.ReadUInt64LittleEndian(e[24..]);
-            ulong fileLength = (ulong)mmap.Length;
-            if (offset > fileLength || length > fileLength - offset)
+            ReadOnlySpan<byte> entry = table.Slice(i * ContainerFormat.SectionEntrySize, ContainerFormat.SectionEntrySize);
+            var type = (SectionType)BinaryPrimitives.ReadUInt32LittleEndian(entry);
+            uint recordSize = BinaryPrimitives.ReadUInt32LittleEndian(entry[4..]);
+            ulong offset = BinaryPrimitives.ReadUInt64LittleEndian(entry[8..]);
+            ulong length = BinaryPrimitives.ReadUInt64LittleEndian(entry[16..]);
+            if (recordSize == 0 || length % recordSize != 0)
             {
-                throw new InvalidDataException("section bounds exceed container");
+                throw new InvalidDataException($"Section {type} isn't a whole number of {recordSize}-byte records.");
             }
-            if (length > 0 && offset < (ulong)tableEnd)
+            if (offset > (ulong)file.Length || length > (ulong)file.Length - offset)
             {
-                throw new InvalidDataException("section overlaps the container header");
+                throw new InvalidDataException($"Section {type} runs past the end of the file.");
             }
-            if (length > 0 && offset % ContainerFormat.Alignment != 0)
-            {
-                throw new InvalidDataException($"section at offset {offset} is not {ContainerFormat.Alignment}-byte aligned");
-            }
-            if (records > long.MaxValue)
-            {
-                throw new InvalidDataException("section record count exceeds supported range");
-            }
-
             if (length > 0)
             {
-                occupied.Add(((long)offset, checked((long)(offset + length))));
+                if (offset < (ulong)tableEnd)
+                {
+                    throw new InvalidDataException($"Section {type} overlaps the section table.");
+                }
+                if (offset % ContainerFormat.Alignment != 0)
+                {
+                    throw new InvalidDataException($"Section {type} isn't aligned to {ContainerFormat.Alignment} bytes.");
+                }
+                occupied.Add(((long)offset, (long)(offset + length), type));
             }
-            _sections.Add(new SectionInfo(
-                (SectionType)BinaryPrimitives.ReadUInt32LittleEndian(e),
-                BinaryPrimitives.ReadUInt16LittleEndian(e[4..]),
-                BinaryPrimitives.ReadUInt16LittleEndian(e[6..]),
-                (long)offset,
-                (long)length,
-                (long)records));
+            if (!_sections.TryAdd(type, new Section(recordSize, (long)offset, (long)length)))
+            {
+                throw new InvalidDataException($"Section {type} appears twice.");
+            }
         }
 
         occupied.Sort(static (a, b) => a.Start.CompareTo(b.Start));
@@ -98,126 +89,54 @@ public sealed class SlabFile : IDisposable
         {
             if (occupied[i].Start < occupied[i - 1].End)
             {
-                throw new InvalidDataException("container sections overlap");
+                throw new InvalidDataException($"Sections {occupied[i - 1].Type} and {occupied[i].Type} overlap.");
             }
         }
     }
 
-    /// <summary>Opens (memory-maps) the slab at <paramref name="path"/>.</summary>
-    public static SlabFile Open(string path)
+    /// <summary>Maps the slab at <paramref name="path"/>, requiring it to hold <paramref name="kind"/> at
+    /// <paramref name="version"/>.</summary>
+    public static SlabFile Open(string path, SlabKind kind, uint version)
     {
-        ChunkedMmap mmap = ChunkedMmap.Open(path);
+        MappedFile file = MappedFile.Open(path);
         try
         {
-            return new SlabFile(mmap);
+            return new SlabFile(file, kind, version);
         }
         catch
         {
-            mmap.Dispose();
+            file.Dispose();
             throw;
         }
     }
 
-    public bool Has(SectionType type)
-    {
-        foreach (SectionInfo s in _sections)
-        {
-            if (s.Type == type)
-            {
-                return true;
-            }
-        }
-        return false;
-    }
+    public bool Has(SectionType type) => _sections.ContainsKey(type);
 
-    /// <summary>The version of the first section of <paramref name="type"/>, or 0 if absent.</summary>
-    public ushort SectionVersion(SectionType type)
-    {
-        foreach (SectionInfo s in _sections)
-        {
-            if (s.Type == type)
-            {
-                return s.Version;
-            }
-        }
-        return 0;
-    }
-
-    /// <summary>Reassembles same-typed sections into one long-indexed column.</summary>
+    /// <summary>The section's records, without copying; empty when the section is absent.</summary>
     public Column<T> GetColumn<T>(SectionType type) where T : unmanaged
     {
-        int width = Unsafe.SizeOf<T>();
-        ushort version = 0;
-        var segs = new List<(long byteOffset, long count)>();
-        foreach (SectionInfo s in _sections)
+        if (!_sections.TryGetValue(type, out Section section))
         {
-            if (s.Type != type)
-            {
-                continue;
-            }
-
-            version = Validate<T>(type, s, width, version);
-            segs.Add((s.ByteOffset, s.Count));
+            return Column<T>.Empty;
         }
-        return segs.Count == 0
-            ? Column<T>.Empty
-            : new Column<T>(_mmap, CollectionsMarshal.AsSpan(segs));
+        if (section.RecordSize != Unsafe.SizeOf<T>())
+        {
+            throw new InvalidDataException($"Section {type} holds {section.RecordSize}-byte records, not {typeof(T).Name}.");
+        }
+        return new Column<T>(_file, section.Offset, section.Length / section.RecordSize);
     }
 
-    /// <summary>Returns each same-typed section separately, in table order, preserving edge-chunk boundaries.</summary>
-    public IReadOnlyList<Column<T>> SectionColumns<T>(SectionType type) where T : unmanaged
+    /// <summary>Copies a section's bytes into an owned array; empty when the section is absent.</summary>
+    public byte[] Blob(SectionType type) =>
+        _sections.TryGetValue(type, out Section section) ? _file.Span(section.Offset, checked((int)section.Length)).ToArray() : [];
+
+    public void Dispose() => _file.Dispose();
+
+    private static string Describe(SlabKind kind) => kind switch
     {
-        int width = Unsafe.SizeOf<T>();
-        ushort version = 0;
-        var result = new List<Column<T>>();
-        foreach (SectionInfo s in _sections)
-        {
-            if (s.Type != type)
-            {
-                continue;
-            }
-
-            version = Validate<T>(type, s, width, version);
-            result.Add(new Column<T>(_mmap, [(s.ByteOffset, s.Count)]));
-        }
-        return result;
-    }
-
-    // Validate descriptors before exposing typed access to mapped bytes.
-    private static ushort Validate<T>(SectionType type, SectionInfo s, int width, ushort version) where T : unmanaged
-    {
-        if (s.RecordSize != width)
-        {
-            throw new InvalidDataException($"section {type} record size {s.RecordSize} != sizeof({typeof(T).Name}) {width}");
-        }
-        if (s.ByteLength % width != 0 || s.Count != s.ByteLength / width)
-        {
-            throw new InvalidDataException($"section {type} count {s.Count} overruns its {s.ByteLength} bytes");
-        }
-        if (version != 0 && s.Version != version)
-        {
-            throw new InvalidDataException($"section {type} mixes versions {version} and {s.Version}");
-        }
-        return s.Version;
-    }
-
-    /// <summary>Copies a whole single-section blob into an owned array (variable-width sections: the
-    /// string pool, the type-name blob).</summary>
-    public byte[] Blob(SectionType type)
-    {
-        foreach (SectionInfo s in _sections)
-        {
-            if (s.Type != type)
-            {
-                continue;
-            }
-
-            var buf = new byte[checked((int)s.ByteLength)];
-            _mmap.CopyTo(s.ByteOffset, buf);
-            return buf;
-        }
-        return [];
-    }
-
-    public void Dispose() => _mmap.Dispose();
+        SlabKind.Profile => "an allocation profile",
+        SlabKind.Graph => "a heap graph",
+        SlabKind.Dominators => "a dominator tree",
+        _ => $"an unknown kind of data ({(ushort)kind})",
+    };
 }

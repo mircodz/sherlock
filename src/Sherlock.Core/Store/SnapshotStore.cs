@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
@@ -40,10 +42,25 @@ public sealed class SnapshotStore
 
     public string Root { get; }
 
-    public static SnapshotStore Default()
+    public static SnapshotStore Default() => new(DefaultRoot);
+
+    /// <summary><c>SHERLOCK_HOME</c>, or <c>~/.sherlock</c>.</summary>
+    public static string DefaultRoot
     {
-        string? configured = Environment.GetEnvironmentVariable("SHERLOCK_HOME");
-        return new SnapshotStore(string.IsNullOrWhiteSpace(configured) ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".sherlock") : configured);
+        get
+        {
+            string? configured = Environment.GetEnvironmentVariable("SHERLOCK_HOME");
+            return Path.GetFullPath(string.IsNullOrWhiteSpace(configured)
+                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".sherlock")
+                : configured);
+        }
+    }
+
+    /// <summary>Where analysis caches for a dump outside the store live: under the store, never next to the dump.</summary>
+    public static string CacheDirectory(string root, string dumpPath)
+    {
+        byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(dumpPath)));
+        return Path.Combine(root, "cache", Convert.ToHexStringLower(hash)[..16]);
     }
 
     public IReadOnlyList<Session> Sessions
@@ -83,7 +100,7 @@ public sealed class SnapshotStore
         {
             throw new DumpAnalysisException($"Snapshot '{idOrLabel}' is missing its heap dump.");
         }
-        return Snapshot.Open(entry.Path, entry);
+        return Snapshot.Open(entry.Path, entry, entry.Owned ? entry.Dir : CacheDirectory(Root, entry.Path));
     }
 
     public Session BeginSession(SessionKind kind, string? command = null, bool withLog = false)
@@ -246,6 +263,10 @@ public sealed class SnapshotStore
             {
                 Directory.Delete(session.Dir, recursive: true);
                 _sessions.Remove(session);
+                foreach (SnapshotEntry external in session.Snapshots.Where(snapshot => !snapshot.Owned))
+                {
+                    DeleteDir(CacheDirectory(Root, external.Path));
+                }
                 return true;
             }
             if (FindSnapshotEntry(id) is not ({ } owner, { } snapshot))
@@ -269,10 +290,7 @@ public sealed class SnapshotStore
                 process.Snapshots.Insert(index, snapshot);
                 throw;
             }
-            if (snapshot.Owned)
-            {
-                DeleteDir(snapshot.Dir);
-            }
+            DeleteDir(snapshot.Owned ? snapshot.Dir : CacheDirectory(Root, snapshot.Path));
             return true;
         }
     }
@@ -406,10 +424,13 @@ public sealed class SnapshotStore
 
     private static int IdNumber(string? id, char prefix) => id?.Length > 1 && id[0] == prefix && int.TryParse(id[1..], out int value) ? value : 0;
 
+    // A store keeps working after it's moved: its own files are found where the session is now.
     private static void NormalizePaths(Session session)
     {
+        session.LogPath = Relocated(session.LogPath, session.Dir);
         foreach (ProcessRecord process in session.Processes)
         {
+            process.AllocationsPath = Relocated(process.AllocationsPath, session.Dir);
             for (int i = 0; i < process.Snapshots.Count; i++)
             {
                 SnapshotEntry snapshot = process.Snapshots[i];
@@ -419,6 +440,16 @@ public sealed class SnapshotStore
                 }
             }
         }
+    }
+
+    private static string? Relocated(string? path, string dir)
+    {
+        if (path is null || File.Exists(path))
+        {
+            return path;
+        }
+        string moved = Path.Combine(dir, Path.GetFileName(path));
+        return File.Exists(moved) ? moved : path;
     }
 
     private static void CheckSnapshot(string dump, bool owned, string? provenance, bool correlated)

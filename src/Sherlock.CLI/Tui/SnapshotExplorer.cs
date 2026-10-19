@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Cellar.Layout;
 using Cellar.Primitives;
@@ -100,8 +101,8 @@ public static class SnapshotExplorer
     {
         SnapshotEntry entry = opened.Entry;
         Tabs tabs = Views()
-            .Add("Health", opened.Background((snapshot, _) => HealthView.Create(Overview(snapshot, entry))))
-            .Add("Types", opened.Background((snapshot, _) => TypesView.Create(snapshot.Histogram, navigate)))
+            .Add("Health", opened.Background((snapshot, cancellation) => HealthView.Create(Overview(snapshot, entry, cancellation))))
+            .Add("Types", opened.Background((snapshot, cancellation) => TypesView.Create(snapshot.GetHistogram(cancellation), navigate)))
             .Add("Retention", opened.Background((snapshot, cancellation) => RetentionView.Create(snapshot.GetDominatorTree(cancellation), navigate)));
         if (!entry.HasAllocations)
         {
@@ -144,12 +145,12 @@ public static class SnapshotExplorer
 
     private static string When(SnapshotEntry snapshot) => snapshot.CreatedAt.LocalDateTime.ToString("MM-dd HH:mm", CultureInfo.InvariantCulture);
 
-    private static HeapOverview Overview(Snapshot snapshot, SnapshotEntry entry)
+    private static HeapOverview Overview(Snapshot snapshot, SnapshotEntry entry, CancellationToken cancellation)
     {
         DumpInfo info = snapshot.Info;
         string gc = info.ServerGc ? $"server GC, {info.HeapCount} heaps" : "workstation GC";
         string captured = When(entry) + (entry.Reason is { } reason ? $" \u00b7 on {reason}" : "");
-        return new HeapOverview(entry.Id, snapshot.Histogram, snapshot.Generations, $"{info.ClrFlavor} {info.ClrVersion} \u00b7 {gc}", captured);
+        return new HeapOverview(entry.Id, snapshot.GetHistogram(cancellation), snapshot.Generations, $"{info.ClrFlavor} {info.ClrVersion} \u00b7 {gc}", captured);
     }
 
     /// <summary>Shows what went wrong over the page, such as a snapshot that won't open, instead of ending the explorer.

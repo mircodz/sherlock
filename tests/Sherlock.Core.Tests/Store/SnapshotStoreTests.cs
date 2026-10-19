@@ -142,6 +142,51 @@ public sealed class SnapshotStoreTests : IDisposable
     }
 
     [Fact]
+    public void AMovedStoreFindsItsFilesWhereTheyAreNow()
+    {
+        string root = Path.Combine(_tmp.Path, "store");
+        var store = new SnapshotStore(root);
+        Session session = store.BeginSession(SessionKind.Run, withLog: true);
+        File.WriteAllText(session.LogPath!, "log");
+        string profile = Path.Combine(session.Dir, "allocations.42.slab");
+        File.Copy(WriteProvenance("profile.tmp"), profile);
+        store.MarkAllocations(session, 42, "app", profile);
+        SnapshotEntry snapshot = store.AddSnapshot(session, WriteFile("heap.tmp", [1]), moveIntoStore: true, sourcePid: 42);
+
+        string moved = Path.Combine(_tmp.Path, "moved");
+        Directory.Move(root, moved);
+        Session reopened = Assert.Single(new SnapshotStore(moved).Sessions);
+
+        Assert.Equal(Path.Combine(reopened.Dir, "run.log"), reopened.LogPath);
+        ProcessRecord process = Assert.Single(reopened.Processes);
+        Assert.True(process.HasAllocations);
+        Assert.Equal(Path.Combine(reopened.Dir, "allocations.42.slab"), process.AllocationsPath);
+        Assert.True(Assert.Single(process.Snapshots).Exists);
+        Assert.Equal(snapshot.Id, process.Snapshots[0].Id);
+    }
+
+    [Fact]
+    public void CachesForOutsideDumpsLiveUnderTheStoreAndGoAwayWithTheEntry()
+    {
+        var store = new SnapshotStore(Path.Combine(_tmp.Path, "store"));
+        Session session = store.BeginSession(SessionKind.Import);
+        string dump = WriteFile("outside.dmp", [1, 2, 3]);
+        SnapshotEntry snapshot = store.AddSnapshot(session, dump, moveIntoStore: false);
+        string cache = SnapshotStore.CacheDirectory(store.Root, dump);
+        Directory.CreateDirectory(cache);
+        File.WriteAllBytes(Path.Combine(cache, "heapgraph.slab"), [0]);
+
+        Assert.StartsWith(Path.Combine(store.Root, "cache"), cache);
+        Assert.Equal(cache, SnapshotStore.CacheDirectory(store.Root, Path.Combine(_tmp.Path, ".", "outside.dmp")));
+        Assert.NotEqual(cache, SnapshotStore.CacheDirectory(store.Root, WriteFile("other.dmp", [1])));
+
+        Assert.True(store.Remove(snapshot.Id));
+
+        Assert.False(Directory.Exists(cache));
+        Assert.True(File.Exists(dump)); // not ours to delete
+    }
+
+    [Fact]
     public void SetLabelUpdatesWorkspaceMetadata()
     {
         var store = new SnapshotStore(Path.Combine(_tmp.Path, "store"));
@@ -204,7 +249,7 @@ public sealed class SnapshotStoreTests : IDisposable
         var provenance = new ProvenanceWriter();
         uint stack = provenance.InternStack(Sherlock.Tests.Frames.Stack("Program.Main", "App.Query"));
         provenance.AddAllocation(stack, provenance.InternType("MyApp.Query"), 128, 2, 64, 1);
-        var container = new ContainerWriter();
+        var container = new ContainerWriter(SlabKind.Profile, ProfileFormat.Version);
         provenance.WriteTo(container);
         string path = Path.Combine(_tmp.Path, name);
         container.Save(path);

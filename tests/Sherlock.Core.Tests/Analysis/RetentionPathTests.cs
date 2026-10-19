@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.Diagnostics.Runtime;
@@ -34,15 +35,7 @@ public sealed class RetentionPathTests
         return new HeapGraph(addresses, sizes, offsets, edgeList.ToArray(), typeIds, typeNames);
     }
 
-    // Resolve names from the graph so the null ClrHeap is never dereferenced.
-    private static DominatorTree TreeOf(HeapGraph g)
-    {
-        DominatorAnalyzer.DominatorResult r = DominatorAnalyzer.Compute(g);
-        var rpoOf = new Dictionary<ulong, int>(r.Address.Length);
-        for (int rpo = 1; rpo < r.Address.Length; rpo++) rpoOf[r.Address[rpo]] = rpo;
-        string Resolve(ulong addr) { int id = g.IndexOf(addr); return id >= 0 ? g.TypeNameOf(id) ?? "?" : "?"; }
-        return new DominatorTree(null!, r.Address, r.Own, r.Retained, r.Idom, rpoOf, Resolve);
-    }
+    private static DominatorTree TreeOf(HeapGraph g) => new(g, DominatorAnalyzer.Compute(g));
 
     private static string[] PathTypes(DominatorTree t, HeapGraph g, int obj) =>
         (t.RetentionPath(g.Addresses.Span[obj]) ?? []).Select(n => n.TypeName).ToArray();
@@ -103,7 +96,7 @@ public sealed class RetentionPathTests
     {
         HeapGraph graph = Build([10, 10], roots: [0], (0, 1));
         HeapRootRecord[] roots = [new(0, 0x1234, ClrRootKind.PinnedHandle, true, true)];
-        var withMetadata = new HeapGraph(graph.Addresses, graph.Sizes, graph.Offsets, graph.Edges,
+        var withMetadata = new HeapGraph(Guid.NewGuid(), graph.Addresses, graph.Sizes, default, graph.Offsets, graph.Edges,
             graph.TypeIds, graph.TypeNames, 0, 0, roots);
         GcRootInfo root = Assert.Single(RootAnalyzer.Find(withMetadata, graph.Addresses.Span[1])).Root;
 
@@ -136,4 +129,68 @@ public sealed class RetentionPathTests
         Assert.Null(t.RetentionPath(g.Addresses.Span[1]));
     }
 
+    // A search from one root used to leave nodes it queued but never explored marked as seen, so a later root couldn't
+    // pass through them: here 4 reaches 1 through 2 and 0, which the search from 3 had queued.
+    [Fact]
+    public void RootAnalyzerFindsRootsThroughObjectsAnEarlierRootReached()
+    {
+        HeapGraph g = Build([10, 10, 10, 10, 10], roots: [3, 4], (3, 4), (3, 0), (4, 2), (2, 0), (0, 1));
+        IReadOnlyList<GcRootPath> paths = RootAnalyzer.Find(g, g.Addresses.Span[1]);
+
+        Assert.Equal([g.Addresses.Span[3], g.Addresses.Span[4]], paths.Select(path => path.Path[0].Address));
+        Assert.Equal(["T3", "T0", "T1"], paths[0].Path.Select(node => node.TypeName));
+        Assert.Equal(["T4", "T2", "T0", "T1"], paths[1].Path.Select(node => node.TypeName));
+    }
+
+    [Fact]
+    public void RootAnalyzerAgreesWithBruteForceOnRandomGraphs()
+    {
+        var random = new System.Random(20261016);
+        for (int round = 0; round < 3000; round++)
+        {
+            int n = random.Next(2, 12);
+            var edges = new List<(int, int)>();
+            for (int from = 0; from < n; from++)
+            {
+                for (int to = 0; to < n; to++)
+                {
+                    if (random.NextDouble() < 0.2) edges.Add((from, to));
+                }
+            }
+            int[] roots = Enumerable.Range(0, random.Next(1, 4)).Select(_ => random.Next(n)).ToArray();
+            HeapGraph g = Build(Enumerable.Repeat(10u, n).ToArray(), roots, [.. edges]);
+            int target = random.Next(n);
+
+            IReadOnlyList<GcRootPath> found = RootAnalyzer.Find(g, g.Addresses.Span[target]);
+
+            int[] expectedRoots = roots.Where(root => Distance(g, root, target) >= 0).ToArray();
+            Assert.Equal(expectedRoots.Select(root => g.Addresses.Span[root]), found.Select(path => path.Path[0].Address));
+            foreach (GcRootPath path in found)
+            {
+                int[] ids = path.Path.Select(node => g.IndexOf(node.Address)).ToArray();
+                Assert.Equal(target, ids[^1]);
+                for (int i = 0; i + 1 < ids.Length; i++)
+                {
+                    Assert.Contains(ids[i + 1], g.Successors(ids[i]).ToArray());
+                }
+                Assert.Equal(Distance(g, ids[0], target), ids.Length - 1); // a shortest path
+            }
+        }
+    }
+
+    // Fewest references from one object to another, or -1.
+    private static int Distance(HeapGraph g, int from, int to)
+    {
+        var steps = new Dictionary<int, int> { [from] = 0 };
+        var queue = new Queue<int>([from]);
+        while (queue.TryDequeue(out int node))
+        {
+            if (node == to) return steps[node];
+            foreach (int next in g.Successors(node))
+            {
+                if (steps.TryAdd(next, steps[node] + 1)) queue.Enqueue(next);
+            }
+        }
+        return -1;
+    }
 }

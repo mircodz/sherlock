@@ -1,36 +1,36 @@
 namespace Sherlock.Core.Storage;
 
+/// <summary>Section types, numbered in blocks by the kind of file they appear in.</summary>
 public enum SectionType : uint
 {
-    // Profile symbols: methods by identity, allocated types, and stacks of method indices.
+    // Profile: methods by identity, allocated types, stacks of method indices, allocation counts by stack and type,
+    // and, for objects alive at capture, their addresses (sorted) and allocating stacks. Keep in sync with the
+    // native SectionType.
     Strings = 1,
-    Frames = 2,           // retired: names interned without identities; readers reject profiles that have it
-    Stacks = 3,
-    StackFrames = 4,
-    Allocations = 5,
-    Correlation = 6,
-    Modules = 25,
-    Methods = 26,
-    Types = 27,
+    Modules = 2,
+    Methods = 3,
+    Types = 4,
+    Stacks = 5,
+    StackFrames = 6,
+    Allocations = 7,
+    ObjectAddresses = 8,
+    ObjectStacks = 9,
 
-    // Heap columns use dense object ids; the last node is the synthetic root.
-    // Its successors are rooted objects; GraphRoots preserves each root's CLR metadata.
-    GraphAddresses = 7,   // ulong[] object addresses, sorted (id = index)
-    GraphSizes = 8,       // uint[] shallow sizes, by id
-    GraphOffsets = 9,     // long[] CSR row offsets (length ObjectCount + 2; long so edge count can exceed 2.1B)
-    GraphEdges = 10,      // int[] CSR successor ids (legacy single-section edges; superseded by GraphEdgesChunk)
-    GraphTypeIds = 11,    // int[] per-object type index into GraphTypeNames (optional)
-    GraphTypeNames = 12,  // blob: [u32 count][ (u32 len, utf8 bytes) x count ] (optional)
-    GraphMeta = 13,       // ulong[4]: free bytes/count + source dump length/mtime
-    GraphEdgesChunk = 14, // int[] one node-aligned slice of the CSR successor ids; repeated, in order, so
-                          //   the edge column can exceed the ~2.1B single-array ceiling
-    GraphEdgeChunkMeta = 15, // long[] first global edge index of each chunk (length chunkCount + 1, last = total)
-    GraphRoots = 16,
+    // Graph: dense object ids in address order; the node after the last object is the synthetic root, whose
+    // successors are the rooted objects. Type names are Strings and Types, as in a profile.
+    GraphMeta = 16,       // GraphMeta: graph id, free space, and the source dump's length and mtime
+    GraphAddresses = 17,  // ulong per object, sorted
+    GraphSizes = 18,      // uint per object; uint.MaxValue marks one in GraphLargeSizes
+    GraphLargeSizes = 19, // LargeSize per object of 4 GiB or more, by id
+    GraphTypeIds = 20,    // int per object, indexing Types
+    GraphOffsets = 21,    // long per object, then the root's, then the total: each one's first edge
+    GraphEdges = 22,      // int per reference
+    GraphRoots = 23,      // HeapRootRecord per CLR root
 
-    // Dominator columns use RPO ids, with the synthetic root at 0.
-    // Address and shallow size are reconstructed from the graph via NodeByRpo.
-    DomMeta = 20,         // ulong[1]: { graph ContentHash }; validity key, reject if it != the graph's
-    DomNodeByRpo = 21,    // int[]   RPO -> object id (graph.Root at index 0)
-    DomRetained = 23,     // ulong[] RPO -> retained size
-    DomIdom = 24,         // int[]   RPO -> immediate dominator (RPO)
+    // Dominators, by graph node: object ids, then the synthetic root.
+    DomMeta = 32,         // Guid: the id of the graph the tree was computed from
+    DomIdom = 33,         // int per node: immediate dominator; the root's is itself, an unreachable object's -1
+    DomRetained = 34,     // ulong per node: retained bytes
+    DomChildOffsets = 35, // long per node, then the total: each node's first entry in DomChildren
+    DomChildren = 36,     // int per reachable object: its dominator's children, largest retained first
 }
