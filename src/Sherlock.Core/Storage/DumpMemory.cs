@@ -80,6 +80,17 @@ internal sealed unsafe partial class DumpMemory : IDisposable
         return true;
     }
 
+    /// <summary>How many bytes from <paramref name="address"/> the dump holds before its first gap, up to <paramref name="length"/>.</summary>
+    public ulong Captured(ulong address, ulong length)
+    {
+        ulong captured = 0;
+        for (int i; captured < length && (i = Find(address + captured)) >= 0;)
+        {
+            captured = Math.Min(length, _ends[i] - address);
+        }
+        return captured;
+    }
+
     /// <summary>Asks the OS to start reading [address, address + length) from the file, so a walk over an uncached dump
     /// keeps the disk busy instead of faulting in a page at a time.</summary>
     public void WillNeed(ulong address, ulong length)

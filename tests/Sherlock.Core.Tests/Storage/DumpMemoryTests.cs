@@ -126,6 +126,24 @@ public sealed unsafe class DumpMemoryTests : IDisposable
     }
 
     [Fact]
+    public void CapturedCountsTheBytesBeforeTheFirstGap()
+    {
+        const int Data = 4096;
+        var file = new byte[Data + 0x400];
+        Put(file, 0, 0xfeedfacfu);
+        Put(file, 16, 3u);
+        int at = Segment(file, 32, 0x10000, 0x200, Data, 0x200);
+        at = Segment(file, at, 0x10200, 0x80, Data + 0x300, 0x80); // next in memory, elsewhere in the file
+        Segment(file, at, 0x20000, 0x40, Data + 0x380, 0x20);       // only half captured
+        using DumpMemory memory = Open(file);
+
+        Assert.Equal(0x280UL, memory.Captured(0x10000, 0x300));
+        Assert.Equal(0x100UL, memory.Captured(0x10100, 0x100));
+        Assert.Equal(0x10UL, memory.Captured(0x20010, 0x40));
+        Assert.Equal(0UL, memory.Captured(0x30000, 8));
+    }
+
+    [Fact]
     public void RangeCutShortByTheEndOfTheFileKeepsWhatTheFileHas()
     {
         var file = new byte[4096 + 0x80];

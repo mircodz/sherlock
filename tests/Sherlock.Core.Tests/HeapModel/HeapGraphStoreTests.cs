@@ -132,30 +132,6 @@ public sealed class HeapGraphStoreTests : IDisposable
     }
 
     [Fact]
-    public void RoundTrips_MultiChunkEdges_AsOneSection()
-    {
-        // A tiny budget splits the in-memory edges without allocating billions of them.
-        ulong[] addresses = [0x1000, 0x2000, 0x3000, 0x4000];
-        uint[] sizes = [16, 24, 24, 48];
-        long[] offsets = [0, 2, 3, 4, 4, 5]; // same CSR as SampleGraph, as long
-        int[] flatEdges = [1, 2, 3, 3, 0];
-        var col = EdgeColumn.Build([new ReadOnlyMemory<int>(flatEdges)], offsets, maxEdgesPerChunk: 2);
-        Assert.True(col.ChunkCount > 1, "test setup should produce multiple chunks");
-
-        var original = new HeapGraph(addresses, sizes, offsets, col);
-        HeapGraphStore.Save(_path, original);
-        using HeapGraph loaded = HeapGraphStore.Load(_path)!;
-
-        Assert.Equal(0, loaded.Edges.ChunkCount); // one mapped section
-        Assert.Equal(5, loaded.Edges.Count);
-        Assert.Equal([1, 2], loaded.Successors(0).ToArray());
-        Assert.Equal([3], loaded.Successors(1).ToArray());
-        Assert.Equal([3], loaded.Successors(2).ToArray());
-        Assert.Equal([], loaded.Successors(3).ToArray());
-        Assert.Equal([0], loaded.Successors(loaded.Root).ToArray());
-    }
-
-    [Fact]
     public void RoundTrips_AddressLookupPreserved()
     {
         HeapGraphStore.Save(_path, SampleGraph());

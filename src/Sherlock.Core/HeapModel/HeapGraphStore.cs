@@ -9,7 +9,7 @@ namespace Sherlock.Core.HeapModel;
 /// <summary>Persists a heap graph as typed slab columns.</summary>
 public static class HeapGraphStore
 {
-    private const uint Version = 3;
+    internal const uint Version = 3;
 
     private static readonly SectionType[] Required =
     [
@@ -86,7 +86,7 @@ public static class HeapGraphStore
         }
     }
 
-    private static (long Length, long Modified) SourceStamp(string? path)
+    internal static (long Length, long Modified) SourceStamp(string? path)
     {
         if (path is null)
         {

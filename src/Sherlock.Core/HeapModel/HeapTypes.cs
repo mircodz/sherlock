@@ -214,9 +214,11 @@ internal sealed unsafe class GCDescriptor
         return new GCDescriptor(MemoryMarshal.Read<long>(data[(highest + 8)..]), runs, skips);
     }
 
-    /// <summary>Visits each non-null reference among the object's <paramref name="size"/> bytes at <paramref name="memory"/>.</summary>
+    /// <summary>Visits each non-null reference among the object's <paramref name="size"/> bytes at <paramref name="memory"/>.
+    /// <paramref name="partial"/> bytes are the start of a longer object, so a run of references past them ends the walk
+    /// instead of meaning the descriptor is wrong.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void Walk<TVisitor>(byte* memory, long size, ref TVisitor visitor) where TVisitor : struct, IReferenceVisitor
+    public void Walk<TVisitor>(byte* memory, long size, bool partial, ref TVisitor visitor) where TVisitor : struct, IReferenceVisitor
     {
         if (!_repeats)
         {
@@ -250,6 +252,10 @@ internal sealed unsafe class GCDescriptor
                 long stop = at + runs[i] * 8L;
                 if (at < 0 || Math.Max(stop, at + 8) > size)
                 {
+                    if (partial && at >= 0)
+                    {
+                        return;
+                    }
                     throw Malformed(*(ulong*)memory);
                 }
                 // At least one slot per run, as ClrMD reads them.

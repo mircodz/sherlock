@@ -113,9 +113,17 @@ internal static unsafe class HeapWalk
         return length == 8 ? *(ulong*)p : *(uint*)p;
     }
 
-    /// <summary>The bytes of an object, which a walk over its references needs in full.</summary>
-    public static byte* Body(DumpCursor cursor, ulong address, ulong size) =>
-        cursor.Object(address, size) is var p && p != null ? p : throw new InvalidDataException($"Could not read object 0x{address:x}.");
+    /// <summary>Visits the references of an object as far as the dump holds it, as ClrMD does: its bytes from the start
+    /// up to the first gap, which are all of them unless the dump left pages out.</summary>
+    public static void References<TVisitor>(GCDescriptor descriptor, DumpCursor cursor, ulong address, ulong size, ref TVisitor visitor)
+        where TVisitor : struct, IReferenceVisitor
+    {
+        byte* bytes = cursor.Object(address, size, out ulong captured);
+        if (captured > 8)
+        {
+            descriptor.Walk(bytes, (long)captured, captured < size, ref visitor);
+        }
+    }
 
     /// <summary>Runs <paramref name="worker"/> on <paramref name="count"/> threads at once. The first failure stops the
     /// other workers and is rethrown as it was thrown.</summary>
@@ -259,25 +267,34 @@ internal sealed unsafe class DumpCursor(DumpMemory memory) : IDisposable
         return p;
     }
 
-    /// <summary>An object's bytes, in place or copied when they span runs; null when some weren't captured.</summary>
-    public byte* Object(ulong address, ulong size)
+    /// <summary>An object's bytes, in place or copied when they span runs. When the dump lacks some, as it does for pages
+    /// a process never touched, only the bytes up to the first gap: <paramref name="captured"/> says how many.</summary>
+    public byte* Object(ulong address, ulong size, out ulong captured)
     {
+        captured = size;
         byte* p = At(address, size);
         if (p != null)
         {
             return p;
         }
-        if (size > int.MaxValue)
+        captured = memory.Captured(address, size);
+        p = At(address, captured);
+        if (p != null || captured == 0)
+        {
+            return p;
+        }
+        if (captured > int.MaxValue)
         {
             throw new NotSupportedException($"Object 0x{address:x} spans the dump's ranges and is too large to copy.");
         }
-        if (size > _capacity)
+        if (captured > _capacity)
         {
             NativeMemory.Free(_buffer);
-            _buffer = (byte*)NativeMemory.Alloc((nuint)size);
-            _capacity = size;
+            _buffer = (byte*)NativeMemory.Alloc((nuint)captured);
+            _capacity = captured;
         }
-        return memory.TryCopy(address, new Span<byte>(_buffer, (int)size)) ? _buffer : null;
+        memory.TryCopy(address, new Span<byte>(_buffer, (int)captured));
+        return _buffer;
     }
 
     public void Dispose()

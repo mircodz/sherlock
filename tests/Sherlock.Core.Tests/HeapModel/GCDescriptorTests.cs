@@ -40,23 +40,48 @@ public sealed unsafe class GCDescriptorTests
         GCDescriptor descriptor = GCDescriptor.Decode(Series((16, 0)), 0x5000); // claims the whole object again, past its end
         byte[] bytes = ObjectBytes(32);
 
-        var error = Assert.Throws<InvalidDataException>(() => Walk(descriptor, bytes));
+        var error = Assert.Throws<InvalidDataException>(() => Walk(descriptor, bytes, bytes.Length, partial: false));
         Assert.Contains("doesn't fit", error.Message);
     }
 
-    private static void AssertSameAsClrMD(byte[] descriptor, byte[] bytes)
+    // A dump can hold an object's first bytes only; ClrMD then walks the descriptor over the bytes it read.
+    [Theory]
+    [InlineData(40)]
+    [InlineData(64)]
+    public void PartlyCapturedArrayWalksTheCapturedBytes(int captured)
     {
-        ulong[] expected = [.. new GCDesc(descriptor, 8).WalkObject(bytes, bytes.Length).Select(r => r.ReferencedObject)];
-        Assert.NotEmpty(expected);
-        Assert.Equal(expected, Walk(GCDescriptor.Decode(descriptor, 0x5000), bytes));
+        byte[] descriptor = Series((16, -24));
+        byte[] bytes = ObjectBytes(24 + 8 * 8, (16, 0xA), (24, 0xB), (32, 0xC), (48, 0xD), (64, 0xE));
+
+        AssertSameAsClrMD(descriptor, bytes, captured);
     }
 
-    private static List<ulong> Walk(GCDescriptor descriptor, byte[] bytes)
+    [Theory]
+    [InlineData(44)]
+    [InlineData(72)]
+    public void PartlyCapturedStructArrayStopsAtTheGap(int captured)
+    {
+        byte[] descriptor = Repeating(start: 16, (1, 8), (1, 0));
+        byte[] bytes = ObjectBytes(24 + 24 * 3, (16, 0x10), (32, 0x11), (40, 0x12), (56, 0x13), (64, 0x14), (80, 0x15));
+        Array.Clear(bytes, captured, bytes.Length - captured); // what ClrMD's buffer holds past the bytes it read
+
+        AssertSameAsClrMD(descriptor, bytes, captured);
+    }
+
+    private static void AssertSameAsClrMD(byte[] descriptor, byte[] bytes, int? captured = null)
+    {
+        int size = captured ?? bytes.Length;
+        ulong[] expected = [.. new GCDesc(descriptor, 8).WalkObject(bytes, size).Select(r => r.ReferencedObject)];
+        Assert.NotEmpty(expected);
+        Assert.Equal(expected, Walk(GCDescriptor.Decode(descriptor, 0x5000), bytes, size, partial: captured is not null));
+    }
+
+    private static List<ulong> Walk(GCDescriptor descriptor, byte[] bytes, int size, bool partial)
     {
         var visitor = new Collect { References = [] };
         fixed (byte* p = bytes)
         {
-            descriptor.Walk(p, bytes.Length, ref visitor);
+            descriptor.Walk(p, size, partial, ref visitor);
         }
         return visitor.References;
     }
