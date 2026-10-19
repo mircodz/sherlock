@@ -32,6 +32,7 @@ public sealed class Snapshot : IDisposable
     private readonly Once<IReadOnlyList<ExceptionInfo>> _exceptions = new();
     private readonly Once<IReadOnlyList<HeapTypeStat>> _histogram = new();
     private readonly Once<DumpHeap> _dumpHeap = new();
+    private readonly Once<InboundIndex> _inbound = new();
     private readonly Once<DominatorTree> _dominators = new();
     private readonly Once<FinalizerReport> _finalizers = new();
     private readonly Once<IReadOnlyList<Finding>> _diagnosis = new();
@@ -154,7 +155,8 @@ public sealed class Snapshot : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         return new ObjectInspector(this).InspectChildren(value, startIndex, count, raw);
     }
-    public IReadOnlyList<GcRootPath> Roots(ulong address, CancellationToken cancellationToken = default) => RootAnalyzer.Find(GetHeapGraph(cancellationToken), address, cancellationToken);
+    public IReadOnlyList<GcRootPath> Roots(ulong address, CancellationToken cancellationToken = default) =>
+        RootAnalyzer.Find(GetHeapGraph(cancellationToken), GetInbound(cancellationToken), CacheDirectory, address, cancellationToken);
     public InstanceListing Instances(string filter, int limit = 20, CancellationToken cancellationToken = default, bool exact = false) =>
         new HeapAnalyzer(this).ListInstances(filter, limit, cancellationToken, exact);
 
@@ -197,6 +199,17 @@ public sealed class Snapshot : IDisposable
     }
 
     internal HeapGraph GetHeapGraph(CancellationToken cancellationToken = default) => _heapGraph.Get(cancellationToken);
+
+    /// <summary>Who references each object, from the cache or built into it from the heap graph.</summary>
+    internal InboundIndex GetInbound(CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return _inbound.Get(() =>
+        {
+            Directory.CreateDirectory(CacheDirectory);
+            return InboundIndex.Open(GetHeapGraph(cancellationToken), Path.Combine(CacheDirectory, "inbound.slab"), cancellationToken);
+        }, cancellationToken);
+    }
     internal HeapGraph? TryGetCachedHeapGraph(CancellationToken cancellationToken = default) => _heapGraph.TryGetCachedOrOnDisk(cancellationToken);
 
     // Callers hold _provenanceLock. A profile that can't be read fails the same way every time, without reopening it.
@@ -260,6 +273,7 @@ public sealed class Snapshot : IDisposable
         _disposed = true;
         _slab?.Dispose();
         _dominators.Value?.Dispose();
+        _inbound.Value?.Dispose();
         _heapGraph.Dispose();
         _dumpHeap.Value?.Dispose();
         Runtime.Dispose();

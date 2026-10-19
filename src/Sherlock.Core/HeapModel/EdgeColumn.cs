@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using Sherlock.Core.Storage;
 
@@ -50,4 +51,17 @@ public sealed class EdgeColumn
     /// <summary>Returns a range that lies within one CSR row.</summary>
     public ReadOnlySpan<int> Slice(long start, int length) =>
         _mapped is { } mapped ? mapped.Slice(start, length) : _memory.Span.Slice(checked((int)start), length);
+
+    /// <summary>The first edge, for walks over every row; valid while <paramref name="pin"/> is held and the graph is
+    /// open.</summary>
+    internal unsafe int* Pin(out MemoryHandle pin)
+    {
+        if (_mapped is { } mapped)
+        {
+            pin = default;
+            return mapped.Pointer;
+        }
+        pin = _memory.Pin();
+        return (int*)pin.Pointer;
+    }
 }

@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using Microsoft.Diagnostics.Runtime;
 using Sherlock.Core.Analysis;
 using Sherlock.Core.HeapModel;
+using Sherlock.Core.Tests.Common;
 using Xunit;
 
 namespace Sherlock.Core.Tests.Analysis;
@@ -65,7 +67,7 @@ public sealed class RetentionPathTests
     public void RootAnalyzerReturnsRealReferenceEdges()
     {
         HeapGraph g = Build([10, 10, 10, 10], roots: [0], (0, 1), (0, 2), (1, 3), (2, 3));
-        GcRootPath path = Assert.Single(RootAnalyzer.Find(g, g.Addresses.Span[3]));
+        GcRootPath path = Assert.Single(GraphAnalysis.Roots(g, g.Addresses.Span[3]));
 
         Assert.Contains(g.IndexOf(path.Path[0].Address), g.Successors(g.Root).ToArray());
         for (int i = 0; i + 1 < path.Path.Count; i++)
@@ -78,14 +80,14 @@ public sealed class RetentionPathTests
     public void RootAnalyzerReturnsNoPathForUnreachableObjects()
     {
         HeapGraph g = Build([10, 10], roots: [0]);
-        Assert.Empty(RootAnalyzer.Find(g, g.Addresses.Span[1]));
+        Assert.Empty(GraphAnalysis.Roots(g, g.Addresses.Span[1]));
     }
 
     [Fact]
     public void RootAnalyzerReturnsEveryRoot()
     {
         HeapGraph g = Build([10, 10, 10], roots: [0, 1, 1], (0, 2), (1, 2));
-        IReadOnlyList<GcRootPath> paths = RootAnalyzer.Find(g, g.Addresses.Span[2]);
+        IReadOnlyList<GcRootPath> paths = GraphAnalysis.Roots(g, g.Addresses.Span[2]);
 
         Assert.Equal(3, paths.Count);
         Assert.Equal([g.Addresses.Span[0], g.Addresses.Span[1], g.Addresses.Span[1]], paths.Select(path => path.Path[0].Address));
@@ -98,7 +100,7 @@ public sealed class RetentionPathTests
         HeapRootRecord[] roots = [new(0, 0x1234, ClrRootKind.PinnedHandle, true, true)];
         var withMetadata = new HeapGraph(Guid.NewGuid(), graph.Addresses, graph.Sizes, default, graph.Offsets, graph.Edges,
             graph.TypeIds, graph.TypeNames, 0, 0, roots);
-        GcRootInfo root = Assert.Single(RootAnalyzer.Find(withMetadata, graph.Addresses.Span[1])).Root;
+        GcRootInfo root = Assert.Single(GraphAnalysis.Roots(withMetadata, graph.Addresses.Span[1])).Root;
 
         Assert.Equal(0x1234UL, root.Address);
         Assert.Equal("PinnedHandle", root.Kind);
@@ -110,14 +112,14 @@ public sealed class RetentionPathTests
     public void RootAnalyzerHandlesCycles()
     {
         HeapGraph g = Build([10, 10, 10], roots: [0], (0, 1), (1, 0), (1, 2));
-        Assert.Equal(["T0", "T1", "T2"], Assert.Single(RootAnalyzer.Find(g, g.Addresses.Span[2])).Path.Select(node => node.TypeName));
+        Assert.Equal(["T0", "T1", "T2"], Assert.Single(GraphAnalysis.Roots(g, g.Addresses.Span[2])).Path.Select(node => node.TypeName));
     }
 
     [Fact]
     public void RootAnalyzerUsesClrMdReferenceOrder()
     {
         HeapGraph g = Build([10, 10, 10, 10], roots: [0], (0, 2), (0, 1), (1, 3), (2, 3));
-        Assert.Equal(["T0", "T2", "T3"], Assert.Single(RootAnalyzer.Find(g, g.Addresses.Span[3])).Path.Select(node => node.TypeName));
+        Assert.Equal(["T0", "T2", "T3"], Assert.Single(GraphAnalysis.Roots(g, g.Addresses.Span[3])).Path.Select(node => node.TypeName));
     }
 
     [Fact]
@@ -135,7 +137,7 @@ public sealed class RetentionPathTests
     public void RootAnalyzerFindsRootsThroughObjectsAnEarlierRootReached()
     {
         HeapGraph g = Build([10, 10, 10, 10, 10], roots: [3, 4], (3, 4), (3, 0), (4, 2), (2, 0), (0, 1));
-        IReadOnlyList<GcRootPath> paths = RootAnalyzer.Find(g, g.Addresses.Span[1]);
+        IReadOnlyList<GcRootPath> paths = GraphAnalysis.Roots(g, g.Addresses.Span[1]);
 
         Assert.Equal([g.Addresses.Span[3], g.Addresses.Span[4]], paths.Select(path => path.Path[0].Address));
         Assert.Equal(["T3", "T0", "T1"], paths[0].Path.Select(node => node.TypeName));
@@ -145,35 +147,48 @@ public sealed class RetentionPathTests
     [Fact]
     public void RootAnalyzerAgreesWithBruteForceOnRandomGraphs()
     {
+        // Each round packs ten random graphs into one, unconnected, and searches each, so 300 rounds check 3000 cases.
         var random = new System.Random(20261016);
-        for (int round = 0; round < 3000; round++)
+        for (int round = 0; round < 300; round++)
         {
-            int n = random.Next(2, 12);
+            var sizes = new List<uint>();
             var edges = new List<(int, int)>();
-            for (int from = 0; from < n; from++)
+            var roots = new List<int>();
+            var targets = new List<int>();
+            for (int part = 0; part < 10; part++)
             {
-                for (int to = 0; to < n; to++)
+                int first = sizes.Count, n = random.Next(2, 12);
+                sizes.AddRange(Enumerable.Repeat(10u, n));
+                for (int from = 0; from < n; from++)
                 {
-                    if (random.NextDouble() < 0.2) edges.Add((from, to));
+                    for (int to = 0; to < n; to++)
+                    {
+                        if (random.NextDouble() < 0.2) edges.Add((first + from, first + to));
+                    }
                 }
+                roots.AddRange(Enumerable.Range(0, random.Next(1, 4)).Select(_ => first + random.Next(n)));
+                targets.Add(first + random.Next(n));
             }
-            int[] roots = Enumerable.Range(0, random.Next(1, 4)).Select(_ => random.Next(n)).ToArray();
-            HeapGraph g = Build(Enumerable.Repeat(10u, n).ToArray(), roots, [.. edges]);
-            int target = random.Next(n);
+            HeapGraph g = Build([.. sizes], [.. roots], [.. edges]);
+            using var tmp = new TempDir();
+            using InboundIndex inbound = InboundIndex.Open(g, tmp.File(), CancellationToken.None);
 
-            IReadOnlyList<GcRootPath> found = RootAnalyzer.Find(g, g.Addresses.Span[target]);
-
-            int[] expectedRoots = roots.Where(root => Distance(g, root, target) >= 0).ToArray();
-            Assert.Equal(expectedRoots.Select(root => g.Addresses.Span[root]), found.Select(path => path.Path[0].Address));
-            foreach (GcRootPath path in found)
+            foreach (int target in targets)
             {
-                int[] ids = path.Path.Select(node => g.IndexOf(node.Address)).ToArray();
-                Assert.Equal(target, ids[^1]);
-                for (int i = 0; i + 1 < ids.Length; i++)
+                IReadOnlyList<GcRootPath> found = RootAnalyzer.Find(g, inbound, tmp.Path, g.Addresses.Span[target]);
+
+                int[] expectedRoots = roots.Where(root => Distance(g, root, target) >= 0).ToArray();
+                Assert.Equal(expectedRoots.Select(root => g.Addresses.Span[root]), found.Select(path => path.Path[0].Address));
+                foreach (GcRootPath path in found)
                 {
-                    Assert.Contains(ids[i + 1], g.Successors(ids[i]).ToArray());
+                    int[] ids = path.Path.Select(node => g.IndexOf(node.Address)).ToArray();
+                    Assert.Equal(target, ids[^1]);
+                    for (int i = 0; i + 1 < ids.Length; i++)
+                    {
+                        Assert.Contains(ids[i + 1], g.Successors(ids[i]).ToArray());
+                    }
+                    Assert.Equal(Distance(g, ids[0], target), ids.Length - 1); // a shortest path
                 }
-                Assert.Equal(Distance(g, ids[0], target), ids.Length - 1); // a shortest path
             }
         }
     }

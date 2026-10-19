@@ -45,7 +45,6 @@ public sealed class HeapGraph : IDisposable
     // Keeps mmap-backed columns alive.
     private readonly IDisposable? _backing;
 
-    private readonly Once<Predecessors> _predecessors = new();
     private bool _disposed;
 
     /// <summary>Creates an in-memory graph whose roots are the synthetic root's successors. Without type columns,
@@ -170,13 +169,6 @@ public sealed class HeapGraph : IDisposable
         ReadOnlySpan<ulong> addresses = Addresses.Span;
         int index = addresses.BinarySearch(address);
         return index >= 0 ? index : -1;
-    }
-
-    /// <summary>Who references each object, built on first use and kept with the graph.</summary>
-    internal Predecessors GetPredecessors(CancellationToken cancellationToken = default)
-    {
-        ThrowIfDisposed();
-        return _predecessors.Get(() => Predecessors.Build(this, cancellationToken), cancellationToken);
     }
 
     public string TypeNameOf(int objectId)
