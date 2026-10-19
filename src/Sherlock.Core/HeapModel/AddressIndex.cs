@@ -2,7 +2,8 @@ using System;
 
 namespace Sherlock.Core.HeapModel;
 
-/// <summary>Resolves addresses to dense ids by bucketing a sorted address array, then binary-searching each bucket.</summary>
+/// <summary>Resolves addresses to dense ids by bucketing a sorted address array, then binary-searching each bucket. For
+/// extraction's bulk lookups.</summary>
 public sealed class AddressIndex
 {
     private readonly ReadOnlyMemory<ulong> _addresses;
