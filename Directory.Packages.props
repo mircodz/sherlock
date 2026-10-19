@@ -11,6 +11,7 @@
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
     <PackageVersion Include="Spectre.Console" Version="0.57.3-alpha.0.14" />
     <PackageVersion Include="Spectre.Console.Cli" Version="0.57.2" />
+    <PackageVersion Include="System.IO.Hashing" Version="10.0.13" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.1" />
     <PackageVersion Include="xunit.v3" Version="4.0.2" />
   </ItemGroup>

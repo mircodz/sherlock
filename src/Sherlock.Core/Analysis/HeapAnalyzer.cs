@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using Microsoft.Diagnostics.Runtime;
@@ -39,43 +40,20 @@ public sealed class HeapAnalyzer(Snapshot snapshot)
     }
 
     /// <summary>
-    /// Finds string values occurring more than once, ordered by wasted memory: (count - 1) * size.
+    /// Finds string values occurring more than once, ordered by wasted memory: (count - 1) * size, then by address.
     /// </summary>
+    /// <remarks>Values are compared by a hash of their characters, read in place by a parallel walk, and only the
+    /// returned values are read in full. Scratch files grow with the number of strings; memory doesn't.</remarks>
     public IReadOnlyList<DuplicateString> FindDuplicateStrings(int limit = 20, CancellationToken cancellationToken = default)
     {
-        var groups = new Dictionary<string, (long Count, ulong TotalSize)>(StringComparer.Ordinal);
-
-        foreach (ClrObject obj in snapshot.Runtime.Heap.EnumerateObjects())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (obj.Type?.IsString != true)
-            {
-                continue;
-            }
-
-            string? value = obj.AsString(65536);
-            if (value is null)
-            {
-                continue;
-            }
-
-            ref var entry = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(groups, value, out _);
-            entry.Count++;
-            entry.TotalSize += obj.Size;
-        }
-
-        return groups
-            .Where(g => g.Value.Count > 1)
-            .Select(g =>
-            {
-                ulong unit = g.Value.TotalSize / (ulong)g.Value.Count;
-                return new DuplicateString(g.Key, g.Value.Count, g.Value.TotalSize, unit * (ulong)(g.Value.Count - 1));
-            })
-            .OrderByDescending(d => d.WastedBytes)
-            .Take(limit)
-            .ToList();
+        long strings = snapshot.GetHistogram(cancellationToken).FirstOrDefault(t => t.TypeName == "System.String")?.Count ?? 0;
+        Directory.CreateDirectory(snapshot.CacheDirectory);
+        StringDuplicates.Group[] groups = StringDuplicates.Find(snapshot.GetDumpHeap(cancellationToken), strings, snapshot.CacheDirectory, limit, cancellationToken);
+        ClrHeap heap = snapshot.Runtime.Heap;
+        return [.. groups.Select(g => new DuplicateString(heap.GetObject(g.Address).AsString(MaxValueLength) ?? "", g.Count, (ulong)g.Count * g.Size, g.Wasted))];
     }
 
+    private const int MaxValueLength = 65536;
     private const int PreviewLength = 256;
 
     // Strings are escaped so control characters in the dump can't drive the terminal.
