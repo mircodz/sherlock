@@ -2,26 +2,13 @@
 
 #include "sherlock/common/logger.hpp"
 #include "sherlock/profiler/rejit_policy.hpp"
+#include "sherlock/profiler/utf8.hpp"
 
 #include <algorithm>
 #include <utility>
 #include <vector>
 
 namespace Sherlock {
-
-namespace {
-
-// Widen ASCII probe specs without relying on the PAL's differing WCHAR/wchar_t widths.
-std::vector<WCHAR> widen(const std::string& s) {
-    std::vector<WCHAR> w;
-    w.reserve(s.size() + 1);
-    for (char c : s)
-        w.push_back(static_cast<WCHAR>(static_cast<unsigned char>(c)));
-    w.push_back(0);
-    return w;
-}
-
-} // namespace
 
 extern "C" void Sherlock_ProbeEnter(std::intptr_t cookie) {
     ProbeRegistry::dispatch(static_cast<std::uintptr_t>(cookie), ProbePhase::Enter);
