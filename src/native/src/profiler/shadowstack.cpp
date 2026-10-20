@@ -4,13 +4,17 @@
 #include "sherlock/profiler/il_writer.hpp"
 #include "sherlock/profiler/probe.hpp"
 #include "sherlock/profiler/rejit_policy.hpp"
+#include "sherlock/profiler/utf8.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <format>
+#include <initializer_list>
 #include <limits>
 #include <optional>
+#include <span>
+#include <string_view>
 #include <vector>
 
 namespace Sherlock {
@@ -75,6 +79,19 @@ extern "C" void Sherlock_ShadowPush(std::int64_t frameId) noexcept {
     if (d < s->frames.size())
         s->frames[d] = static_cast<FrameId>(frameId);
     s->depth = d + 1;
+}
+
+extern "C" std::int32_t Sherlock_ShadowTryPush(std::int64_t frameId) noexcept {
+    shadow::ThreadStack* s = shadow::t_stack;
+    if (s == nullptr)
+        return 0;
+    std::uint32_t d = s->depth;
+    if (d < s->frames.size())
+        s->frames[d] = static_cast<FrameId>(frameId);
+    else if (s->growable && d < shadow::kMaxShadow)
+        return 0;
+    s->depth = d + 1;
+    return 1;
 }
 
 extern "C" void Sherlock_ShadowPop() noexcept {
@@ -209,10 +226,86 @@ void emitProbeCall(il::ILStream& stream, std::uintptr_t cookie, std::uintptr_t t
     stream.calli(signature);
 }
 
+// The module's reference to System.Private.CoreLib, added when it has none. The runtime binds any reference by that name
+// to the loaded CoreLib, whatever its version.
+mdAssemblyRef coreLibRef(IMetaDataEmit* emit) {
+    constexpr std::string_view kCoreLib = "System.Private.CoreLib";
+    mdAssemblyRef found = mdAssemblyRefNil;
+    IMetaDataAssemblyImport* assemblies = nullptr;
+    if (SUCCEEDED(emit->QueryInterface(IID_IMetaDataAssemblyImport, reinterpret_cast<void**>(&assemblies))) && assemblies != nullptr) {
+        HCORENUM refs = nullptr;
+        mdAssemblyRef ref = mdAssemblyRefNil;
+        ULONG count = 0;
+        while (found == mdAssemblyRefNil && assemblies->EnumAssemblyRefs(&refs, &ref, 1, &count) == S_OK && count == 1) {
+            WCHAR name[32];
+            ULONG length = 0;
+            if (SUCCEEDED(assemblies->GetAssemblyRefProps(ref, nullptr, nullptr, name, 32, &length, nullptr, nullptr, nullptr, nullptr)) &&
+                length == kCoreLib.size() + 1 && utf8(std::span<const WCHAR>(name, length - 1)) == kCoreLib)
+                found = ref;
+        }
+        assemblies->CloseEnum(refs);
+        assemblies->Release();
+    }
+
+    IMetaDataAssemblyEmit* assemblyEmit = nullptr;
+    if (found == mdAssemblyRefNil &&
+        SUCCEEDED(emit->QueryInterface(IID_IMetaDataAssemblyEmit, reinterpret_cast<void**>(&assemblyEmit))) && assemblyEmit != nullptr) {
+        constexpr BYTE kPublicKeyToken[] = {0x7c, 0xec, 0x85, 0xd7, 0xbe, 0xa7, 0x79, 0x8e};
+        ASSEMBLYMETADATA metadata{};
+        std::vector<WCHAR> name = widen(kCoreLib);
+        if (FAILED(assemblyEmit->DefineAssemblyRef(kPublicKeyToken, sizeof kPublicKeyToken, name.data(), &metadata, nullptr, 0, 0, &found)))
+            found = mdAssemblyRefNil;
+        assemblyEmit->Release();
+    }
+    return found;
+}
+
+// Tokens for modopt(CallConvCdecl) and modopt(CallConvSuppressGCTransition). The runtime loads these types when it
+// builds a stub for the call, and netstandard and mscorlib don't forward CallConvSuppressGCTransition, so every module
+// but CoreLib names them through CoreLib.
+bool suppressModifiers(IMetaDataEmit* emit, mdToken (&tokens)[2]) {
+    const std::vector<WCHAR> types[] = {widen("System.Runtime.CompilerServices.CallConvCdecl"),
+                                        widen("System.Runtime.CompilerServices.CallConvSuppressGCTransition")};
+    IMetaDataImport* import = nullptr;
+    if (SUCCEEDED(emit->QueryInterface(IID_IMetaDataImport, reinterpret_cast<void**>(&import))) && import != nullptr) {
+        const bool own = SUCCEEDED(import->FindTypeDefByName(types[0].data(), mdTokenNil, &tokens[0])) &&
+                         SUCCEEDED(import->FindTypeDefByName(types[1].data(), mdTokenNil, &tokens[1]));
+        import->Release();
+        if (own)
+            return true;
+    }
+    const mdAssemblyRef coreLib = coreLibRef(emit);
+    return coreLib != mdAssemblyRefNil &&
+           SUCCEEDED(emit->DefineTypeRefByName(coreLib, types[0].data(), &tokens[0])) &&
+           SUCCEEDED(emit->DefineTypeRefByName(coreLib, types[1].data(), &tokens[1]));
+}
+
+// An unmanaged signature whose calls skip the GC transition; the modifiers lead the return type.
+mdSignature suppressedSig(IMetaDataEmit* emit, const mdToken (&modifiers)[2], std::initializer_list<BYTE> retAndParams) {
+    std::vector<BYTE> sig{static_cast<BYTE>(IMAGE_CEE_CS_CALLCONV_UNMANAGED), static_cast<BYTE>(retAndParams.size() - 1)};
+    for (mdToken modifier : modifiers) {
+        BYTE token[4];
+        sig.push_back(static_cast<BYTE>(ELEMENT_TYPE_CMOD_OPT));
+        sig.insert(sig.end(), token, token + CorSigCompressToken(modifier, token));
+    }
+    sig.insert(sig.end(), retAndParams);
+    mdSignature result = mdSignatureNil;
+    if (FAILED(emit->GetTokenFromSig(sig.data(), static_cast<ULONG>(sig.size()), &result)))
+        return mdSignatureNil;
+    return result;
+}
+
 } // namespace
 
 ShadowStackInstrumenter::ShadowStackInstrumenter(ICorProfilerInfo10* info, Logger* logger, MethodRegistry& methods)
-    : info_(info), logger_(logger), methods_(methods) {}
+    : info_(info), logger_(logger), methods_(methods) {
+    USHORT major = 0;
+    suppressTransitions_ = info != nullptr &&
+        SUCCEEDED(info->GetRuntimeInformation(nullptr, nullptr, &major, nullptr, nullptr, nullptr, 0, nullptr, nullptr)) &&
+        major >= 6;
+    if (logger_ != nullptr && info != nullptr)
+        logger_->trace("shadow-stack calls {} the GC transition", suppressTransitions_ ? "skip" : "take");
+}
 
 ShadowStackInstrumenter::ModuleSigs ShadowStackInstrumenter::ensureSigs(ModuleID moduleId) {
     std::lock_guard lock(sigMutex_);
@@ -240,6 +333,14 @@ ShadowStackInstrumenter::ModuleSigs ShadowStackInstrumenter::ensureSigs(ModuleID
                            static_cast<BYTE>(ELEMENT_TYPE_VOID), static_cast<BYTE>(ELEMENT_TYPE_I) };
         if (FAILED(emit->GetTokenFromSig(probeSig, sizeof probeSig, &sigs.probe))) {
             sigs.probe = mdSignatureNil;
+        }
+        // int32 Sherlock_ShadowTryPush(int64) and void Sherlock_ShadowPop(), without a GC transition.
+        mdToken modifiers[2];
+        if (suppressTransitions_ && suppressModifiers(emit, modifiers)) {
+            sigs.tryPush = suppressedSig(emit, modifiers, {static_cast<BYTE>(ELEMENT_TYPE_I4), static_cast<BYTE>(ELEMENT_TYPE_I8)});
+            sigs.fastPop = suppressedSig(emit, modifiers, {static_cast<BYTE>(ELEMENT_TYPE_VOID)});
+            if (sigs.tryPush == mdSignatureNil || sigs.fastPop == mdSignatureNil)
+                sigs.tryPush = sigs.fastPop = mdSignatureNil;
         }
         emit->Release();
     }
@@ -288,15 +389,24 @@ const char* ShadowStackInstrumenter::buildIL(FrameId frameId, ModuleID moduleId,
     }
 
     // Layout:
-    //   [prologue]  shadow push; optional trigger enter
+    //   [prologue]  shadow push (try push; brtrue.s past the full push); optional trigger enter
     //   [TRY]       transformed body (ret -> [stloc ret]; leave END)
     //   [FINALLY]   optional trigger exit; shadow pop; endfinally
     //   [END]       optional normal-return hook; (ldloc ret;) ret
     il::ILStream prologue;
-    prologue.ldc_i8(frameId);
-    prologue.ldc_i8(reinterpret_cast<std::uint64_t>(&Sherlock_ShadowPush));
-    prologue.conv_i();
-    prologue.calli(sigs.push);
+    il::ILStream push; // allocates or grows the thread's stack as needed
+    push.ldc_i8(frameId);
+    push.ldc_i8(reinterpret_cast<std::uint64_t>(&Sherlock_ShadowPush));
+    push.conv_i();
+    push.calli(sigs.push);
+    if (sigs.tryPush != mdSignatureNil) {
+        prologue.ldc_i8(frameId);
+        prologue.ldc_i8(reinterpret_cast<std::uint64_t>(&Sherlock_ShadowTryPush));
+        prologue.conv_i();
+        prologue.calli(sigs.tryPush);
+        prologue.brtrue_s(static_cast<std::int8_t>(push.size()));
+    }
+    prologue.append(push);
     if (probe.onEnter()) {
         emitProbeCall(
             prologue, probe.cookie,
@@ -326,7 +436,7 @@ const char* ShadowStackInstrumenter::buildIL(FrameId frameId, ModuleID moduleId,
     }
     finallyBody.ldc_i8(reinterpret_cast<std::uint64_t>(&Sherlock_ShadowPop));
     finallyBody.conv_i();
-    finallyBody.calli(sigs.pop);
+    finallyBody.calli(sigs.fastPop != mdSignatureNil ? sigs.fastPop : sigs.pop);
     finallyBody.endfinally();
     std::uint32_t handlerStart = tryEnd;
     std::uint32_t handlerLen = static_cast<std::uint32_t>(finallyBody.size());
@@ -463,6 +573,9 @@ const char* ShadowStackInstrumenter::buildIL(FrameId frameId, ModuleID moduleId,
 }
 
 void ShadowStackInstrumenter::onModuleLoaded(ModuleID moduleId) {
+    // References added after ModuleLoadFinished would need ApplyMetaData, so the signatures that add them come first.
+    ensureSigs(moduleId);
+
     // ReJIT doesn't reach dynamic or collectible modules, and a dynamic module gains methods after it loads.
     DWORD flags = 0;
     LPCBYTE base = nullptr;

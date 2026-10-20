@@ -49,6 +49,8 @@ public:
     void conv_i()                 { b_.push_back(0xD3); }
     void calli(mdSignature sig)   { b_.push_back(0x29); put32(b_, static_cast<std::uint32_t>(sig)); }
     void endfinally()             { b_.push_back(0xDC); }
+    void brtrue_s(std::int8_t rel) { b_.push_back(0x2D); b_.push_back(static_cast<BYTE>(rel)); }
+    void append(const ILStream& other) { b_.insert(b_.end(), other.b_.begin(), other.b_.end()); }
 
     // Use short local indices when possible, otherwise the 0xFE-prefixed form.
     void stloc(std::uint32_t idx) {

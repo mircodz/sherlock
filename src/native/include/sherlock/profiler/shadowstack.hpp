@@ -47,9 +47,14 @@ inline const FrameId* frames() {
 
 } // namespace shadow
 
-// Called by injected IL via unmanaged C calli.
+// Called by injected IL via unmanaged C calli. From .NET 6 the IL skips the GC transition for TryPush and Pop, so
+// neither may allocate, block, or call into the runtime; Pop never does.
 extern "C" void Sherlock_ShadowPush(std::int64_t frameId) noexcept;
 extern "C" void Sherlock_ShadowPop() noexcept;
+
+// Pushes and returns 1 when the thread's stack has room, or returns 0 when Push must first allocate or grow it. On macOS
+// a thread's first access to the profiler's thread-locals allocates them, once.
+extern "C" std::int32_t Sherlock_ShadowTryPush(std::int64_t frameId) noexcept;
 
 // The sole IL rewriter, composing shadow-stack and optional probe hooks. Methods of ordinary modules are rewritten
 // through ReJIT; ReJIT can't reach dynamic (Reflection.Emit) or collectible modules, so theirs are rewritten when
@@ -80,6 +85,9 @@ private:
         mdSignature push = mdSignatureNil;
         mdSignature pop = mdSignatureNil;
         mdSignature probe = mdSignatureNil;
+        // Without a GC transition; both nil when the runtime or the module can't express it.
+        mdSignature tryPush = mdSignatureNil;
+        mdSignature fastPop = mdSignatureNil;
     };
     ModuleSigs ensureSigs(ModuleID moduleId);
 
@@ -96,6 +104,7 @@ private:
     ICorProfilerInfo10* info_;
     Logger* logger_;
     MethodRegistry& methods_;
+    bool suppressTransitions_ = false; // the runtime honors CallConvSuppressGCTransition on calli (.NET 6+)
     std::mutex sigMutex_;
     std::unordered_map<std::uint64_t, ModuleSigs> sigByModule_;
     // Dynamic and collectible modules, with the methods already rewritten at JIT time.

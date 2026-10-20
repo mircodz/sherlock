@@ -4,6 +4,8 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include "profilercommon.h"
 
@@ -42,6 +44,16 @@ inline std::optional<std::string> utf8(std::span<const WCHAR> text, bool replace
         }
     }
     return result;
+}
+
+// Null-terminated UTF-16 for metadata lookups by ASCII name, whether WCHAR is char16_t or wchar_t.
+inline std::vector<WCHAR> widen(std::string_view ascii) {
+    std::vector<WCHAR> wide;
+    wide.reserve(ascii.size() + 1);
+    for (char c : ascii)
+        wide.push_back(static_cast<WCHAR>(static_cast<unsigned char>(c)));
+    wide.push_back(0);
+    return wide;
 }
 
 } // namespace Sherlock
