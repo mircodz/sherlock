@@ -115,6 +115,14 @@ bool helperName(std::string_view method) {
     return std::ranges::any_of(kJitHelpers, [&](const auto& helper) { return helper.second == method; });
 }
 
+// A local function compiles to "<Outer>g__Name|i_j" on its outer method's type and runs as part of it. A helper's
+// must stay as the runtime wrote it too: on .NET 10 the JIT's GC poll is Thread.PollGC, whose worker would otherwise
+// make transition-free calls that each poll for the GC again.
+std::string_view outerMethod(std::string_view method) {
+    const std::size_t end = method.find(">g__");
+    return method.starts_with('<') && end != std::string_view::npos ? method.substr(1, end - 1) : method;
+}
+
 template <typename T>
 struct Release {
     void operator()(T* value) const { value->Release(); }
@@ -129,7 +137,7 @@ const char* rejection(std::string_view assembly, std::string_view type, std::str
     if (type == "System.Runtime.CompilerServices.CastHelpers" && (method == "StelemRef" || method == "LdelemaRef")) {
         return "CLR-owned array helper; ReJIT can invalidate its startup entry point";
     }
-    if (std::ranges::find(kJitHelpers, std::pair{type, method}) != std::ranges::end(kJitHelpers)) {
+    if (std::ranges::find(kJitHelpers, std::pair{type, outerMethod(method)}) != std::ranges::end(kJitHelpers)) {
         return "JIT helper; rewriting it can crash the runtime";
     }
     return nullptr;
@@ -158,7 +166,7 @@ const char* rejection(IMetaDataImport* metadata, mdMethodDef method) {
         return reason;
     }
     std::string name = asciiName(methodName, methodLength);
-    if (name != "StelemRef" && name != "LdelemaRef" && !helperName(name)) {
+    if (name != "StelemRef" && name != "LdelemaRef" && !helperName(outerMethod(name))) {
         return nullptr;
     }
 

@@ -37,6 +37,18 @@ TEST(RejitPolicy, ExcludesTheMethodsTheJitCallsAsHelpers) {
     }
 }
 
+TEST(RejitPolicy, ExcludesTheLocalFunctionsOfJitHelpers) {
+    // .NET 10's GC poll worker: rewritten, each of its calls polled for the GC again until the stack overflowed.
+    for (const auto& [type, method] : {
+             std::pair{"System.Threading.Thread", "<PollGC>g__PollGCWorker|67_0"},
+             std::pair{"System.TypedReference", "<GetRefAny>g__ThrowInvalidCastException|2_0"},
+         }) {
+        EXPECT_NE(rejit::rejection("System.Private.CoreLib", type, method), nullptr) << type << "." << method;
+    }
+    EXPECT_EQ(rejit::rejection("System.Private.CoreLib", "System.Threading.Thread", "<StartCore>g__Run|1_0"), nullptr);
+    EXPECT_EQ(rejit::rejection("System.Private.CoreLib", "System.Threading.Thread", "<PollGC>b__0"), nullptr);
+}
+
 TEST(RejitPolicy, ExcludesRuntimeAsyncMethods) {
     EXPECT_NE(rejit::rejection(DWORD{0x2000}), nullptr);
     EXPECT_NE(rejit::rejection(DWORD{0x2008}), nullptr);
