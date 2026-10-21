@@ -4,8 +4,8 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Microsoft.Diagnostics.Runtime;
 using Sherlock.Core.HeapModel;
-using Sherlock.Core.Storage;
 using Sherlock.Core.Tests.Common;
+using Sherlock.Storage;
 using Xunit;
 
 namespace Sherlock.Core.Tests.HeapModel;

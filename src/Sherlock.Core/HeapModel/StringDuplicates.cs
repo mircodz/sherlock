@@ -4,7 +4,7 @@ using System.IO;
 using System.IO.Hashing;
 using System.Linq;
 using System.Threading;
-using Sherlock.Core.Storage;
+using Sherlock.Storage;
 
 namespace Sherlock.Core.HeapModel;
 

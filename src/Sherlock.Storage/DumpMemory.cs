@@ -4,14 +4,14 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace Sherlock.Core.Storage;
+namespace Sherlock.Storage;
 
 /// <summary>
 /// The memory a dump captured, read in place through one read-only mapping of the dump file. Reads Mach-O and ELF
 /// cores and Windows minidumps. Nothing is copied, and the pages are the file's, so the OS can drop them under
 /// memory pressure instead of the process running out.
 /// </summary>
-internal sealed unsafe partial class DumpMemory : IDisposable
+public sealed unsafe partial class DumpMemory : IDisposable
 {
     private readonly record struct Range(ulong Address, ulong Size, long Offset);
 

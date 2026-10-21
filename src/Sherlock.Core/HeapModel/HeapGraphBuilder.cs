@@ -12,7 +12,7 @@ using System.Threading.Tasks;
 using Microsoft.Diagnostics.Runtime;
 using Microsoft.Win32.SafeHandles;
 using Sherlock.Core.Profiling;
-using Sherlock.Core.Storage;
+using Sherlock.Storage;
 
 namespace Sherlock.Core.HeapModel;
 

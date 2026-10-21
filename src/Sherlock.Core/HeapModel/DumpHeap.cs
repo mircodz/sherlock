@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Microsoft.Diagnostics.Runtime;
-using Sherlock.Core.Storage;
+using Sherlock.Storage;
 
 namespace Sherlock.Core.HeapModel;
 

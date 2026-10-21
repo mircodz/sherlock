@@ -1,6 +1,6 @@
 using System;
 
-namespace Sherlock.Core.Storage;
+namespace Sherlock.Storage;
 
 /// <summary>What a slab holds. Each kind has its own version, covering all its sections.</summary>
 public enum SlabKind : ushort

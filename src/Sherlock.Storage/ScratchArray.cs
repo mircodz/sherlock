@@ -2,14 +2,14 @@ using System;
 using System.IO;
 using System.IO.MemoryMappedFiles;
 
-namespace Sherlock.Core.Storage;
+namespace Sherlock.Storage;
 
 /// <summary>
 /// A working array in a temporary file mapped for reading and writing, so a heap-sized array pages to disk instead of
 /// growing the process. It starts zeroed. The file is unlinked at once on Unix, so nothing is left behind even if the
 /// process dies, and deleted on close on Windows.
 /// </summary>
-internal sealed unsafe class ScratchArray<T> : IDisposable where T : unmanaged
+public sealed unsafe class ScratchArray<T> : IDisposable where T : unmanaged
 {
     private readonly FileStream _file;
     private readonly MemoryMappedFile _map;

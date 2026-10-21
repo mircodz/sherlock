@@ -3,7 +3,7 @@ using System.Buffers;
 using System.IO;
 using System.Threading;
 using Sherlock.Core.HeapModel;
-using Sherlock.Core.Storage;
+using Sherlock.Storage;
 
 namespace Sherlock.Core.Analysis;
 

@@ -1,4 +1,4 @@
-namespace Sherlock.Core.Storage;
+namespace Sherlock.Storage;
 
 /// <summary>Section types, numbered in blocks by the kind of file they appear in.</summary>
 public enum SectionType : uint
