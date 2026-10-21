@@ -36,6 +36,8 @@ public sealed class RunTargetTests : IDisposable
         Assert.Equal(0, exitCode);
         Assert.True(target.HasExited);
         Assert.Equal(0, target.ExitCode);
+        Assert.True(target.OutputDrained);
+        Assert.False(target.ProfiledProcessRunning());
         Assert.True(target.Pid > 0);
         Assert.Equal(Path.GetFullPath(_tmp.Path), Path.GetFullPath(target.Options.OutputDirectory!));
         Assert.NotEmpty(target.ReadLog(10));

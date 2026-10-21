@@ -52,6 +52,7 @@ public sealed class RunTarget : IDisposable
 
     private readonly ConcurrentDictionary<int, string> _names = new();
     private readonly ConcurrentDictionary<int, byte> _includedPids = new();
+    private readonly ConcurrentDictionary<int, byte> _profiledPids = new(); // every process that loaded the profiler
     private string? _processSelectionError;
 
     public string? NameFor(int pid) => _names.TryGetValue(pid, out string? n) ? n : null;
@@ -102,6 +103,15 @@ public sealed class RunTarget : IDisposable
     public bool HasExited => _root?.HasExited ?? false;
 
     public int? ExitCode => _root is { HasExited: true } process ? process.ExitCode : null;
+
+    /// <summary>Whether the root's output has been read to its end. A child that inherited it keeps it open until the
+    /// child exits.</summary>
+    public bool OutputDrained => _stdoutDrained.Task.IsCompleted && _stderrDrained.Task.IsCompleted;
+
+    /// <summary>Whether a process that loaded the profiler is still running. Its artifacts are complete once it exits:
+    /// the profiler writes the allocation profile while the runtime shuts down, and an exit capture holds the process
+    /// until the dump is written.</summary>
+    public bool ProfiledProcessRunning() => _profiledPids.Keys.Any(ProcessLocator.IsAlive);
 
     public int Pid => _root?.Id ?? 0;
 
@@ -265,6 +275,7 @@ public sealed class RunTarget : IDisposable
         _control = new ProfilerControl(ControlSocketPath(_captureDir));
         _control.ClientConnected += (pid, name) =>
         {
+            _profiledPids.TryAdd(pid, 0);
             if (!options.HasProcessFilter)
             {
                 return;

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -15,6 +16,10 @@ namespace Sherlock.CLI.Commands;
 /// <summary>Runs a process and captures its requested artifacts.</summary>
 public sealed class RunCommand : Command<RunCommand.Settings>
 {
+    // After the root exits, its last output and the artifacts of profiled processes still running take a moment to
+    // arrive. A process that outlives the run can hold either for minutes, so the wait is bounded.
+    private static readonly TimeSpan ExitGrace = TimeSpan.FromSeconds(3);
+
     public sealed class Settings : CommandSettings
     {
         [CommandArgument(0, "[path]")]
@@ -173,14 +178,21 @@ public sealed class RunCommand : Command<RunCommand.Settings>
             Output.Warning(console, $"Run interrupted; process tree killed.");
         }
 
-        logPosition = StreamLog(target, logPosition);
-        if (waitForArtifacts)
+        var grace = Stopwatch.StartNew();
+        while (!cancellation.IsCancellationRequested && grace.Elapsed < ExitGrace &&
+               (!target.OutputDrained || (waitForArtifacts && target.ProfiledProcessRunning())))
         {
-            for (int i = 0; i < 20 && !cancellation.IsCancellationRequested; i++)
+            logPosition = StreamLog(target, logPosition);
+            if (waitForArtifacts)
             {
                 succeeded &= PumpCaptures(workspace, console);
-                Thread.Sleep(150);
             }
+            Thread.Sleep(50);
+        }
+        // Collected after the last check, so nothing written by a process that has since exited is missed.
+        if (waitForArtifacts && !cancellation.IsCancellationRequested)
+        {
+            succeeded &= PumpCaptures(workspace, console);
         }
         StreamLog(target, logPosition);
         return succeeded;
