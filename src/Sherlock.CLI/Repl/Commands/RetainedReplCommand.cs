@@ -1,7 +1,8 @@
 using System.Collections.Generic;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
-using Sherlock.Core.Analysis;
+using Sherlock.Heap;
+using Sherlock.Heap.Analysis;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;

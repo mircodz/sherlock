@@ -1,4 +1,5 @@
 using Sherlock.Core;
+using Sherlock.Heap;
 
 namespace Sherlock.CLI.Rendering;
 

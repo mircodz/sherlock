@@ -7,6 +7,7 @@ using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using Sherlock.Core.Collection;
 using Sherlock.Core.Profiling;
+using Sherlock.Heap;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;

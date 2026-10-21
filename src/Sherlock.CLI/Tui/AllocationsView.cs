@@ -11,6 +11,7 @@ using Cellar.Widgets.Charts;
 using Cellar.Widgets.Charts.Trees;
 using Sherlock.Core;
 using Sherlock.Core.Profiling;
+using Sherlock.Heap;
 using static Sherlock.CLI.Tui.ViewFormatting;
 using static System.FormattableString;
 

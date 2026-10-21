@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using Microsoft.Diagnostics.NETCore.Client;
+using Sherlock.Heap;
 
 namespace Sherlock.Core.Collection;
 

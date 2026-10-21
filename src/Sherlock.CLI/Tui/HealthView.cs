@@ -8,6 +8,7 @@ using Cellar.Widgets;
 using Cellar.Widgets.Charts;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
+using Sherlock.Heap;
 using static Sherlock.CLI.Tui.ViewFormatting;
 using static System.FormattableString;
 using Theme = Cellar.Theming.Theme;

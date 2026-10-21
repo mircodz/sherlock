@@ -1,7 +1,7 @@
 using System;
 using System.Globalization;
 using System.IO;
-using Sherlock.Core.Analysis;
+using Sherlock.Heap.Analysis;
 
 namespace Sherlock.Core.Tests.Analysis;
 

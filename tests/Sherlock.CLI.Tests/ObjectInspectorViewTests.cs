@@ -9,7 +9,8 @@ using Cellar.Terminal;
 using Cellar.Widgets.Charts.Trees;
 using Sherlock.CLI.Tui;
 using Sherlock.Core;
-using Sherlock.Core.Analysis;
+using Sherlock.Heap;
+using Sherlock.Heap.Analysis;
 using Xunit;
 
 namespace Sherlock.CLI.Tests;

@@ -1,9 +1,9 @@
 using System.Collections.Generic;
 using System.Linq;
-using Sherlock.Core.Analysis;
-using Sherlock.Core.HeapModel;
-using Xunit;
 using Sherlock.Core.Tests.Common;
+using Sherlock.Heap;
+using Sherlock.Heap.Analysis;
+using Xunit;
 
 namespace Sherlock.Core.Tests.HeapModel;
 

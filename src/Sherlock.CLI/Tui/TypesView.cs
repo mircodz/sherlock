@@ -7,6 +7,7 @@ using Cellar.Terminal;
 using Cellar.Theming;
 using Cellar.Widgets;
 using Sherlock.Core;
+using Sherlock.Heap;
 using static Sherlock.CLI.Tui.ViewFormatting;
 using static System.FormattableString;
 

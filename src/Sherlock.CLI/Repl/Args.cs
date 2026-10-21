@@ -1,6 +1,7 @@
 using System.Globalization;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
+using Sherlock.Heap;
 
 namespace Sherlock.CLI.Repl;
 

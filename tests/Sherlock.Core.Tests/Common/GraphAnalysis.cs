@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
-using Sherlock.Core.Analysis;
-using Sherlock.Core.HeapModel;
+using Sherlock.Heap;
+using Sherlock.Heap.Analysis;
 
 namespace Sherlock.Core.Tests.Common;
 

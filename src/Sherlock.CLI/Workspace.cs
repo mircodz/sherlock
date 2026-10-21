@@ -6,6 +6,7 @@ using System.Threading;
 using Sherlock.Core;
 using Sherlock.Core.Collection;
 using Sherlock.Core.Store;
+using Sherlock.Heap;
 
 namespace Sherlock.CLI;
 

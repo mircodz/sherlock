@@ -13,6 +13,7 @@ using Cellar.Theming;
 using Cellar.Widgets;
 using Sherlock.Core;
 using Sherlock.Core.Store;
+using Sherlock.Heap;
 using static Sherlock.CLI.Tui.ViewFormatting;
 
 namespace Sherlock.CLI.Tui;

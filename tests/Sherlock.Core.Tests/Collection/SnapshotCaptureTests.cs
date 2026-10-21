@@ -4,6 +4,7 @@ using Sherlock.Core.Collection;
 using Sherlock.Core.Profiling;
 using Sherlock.Core.Store;
 using Sherlock.Core.Tests.Common;
+using Sherlock.Heap;
 using Sherlock.Storage;
 using Xunit;
 

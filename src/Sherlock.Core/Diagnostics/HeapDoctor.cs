@@ -2,23 +2,24 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
-using Sherlock.Core.Analysis;
+using Sherlock.Heap;
+using Sherlock.Heap.Analysis;
 
 namespace Sherlock.Core.Diagnostics;
 
 /// <summary>
 /// Combines independent inspectors. Inspector failures become warnings; cancellation propagates.
 /// </summary>
-public sealed class HeapDoctor(Snapshot snapshot)
+public sealed class HeapDoctor(HeapDump dump)
 {
     public IReadOnlyList<Finding> Diagnose(CancellationToken cancellation = default)
     {
         cancellation.ThrowIfCancellationRequested();
-        IReadOnlyList<HeapTypeStat> histogram = snapshot.GetHistogram(cancellation);
+        IReadOnlyList<HeapTypeStat> histogram = dump.GetHistogram(cancellation);
         long heapBytes = histogram.Sum(s => (long)s.TotalSize);
 
         var findings = new List<Finding>();
-        Run(findings, () => Retention(findings, snapshot.GetDominatorTree(cancellation)));
+        Run(findings, () => Retention(findings, dump.GetDominatorTree(cancellation)));
         Run(findings, () => EventHandlers(findings, cancellation));
         Run(findings, () => Finalizers(findings, cancellation));
         Run(findings, () => DuplicateStrings(findings, heapBytes, cancellation));
@@ -84,7 +85,7 @@ public sealed class HeapDoctor(Snapshot snapshot)
 
     private void EventHandlers(List<Finding> findings, CancellationToken cancellation)
     {
-        if (new EventHandlerAnalyzer(snapshot).Analyze(minSubscribers: 32, limit: 1, cancellation: cancellation).FirstOrDefault() is not { } worst)
+        if (new EventHandlerAnalyzer(dump).Analyze(minSubscribers: 32, limit: 1, cancellation: cancellation).FirstOrDefault() is not { } worst)
         {
             return;
         }
@@ -105,7 +106,7 @@ public sealed class HeapDoctor(Snapshot snapshot)
 
     private void Finalizers(List<Finding> findings, CancellationToken cancellation)
     {
-        FinalizerReport report = new FinalizerAnalyzer(snapshot).Analyze(cancellation);
+        FinalizerReport report = new FinalizerAnalyzer(dump).Analyze(cancellation);
         if (report.TotalObjects < 64)
         {
             return;
@@ -124,7 +125,7 @@ public sealed class HeapDoctor(Snapshot snapshot)
 
     private void DuplicateStrings(List<Finding> findings, long heapBytes, CancellationToken cancellation)
     {
-        IReadOnlyList<DuplicateString> dups = new HeapAnalyzer(snapshot).FindDuplicateStrings(limit: 100, cancellationToken: cancellation);
+        IReadOnlyList<DuplicateString> dups = new HeapAnalyzer(dump).FindDuplicateStrings(limit: 100, cancellationToken: cancellation);
         long wasted = dups.Sum(d => (long)d.WastedBytes);
         if (wasted < 64 * 1024 && (heapBytes == 0 || (double)wasted / heapBytes < 0.02))
         {

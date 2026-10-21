@@ -4,6 +4,7 @@ using System.IO;
 using System.Threading.Tasks;
 using Sherlock.Core.Collection;
 using Sherlock.Core.Tests.Common;
+using Sherlock.Heap;
 using Xunit;
 
 namespace Sherlock.Core.Tests.HeapModel;
