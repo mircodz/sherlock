@@ -22,7 +22,7 @@ public sealed class PrintReplCommand : IReplCommand
         ulong address = Args.Address(args, 0, Usage);
         int elementLimit = Args.Count(args, 1, DefaultElementLimit, Usage);
 
-        ObjectDetail detail = context.Snapshot.Inspect(address);
+        ObjectDetail detail = context.Snapshot.Heap.Inspect(address);
 
         context.Console.MarkupLine(Styled.Object(detail.TypeName, detail.Address, (long)detail.Size));
         if (DisplayNames.Namespace(detail.TypeName) is { Length: > 0 } ns)

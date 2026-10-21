@@ -75,7 +75,7 @@ public sealed class TargetDump : IDisposable
         }
     }
 
-    public Snapshot Open() => Snapshot.Open(Path);
+    public HeapDump Open() => HeapDump.Open(Path, System.IO.Path.Combine(_tmp.Path, "cache"));
 
     public void Dispose() => _tmp.Dispose();
 }

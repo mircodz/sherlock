@@ -26,7 +26,7 @@ public sealed class PrintExReplCommand : IReplCommand
         int depth = Args.Count(args, 1, DefaultDepth, Usage, allowZero: true);
 
         Snapshot snapshot = context.Snapshot;
-        ObjectValue root = snapshot.InspectValue(address);
+        ObjectValue root = snapshot.Heap.InspectValue(address);
         var tree = new Tree(Label(root)) { Style = new Style(foreground: Theme.MutedColor) };
         var visited = new HashSet<ulong> { address };
         AddChildren(snapshot, tree, root, depth, visited, context.Cancellation);
@@ -38,7 +38,7 @@ public sealed class PrintExReplCommand : IReplCommand
         CancellationToken cancellation)
     {
         cancellation.ThrowIfCancellationRequested();
-        InspectionPage page = snapshot.InspectChildren(value, 0, MaxChildren);
+        InspectionPage page = snapshot.Heap.InspectChildren(value, 0, MaxChildren);
         foreach (ObjectValue child in page.Items)
         {
             string name = Styled.Text(child.Name);

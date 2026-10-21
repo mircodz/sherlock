@@ -6,9 +6,7 @@ using Sherlock.Core.Diagnostics;
 using Sherlock.Core.Profiling;
 using Sherlock.Core.Store;
 using Sherlock.Heap;
-using Sherlock.Heap.Analysis;
 using Sherlock.Storage;
-using ClrRuntime = Microsoft.Diagnostics.Runtime.ClrRuntime;
 
 namespace Sherlock.Core;
 
@@ -34,28 +32,12 @@ public sealed class Snapshot : IDisposable
     /// <summary>The dump's heap. Its caches go in the snapshot's folder when the store owns the dump, otherwise in a
     /// folder under the store, never next to someone else's file.</summary>
     public HeapDump Heap { get; }
-    public string DumpPath => Heap.DumpPath;
-    public ClrRuntime Runtime => Heap.Runtime;
-    public bool HasProvenance => _entry?.ProvenancePath is not null;
     public bool HasCorrelation => _entry?.HasCorrelation ?? false;
 
     public static Snapshot Open(string path) => Open(path, null, SnapshotStore.CacheDirectory(SnapshotStore.DefaultRoot, path));
 
     internal static Snapshot Open(string path, SnapshotEntry? entry, string cacheDirectory) =>
         new(HeapDump.Open(path, cacheDirectory), entry);
-
-    public DumpInfo Info => Heap.Info;
-    public IReadOnlyList<ModuleInfo> Modules => Heap.Modules;
-    public IReadOnlyList<SegmentInfo> Segments => Heap.Segments;
-    public HeapGenerations Generations => Heap.Generations;
-    public IReadOnlyList<ThreadInfo> Threads => Heap.Threads;
-    public IReadOnlyList<ExceptionInfo> Exceptions => Heap.Exceptions;
-    public IReadOnlyList<HeapTypeStat> Histogram => Heap.Histogram;
-    public DominatorTree Dominators => Heap.Dominators;
-
-    public IReadOnlyList<ExceptionInfo> GetExceptions(CancellationToken cancellationToken = default) => Heap.GetExceptions(cancellationToken);
-    public IReadOnlyList<HeapTypeStat> GetHistogram(CancellationToken cancellationToken = default) => Heap.GetHistogram(cancellationToken);
-    public DominatorTree GetDominatorTree(CancellationToken cancellationToken = default) => Heap.GetDominatorTree(cancellationToken);
 
     /// <summary>The snapshot's allocation profile, built once; views on several threads share it. Throws
     /// <see cref="InvalidDataException"/> when the profile can't be read.</summary>
@@ -70,19 +52,6 @@ public sealed class Snapshot : IDisposable
             }
         }
     }
-
-    public ObjectDetail Inspect(ulong address) => Heap.Inspect(address);
-    public ObjectValue InspectValue(ulong address) => Heap.InspectValue(address);
-    public InspectionPage InspectChildren(ObjectValue value, int startIndex = 0, int count = 64, bool raw = false) =>
-        Heap.InspectChildren(value, startIndex, count, raw);
-    public IReadOnlyList<GcRootPath> Roots(ulong address, CancellationToken cancellationToken = default) => Heap.Roots(address, cancellationToken);
-    public InstanceListing Instances(string filter, int limit = 20, CancellationToken cancellationToken = default, bool exact = false) =>
-        Heap.Instances(filter, limit, cancellationToken, exact);
-    public IReadOnlyList<DuplicateString> DuplicateStrings(int limit = 20, CancellationToken cancellationToken = default) =>
-        Heap.DuplicateStrings(limit, cancellationToken);
-    public FinalizerReport Finalizers(CancellationToken cancellationToken = default) => Heap.Finalizers(cancellationToken);
-    public IReadOnlyList<EventSubscription> EventHandlerLeaks(int minSubscribers = 16, CancellationToken cancellationToken = default) =>
-        Heap.EventHandlerLeaks(minSubscribers, cancellationToken);
 
     public IReadOnlyList<Finding> Diagnose(CancellationToken cancellationToken = default)
     {

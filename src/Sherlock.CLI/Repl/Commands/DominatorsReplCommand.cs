@@ -23,7 +23,7 @@ public sealed class DominatorsReplCommand : IReplCommand
         int limit = Args.Count(args, 0, DefaultLimit, Usage);
 
         DominatorTree tree = context.Console.Status()
-            .Start("Building dominator tree…", _ => context.Snapshot.GetDominatorTree(context.Cancellation));
+            .Start("Building dominator tree…", _ => context.Snapshot.Heap.GetDominatorTree(context.Cancellation));
 
         IReadOnlyList<DominatorNode> top = tree.TopDominators(limit);
         ulong total = tree.TotalReachableBytes;

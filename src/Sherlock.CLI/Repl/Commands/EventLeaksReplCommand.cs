@@ -23,7 +23,7 @@ public sealed class EventLeaksReplCommand : IReplCommand
         int min = Args.Count(args, 0, DefaultMin, Usage);
 
         IReadOnlyList<EventSubscription> leaks = context.Console.Status()
-            .Start("Scanning delegates…", _ => context.Snapshot.EventHandlerLeaks(min, context.Cancellation));
+            .Start("Scanning delegates…", _ => context.Snapshot.Heap.EventHandlerLeaks(min, context.Cancellation));
 
         if (leaks.Count == 0)
         {

@@ -22,7 +22,7 @@ public sealed class RetainedReplCommand : IReplCommand
         ulong address = Args.Address(args, 0, Usage);
 
         DominatorTree tree = context.Console.Status()
-            .Start("Building dominator tree…", _ => context.Snapshot.GetDominatorTree(context.Cancellation));
+            .Start("Building dominator tree…", _ => context.Snapshot.Heap.GetDominatorTree(context.Cancellation));
 
         DominatorNode? node = tree.Find(address);
         if (node is null)

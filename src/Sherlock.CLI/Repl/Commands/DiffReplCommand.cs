@@ -39,7 +39,7 @@ public sealed class DiffReplCommand : IReplCommand
             {
                 using Snapshot a = context.Workspace.Store.Open(baseSnap.Id);
                 using Snapshot b = context.Workspace.Store.Open(targetSnap.Id);
-                return (Index(a.GetHistogram(context.Cancellation)), Index(b.GetHistogram(context.Cancellation)));
+                return (Index(a.Heap.GetHistogram(context.Cancellation)), Index(b.Heap.GetHistogram(context.Cancellation)));
             });
 
         var rows = new List<(string Type, long DCount, long DBytes, bool IsNew)>();

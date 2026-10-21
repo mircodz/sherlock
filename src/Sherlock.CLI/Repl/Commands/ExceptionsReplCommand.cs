@@ -18,7 +18,7 @@ public sealed class ExceptionsReplCommand : IReplCommand
     public ReplResult Execute(ReplContext context, string[] args)
     {
         IReadOnlyList<ExceptionInfo> exceptions = context.Console.Status()
-            .Start("Scanning for exceptions…", _ => context.Snapshot.GetExceptions(context.Cancellation));
+            .Start("Scanning for exceptions…", _ => context.Snapshot.Heap.GetExceptions(context.Cancellation));
 
         if (exceptions.Count == 0)
         {

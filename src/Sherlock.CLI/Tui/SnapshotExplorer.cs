@@ -103,8 +103,8 @@ public static class SnapshotExplorer
         SnapshotEntry entry = opened.Entry;
         Tabs tabs = Views()
             .Add("Health", opened.Background((snapshot, cancellation) => HealthView.Create(Overview(snapshot, entry, cancellation))))
-            .Add("Types", opened.Background((snapshot, cancellation) => TypesView.Create(snapshot.GetHistogram(cancellation), navigate)))
-            .Add("Retention", opened.Background((snapshot, cancellation) => RetentionView.Create(snapshot.GetDominatorTree(cancellation), navigate)));
+            .Add("Types", opened.Background((snapshot, cancellation) => TypesView.Create(snapshot.Heap.GetHistogram(cancellation), navigate)))
+            .Add("Retention", opened.Background((snapshot, cancellation) => RetentionView.Create(snapshot.Heap.GetDominatorTree(cancellation), navigate)));
         if (!entry.HasAllocations)
         {
             return tabs.Add("Allocations", AllocationsView.MissingProfile("Allocations"));
@@ -119,7 +119,7 @@ public static class SnapshotExplorer
     {
         Tabs tabs = Views()
             .Add("Instances", opened.Background((snapshot, cancellation) =>
-                TypesView.Instances(snapshot.Instances(target.Type, 200, cancellation, exact: true), target.Type, navigate)))
+                TypesView.Instances(snapshot.Heap.Instances(target.Type, 200, cancellation, exact: true), target.Type, navigate)))
             .Add("Call tree", opened.Background((snapshot, _) => AllocationsView.ForType(snapshot.Allocations, target.Type, navigate)));
         tabs.ActiveIndex = target.Tab == TypeTab.Allocations ? 1 : 0;
         return tabs;
@@ -148,10 +148,10 @@ public static class SnapshotExplorer
 
     private static HeapOverview Overview(Snapshot snapshot, SnapshotEntry entry, CancellationToken cancellation)
     {
-        DumpInfo info = snapshot.Info;
+        DumpInfo info = snapshot.Heap.Info;
         string gc = info.ServerGc ? $"server GC, {info.HeapCount} heaps" : "workstation GC";
         string captured = When(entry) + (entry.Reason is { } reason ? $" \u00b7 on {reason}" : "");
-        return new HeapOverview(entry.Id, snapshot.GetHistogram(cancellation), snapshot.Generations, $"{info.ClrFlavor} {info.ClrVersion} \u00b7 {gc}", captured);
+        return new HeapOverview(entry.Id, snapshot.Heap.GetHistogram(cancellation), snapshot.Heap.Generations, $"{info.ClrFlavor} {info.ClrVersion} \u00b7 {gc}", captured);
     }
 
     /// <summary>Shows what went wrong over the page, such as a snapshot that won't open, instead of ending the explorer.

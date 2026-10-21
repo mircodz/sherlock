@@ -22,7 +22,7 @@ public sealed class StringsReplCommand : IReplCommand
         int limit = Args.Count(args, 0, DefaultLimit, Usage);
 
         IReadOnlyList<DuplicateString> duplicates = context.Console.Status()
-            .Start("Hashing strings…", _ => context.Snapshot.DuplicateStrings(limit, context.Cancellation));
+            .Start("Hashing strings…", _ => context.Snapshot.Heap.DuplicateStrings(limit, context.Cancellation));
 
         if (duplicates.Count == 0)
         {
