@@ -1,7 +1,7 @@
 using System;
 using System.IO;
 using Sherlock.Core.Profiling;
-using Sherlock.Core.Storage;
+using Sherlock.Storage;
 
 namespace Sherlock.Core.Tests.Common;
 

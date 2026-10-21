@@ -2,7 +2,7 @@ using System;
 using System.IO;
 using System.IO.MemoryMappedFiles;
 
-namespace Sherlock.Core.Storage;
+namespace Sherlock.Storage;
 
 /// <summary>A read-only mapping of a whole file. Pointers and spans into it are valid until disposal.</summary>
 public sealed unsafe class MappedFile : IDisposable

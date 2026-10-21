@@ -1,7 +1,7 @@
 using System;
 using System.IO;
-using Sherlock.Core.Storage;
 using Sherlock.Core.Tests.Common;
+using Sherlock.Storage;
 using Xunit;
 
 namespace Sherlock.Core.Tests.Storage;

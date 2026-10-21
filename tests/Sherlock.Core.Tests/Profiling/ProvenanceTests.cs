@@ -4,8 +4,8 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using Sherlock.Core.Profiling;
-using Sherlock.Core.Storage;
 using Sherlock.Core.Tests.Common;
+using Sherlock.Storage;
 using Xunit;
 using static Sherlock.Tests.Frames;
 

@@ -2,7 +2,7 @@ using System;
 using System.IO;
 using System.Text;
 using Sherlock.Core.Profiling;
-using Sherlock.Core.Storage;
+using Sherlock.Storage;
 
 namespace Sherlock.Core.HeapModel;
 

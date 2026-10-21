@@ -11,7 +11,7 @@
 #include <type_traits>
 #include <vector>
 
-// A header, a section table, and page-aligned sections, matching Sherlock.Core.Storage:
+// A header, a section table, and page-aligned sections, matching Sherlock.Storage:
 //
 //   0   "SHRK"
 //   4   u16 container version

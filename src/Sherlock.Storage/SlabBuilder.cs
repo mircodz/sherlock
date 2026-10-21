@@ -5,13 +5,13 @@ using System.IO;
 using System.IO.MemoryMappedFiles;
 using Microsoft.Win32.SafeHandles;
 
-namespace Sherlock.Core.Storage;
+namespace Sherlock.Storage;
 
 /// <summary>
 /// A slab written in place: sections are placed in file order and filled with positional writes from any thread, or
 /// through a mapping, then the file is synced and published by rename. Until then it's a temporary file beside it.
 /// </summary>
-internal sealed unsafe class SlabBuilder : IDisposable
+public sealed unsafe class SlabBuilder : IDisposable
 {
     private readonly List<(SectionType Type, uint RecordSize, long Offset, long Length)> _sections = [];
     private readonly FileStream _stream;

@@ -6,7 +6,7 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace Sherlock.Core.Storage;
+namespace Sherlock.Storage;
 
 /// <summary>Builds a slab in the layout the native writer uses. Sections added from memory are borrowed, not
 /// copied, until the slab is written.</summary>

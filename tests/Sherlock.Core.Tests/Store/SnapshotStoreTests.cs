@@ -3,9 +3,9 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Sherlock.Core.Profiling;
-using Sherlock.Core.Storage;
 using Sherlock.Core.Store;
 using Sherlock.Core.Tests.Common;
+using Sherlock.Storage;
 using Xunit;
 
 namespace Sherlock.Core.Tests.Store;

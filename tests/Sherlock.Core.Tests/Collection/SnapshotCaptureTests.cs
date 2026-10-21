@@ -2,9 +2,9 @@ using System;
 using System.IO;
 using Sherlock.Core.Collection;
 using Sherlock.Core.Profiling;
-using Sherlock.Core.Storage;
 using Sherlock.Core.Store;
 using Sherlock.Core.Tests.Common;
+using Sherlock.Storage;
 using Xunit;
 
 namespace Sherlock.Core.Tests.Collection;

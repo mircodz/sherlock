@@ -7,8 +7,8 @@ using Sherlock.Core.Analysis;
 using Sherlock.Core.Diagnostics;
 using Sherlock.Core.HeapModel;
 using Sherlock.Core.Profiling;
-using Sherlock.Core.Storage;
 using Sherlock.Core.Store;
+using Sherlock.Storage;
 
 namespace Sherlock.Core;
 

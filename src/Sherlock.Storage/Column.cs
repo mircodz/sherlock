@@ -1,7 +1,7 @@
 using System;
 using System.Buffers;
 
-namespace Sherlock.Core.Storage;
+namespace Sherlock.Storage;
 
 /// <summary>
 /// A long-indexed column of fixed-width records in a mapped file. The file must stay open while the column, or
@@ -28,7 +28,7 @@ public sealed unsafe class Column<T> where T : unmanaged
     private T* Items => (T*)(_file!.Pointer + _offset);
 
     /// <summary>The first record, valid while the file is open; null for <see cref="Empty"/>.</summary>
-    internal T* Pointer => _file is null ? null : Items;
+    public T* Pointer => _file is null ? null : Items;
 
     public T this[long i] => (ulong)i < (ulong)Length ? Items[i] : throw new ArgumentOutOfRangeException(nameof(i));
 
