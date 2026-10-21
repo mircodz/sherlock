@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -48,6 +49,26 @@ public sealed class RunTargetTests : IDisposable
     {
         var options = new RunOptions { Command = [] };
         Assert.Throws<ArgumentException>(() => RunTarget.Start(options));
+    }
+
+    [Fact]
+    public void InheritedProfilerSettingsAreCleared()
+    {
+        var environment = new Dictionary<string, string?>
+        {
+            ["CORECLR_PROFILER_PATH_ARM64"] = "/other/profiler",
+            ["CORECLR_PROFILER_PATH_64"] = "/other/profiler",
+            ["DOTNET_PROFILER_PATH"] = "/other/profiler",
+            ["DOTNET_ENABLE_PROFILING"] = "0",
+            ["SHERLOCK_SNAPSHOT_ON"] = "exit",
+            ["SHERLOCK_CORRELATE"] = "1",
+            ["SHERLOCK_SAMPLE_BYTES"] = "102400",
+            ["PATH"] = "/usr/bin",
+        };
+
+        RunTarget.ClearInheritedProfilerSettings(environment);
+
+        Assert.Equal(new[] { "PATH", "SHERLOCK_SAMPLE_BYTES" }, environment.Keys.Order());
     }
 
     [Fact]
