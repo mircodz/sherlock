@@ -21,7 +21,7 @@ public sealed class GcRootReplCommand : IReplCommand
         context.Console.MarkupLineInterpolated($"[{Palette.Muted}]Searching for roots of[/] [{Palette.Address}]{Addresses.Format(address)}[/][{Palette.Muted}]…[/]");
 
         IReadOnlyList<GcRootPath> paths = context.Console.Status()
-            .Start("Tracing the heap graph…", _ => context.Snapshot.Roots(address, context.Cancellation));
+            .Start("Tracing the heap graph…", _ => context.Snapshot.Heap.Roots(address, context.Cancellation));
 
         if (paths.Count == 0)
         {

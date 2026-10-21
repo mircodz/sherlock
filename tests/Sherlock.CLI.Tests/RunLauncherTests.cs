@@ -29,6 +29,18 @@ public sealed class RunLauncherTests
         Assert.Null(Parse(option, "--profile", "app"));
     }
 
+    [Theory]
+    [InlineData(false, 0, true, 0)]
+    [InlineData(false, 3, true, 3)]
+    [InlineData(false, 134, false, 134)]  // the target's failure wins over a failed capture
+    [InlineData(false, 0, false, 1)]
+    [InlineData(false, null, true, 0)]   // still running when a live session ends
+    [InlineData(true, 137, true, 1)]     // interrupted: the tree was killed
+    public void RunExitsWithAFailingTargetsExitCode(bool interrupted, int? targetExitCode, bool capturesSucceeded, int expected)
+    {
+        Assert.Equal(expected, Commands.RunCommand.ExitCode(interrupted, targetExitCode, capturesSucceeded));
+    }
+
     [Fact]
     public void DoubleDashForwardsEveryRemainingTokenLiterally()
     {

@@ -47,7 +47,7 @@ public sealed class ExportReplCommand : IReplCommand
         int count = args.Length >= 3 ? Args.Count(args, 1, DefaultDominatorNodes, UsageText) : DefaultDominatorNodes;
         string file = FileArg(args);
 
-        DominatorTree tree = context.Console.Status().Start("Building dominator tree…", _ => context.Snapshot.GetDominatorTree(context.Cancellation));
+        DominatorTree tree = context.Console.Status().Start("Building dominator tree…", _ => context.Snapshot.Heap.GetDominatorTree(context.Cancellation));
         Write(context, file, DominatorDot.Write(tree.BuildGraph(count)));
         context.Console.MarkupLineInterpolated($"[{Palette.Muted}]render with[/] dot -Tsvg {Markup.Escape(file)} -o out.svg[{Palette.Muted}].[/]");
     }

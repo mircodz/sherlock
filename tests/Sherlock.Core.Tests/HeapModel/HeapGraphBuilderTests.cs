@@ -19,13 +19,13 @@ public sealed class HeapGraphBuilderTests(TargetDump dump) : IDisposable
     [Fact]
     public void GraphHoldsClrMDsObjectsReferencesAndRoots()
     {
-        using Snapshot snapshot = Snapshot.Open(dump.Path, null, _tmp.Path);
+        using HeapDump heapDump = HeapDump.Open(dump.Path, _tmp.Path);
         string path = Path.Combine(_tmp.Path, "heapgraph.slab");
         // Small chunks split segments, so the second walk starts mid-segment many times.
-        HeapGraphBuilder.Build(snapshot.Heap.GetDumpHeap(), snapshot.DumpPath, path, chunkBytes: 64 << 10, CancellationToken.None);
-        using HeapGraph graph = HeapGraphStore.Load(path, snapshot.DumpPath)!;
+        HeapGraphBuilder.Build(heapDump.GetDumpHeap(), heapDump.DumpPath, path, chunkBytes: 64 << 10, CancellationToken.None);
+        using HeapGraph graph = HeapGraphStore.Load(path, heapDump.DumpPath)!;
 
-        ClrHeap heap = snapshot.Runtime.Heap;
+        ClrHeap heap = heapDump.Runtime.Heap;
         ClrObject[] all = [.. heap.EnumerateObjects().OrderBy(o => o.Address)];
         ClrObject[] objects = [.. all.Where(o => !o.IsFree)];
         Assert.Equal(objects.Select(o => o.Address), graph.Addresses.ToArray());
@@ -69,12 +69,12 @@ public sealed class HeapGraphBuilderTests(TargetDump dump) : IDisposable
     [Fact]
     public void CancelledBuildLeavesNothingBehind()
     {
-        using Snapshot snapshot = Snapshot.Open(dump.Path, null, _tmp.Path);
+        using HeapDump heapDump = HeapDump.Open(dump.Path, _tmp.Path);
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
 
         Assert.ThrowsAny<OperationCanceledException>(() =>
-            HeapGraphBuilder.Build(snapshot.Heap.GetDumpHeap(), snapshot.DumpPath, Path.Combine(_tmp.Path, "heapgraph.slab"), cancelled.Token));
+            HeapGraphBuilder.Build(heapDump.GetDumpHeap(), heapDump.DumpPath, Path.Combine(_tmp.Path, "heapgraph.slab"), cancelled.Token));
         Assert.Empty(Directory.GetFiles(_tmp.Path));
     }
 }

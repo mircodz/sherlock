@@ -14,9 +14,9 @@ public sealed class HeapWalkTests(TargetDump dump)
     [Fact]
     public void HistogramMatchesClrMDsWalk()
     {
-        using Snapshot snapshot = dump.Open();
+        using HeapDump heap = dump.Open();
         var expected = new Dictionary<string, (long Count, ulong Bytes)>(StringComparer.Ordinal);
-        foreach (ClrObject obj in snapshot.Runtime.Heap.EnumerateObjects())
+        foreach (ClrObject obj in heap.Runtime.Heap.EnumerateObjects())
         {
             if (obj.Type is not null)
             {
@@ -25,7 +25,7 @@ public sealed class HeapWalkTests(TargetDump dump)
             }
         }
 
-        IReadOnlyList<HeapTypeStat> actual = HeapWalk.Histogram(snapshot.Heap.GetDumpHeap(), CancellationToken.None);
+        IReadOnlyList<HeapTypeStat> actual = HeapWalk.Histogram(heap.GetDumpHeap(), CancellationToken.None);
 
         Assert.True(actual.Sum(row => row.Count) > 10_000, "the dump should hold a real heap");
         Assert.Equal(expected.OrderBy(e => e.Key, StringComparer.Ordinal).Select(e => (e.Key, e.Value.Count, e.Value.Bytes)),
@@ -37,11 +37,11 @@ public sealed class HeapWalkTests(TargetDump dump)
     [InlineData("Node", true)]
     public void InstancesMatchClrMDsWalk(string filter, bool exact)
     {
-        using Snapshot snapshot = dump.Open();
+        using HeapDump heap = dump.Open();
         Func<string, bool> matches = name => exact ? name == filter : name.Contains(filter, StringComparison.OrdinalIgnoreCase);
-        ClrObject[] matching = [.. snapshot.Runtime.Heap.EnumerateObjects().Where(o => !o.IsFree && matches(o.Type!.Name ?? "<unknown>"))];
+        ClrObject[] matching = [.. heap.Runtime.Heap.EnumerateObjects().Where(o => !o.IsFree && matches(o.Type!.Name ?? "<unknown>"))];
 
-        InstanceListing listing = HeapWalk.Instances(snapshot.Heap.GetDumpHeap(), matches, 25, CancellationToken.None);
+        InstanceListing listing = HeapWalk.Instances(heap.GetDumpHeap(), matches, 25, CancellationToken.None);
 
         Assert.True(matching.Length > 25, "the filter should match more objects than the limit");
         Assert.Equal(matching.Length, listing.TotalMatched);
@@ -53,22 +53,22 @@ public sealed class HeapWalkTests(TargetDump dump)
     [Fact]
     public void ExceptionsMatchClrMDsWalk()
     {
-        using Snapshot snapshot = dump.Open();
-        ulong[] expected = [.. snapshot.Runtime.Heap.EnumerateObjects().Where(o => o.IsException).Select(o => o.Address).Order()];
+        using HeapDump heap = dump.Open();
+        ulong[] expected = [.. heap.Runtime.Heap.EnumerateObjects().Where(o => o.IsException).Select(o => o.Address).Order()];
 
-        ulong[] found = HeapWalk.Select(snapshot.Heap.GetDumpHeap(), type => type.IsException, static (_, _, _) => true, CancellationToken.None);
+        ulong[] found = HeapWalk.Select(heap.GetDumpHeap(), type => type.IsException, static (_, _, _) => true, CancellationToken.None);
 
         Assert.True(expected.Length >= 2, "the target keeps two caught exceptions");
         Assert.Equal(expected, found);
-        Assert.Equal(2, snapshot.GetExceptions().Count(e => e.TypeName == "System.InvalidOperationException"));
+        Assert.Equal(2, heap.GetExceptions().Count(e => e.TypeName == "System.InvalidOperationException"));
     }
 
     [Fact]
     public void EventLeaksMatchClrMDsWalk()
     {
-        using Snapshot snapshot = dump.Open();
+        using HeapDump heap = dump.Open();
         var expected = new List<(ulong, int)>();
-        foreach (ClrObject obj in snapshot.Runtime.Heap.EnumerateObjects())
+        foreach (ClrObject obj in heap.Runtime.Heap.EnumerateObjects())
         {
             if (obj.Type?.BaseType?.Name == "System.MulticastDelegate" && obj.ReadObjectField("_invocationList") is { IsValid: true, IsArray: true } list)
             {
@@ -81,7 +81,7 @@ public sealed class HeapWalkTests(TargetDump dump)
             }
         }
 
-        IReadOnlyList<EventSubscription> found = snapshot.EventHandlerLeaks();
+        IReadOnlyList<EventSubscription> found = heap.EventHandlerLeaks();
 
         Assert.Equal(expected.OrderByDescending(e => e.Item2).ThenBy(e => e.Item1), found.Select(e => (e.DelegateAddress, e.SubscriberCount)));
         Assert.Equal([60, 40, 20], found.Select(e => e.SubscriberCount).Where(count => count is 60 or 40 or 20));
@@ -93,9 +93,9 @@ public sealed class HeapWalkTests(TargetDump dump)
     [Fact]
     public void DuplicateStringsMatchGroupingEveryValue()
     {
-        using Snapshot snapshot = dump.Open();
+        using HeapDump heap = dump.Open();
         var groups = new Dictionary<string, (long Count, ulong Size, ulong First)>(StringComparer.Ordinal);
-        foreach (ClrObject obj in snapshot.Runtime.Heap.EnumerateObjects().Where(o => o.Type?.IsString == true))
+        foreach (ClrObject obj in heap.Runtime.Heap.EnumerateObjects().Where(o => o.Type?.IsString == true))
         {
             string value = obj.AsString(int.MaxValue)!;
             (long count, ulong size, ulong first) = groups.GetValueOrDefault(value, (0, obj.Size, ulong.MaxValue));
@@ -105,7 +105,7 @@ public sealed class HeapWalkTests(TargetDump dump)
             .Select(g => (Value: g.Key.Length > 65536 ? g.Key[..65536] : g.Key, g.Value.Count, Total: (ulong)g.Value.Count * g.Value.Size, Wasted: (ulong)(g.Value.Count - 1) * g.Value.Size, g.Value.First))
             .OrderByDescending(g => g.Wasted).ThenBy(g => g.First).Take(50).ToList();
 
-        IReadOnlyList<DuplicateString> found = snapshot.DuplicateStrings(50);
+        IReadOnlyList<DuplicateString> found = heap.DuplicateStrings(50);
 
         Assert.Contains(found, d => d.Value == new string('x', 40) && d.Count == 3_000);
         Assert.Contains(found, d => d.Value.Length == 65536 && d.Count == 2);
@@ -115,10 +115,10 @@ public sealed class HeapWalkTests(TargetDump dump)
     [Fact]
     public void CancelledWalkStops()
     {
-        using Snapshot snapshot = dump.Open();
+        using HeapDump heap = dump.Open();
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
 
-        Assert.ThrowsAny<OperationCanceledException>(() => HeapWalk.Histogram(snapshot.Heap.GetDumpHeap(), cancelled.Token));
+        Assert.ThrowsAny<OperationCanceledException>(() => HeapWalk.Histogram(heap.GetDumpHeap(), cancelled.Token));
     }
 }

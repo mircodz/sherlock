@@ -19,11 +19,11 @@ internal static class ObjectView
 {
     public static Widget Create(OpenedSnapshot opened, ulong address, ObjectTab tab, Action<NavigationTarget> navigate)
     {
-        ObjectValue value = opened.Snapshot.InspectValue(address);
+        ObjectValue value = opened.Snapshot.Heap.InspectValue(address);
         Tabs tabs = Views()
-            .Add("Inspect", () => new ObjectInspectorView(value, opened.Snapshot.InspectChildren,
+            .Add("Inspect", () => new ObjectInspectorView(value, opened.Snapshot.Heap.InspectChildren,
                 target => navigate(new ObjTarget(target)), type => navigate(new TypeTarget(type))))
-            .Add("GC roots", opened.Background((snapshot, cancellation) => Roots(snapshot.Roots(address, cancellation), navigate)));
+            .Add("GC roots", opened.Background((snapshot, cancellation) => Roots(snapshot.Heap.Roots(address, cancellation), navigate)));
 
         if (opened.Snapshot.HasCorrelation)
         {

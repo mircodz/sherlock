@@ -18,7 +18,7 @@ public sealed class SegmentsReplCommand : IReplCommand
 
     public ReplResult Execute(ReplContext context, string[] args)
     {
-        IReadOnlyList<SegmentInfo> segments = context.Snapshot.Segments;
+        IReadOnlyList<SegmentInfo> segments = context.Snapshot.Heap.Segments;
         if (segments.Count == 0)
         {
             context.Console.MarkupLine($"[{Palette.Warning}]No GC segments found.[/]");

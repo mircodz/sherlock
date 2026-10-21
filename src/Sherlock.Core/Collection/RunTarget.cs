@@ -52,6 +52,7 @@ public sealed class RunTarget : IDisposable
 
     private readonly ConcurrentDictionary<int, string> _names = new();
     private readonly ConcurrentDictionary<int, byte> _includedPids = new();
+    private readonly ConcurrentDictionary<int, byte> _profiledPids = new(); // every process that loaded the profiler
     private string? _processSelectionError;
 
     public string? NameFor(int pid) => _names.TryGetValue(pid, out string? n) ? n : null;
@@ -102,6 +103,15 @@ public sealed class RunTarget : IDisposable
     public bool HasExited => _root?.HasExited ?? false;
 
     public int? ExitCode => _root is { HasExited: true } process ? process.ExitCode : null;
+
+    /// <summary>Whether the root's output has been read to its end. A child that inherited it keeps it open until the
+    /// child exits.</summary>
+    public bool OutputDrained => _stdoutDrained.Task.IsCompleted && _stderrDrained.Task.IsCompleted;
+
+    /// <summary>Whether a process that loaded the profiler is still running. Its artifacts are complete once it exits:
+    /// the profiler writes the allocation profile while the runtime shuts down, and an exit capture holds the process
+    /// until the dump is written.</summary>
+    public bool ProfiledProcessRunning() => _profiledPids.Keys.Any(ProcessLocator.IsAlive);
 
     public int Pid => _root?.Id ?? 0;
 
@@ -234,8 +244,28 @@ public sealed class RunTarget : IDisposable
         _root.BeginErrorReadLine();
     }
 
+    // The runtime prefers the architecture-specific paths to CORECLR_PROFILER_PATH, and newer runtimes read the DOTNET_
+    // names first, so inherited ones would replace Sherlock's profiler. Inherited Sherlock settings that sl run sets only
+    // when asked would change what the profiler records. SHERLOCK_SAMPLE_BYTES is left alone: users set it on purpose.
+    private static readonly string[] InheritedProfilerSettings =
+    [
+        "CORECLR_PROFILER_PATH_32", "CORECLR_PROFILER_PATH_64", "CORECLR_PROFILER_PATH_ARM32", "CORECLR_PROFILER_PATH_ARM64",
+        "DOTNET_ENABLE_PROFILING", "DOTNET_PROFILER", "DOTNET_PROFILER_PATH",
+        "DOTNET_PROFILER_PATH_32", "DOTNET_PROFILER_PATH_64", "DOTNET_PROFILER_PATH_ARM32", "DOTNET_PROFILER_PATH_ARM64",
+        "SHERLOCK_SNAPSHOT_ON", "SHERLOCK_CORRELATE", "SHERLOCK_CORRELATE_OUT", "SHERLOCK_INCLUDE_PROCESSES",
+    ];
+
+    internal static void ClearInheritedProfilerSettings(IDictionary<string, string?> environment)
+    {
+        foreach (string name in InheritedProfilerSettings)
+        {
+            environment.Remove(name);
+        }
+    }
+
     private void ConfigureProfiler(ProcessStartInfo psi, string profilerPath, RunOptions options)
     {
+        ClearInheritedProfilerSettings(psi.Environment);
         psi.Environment["CORECLR_ENABLE_PROFILING"] = "1";
         psi.Environment["CORECLR_PROFILER"] = "{cf0d821e-299b-5307-a3d8-b283c03916dd}";
         psi.Environment["CORECLR_PROFILER_PATH"] = profilerPath;
@@ -246,10 +276,6 @@ public sealed class RunTarget : IDisposable
         if (options.HasProcessFilter)
         {
             psi.Environment["SHERLOCK_INCLUDE_PROCESSES"] = string.Join('\n', options.IncludeProcesses);
-        }
-        else
-        {
-            psi.Environment.Remove("SHERLOCK_INCLUDE_PROCESSES");
         }
 
         if (!string.IsNullOrWhiteSpace(options.SnapshotOn))
@@ -265,6 +291,7 @@ public sealed class RunTarget : IDisposable
         _control = new ProfilerControl(ControlSocketPath(_captureDir));
         _control.ClientConnected += (pid, name) =>
         {
+            _profiledPids.TryAdd(pid, 0);
             if (!options.HasProcessFilter)
             {
                 return;

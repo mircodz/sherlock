@@ -18,7 +18,7 @@ public sealed class InfoReplCommand : IReplCommand
 
     public ReplResult Execute(ReplContext context, string[] args)
     {
-        DumpInfo info = context.Snapshot.Info;
+        DumpInfo info = context.Snapshot.Heap.Info;
 
         var grid = new Grid().AddColumn().AddColumn();
         grid.AddRow($"[{Palette.Muted}]File[/]", Markup.Escape(Path.GetFileName(info.DumpPath)));

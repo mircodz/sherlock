@@ -21,12 +21,12 @@ public sealed class SnapshotCancellationTests
         cancellation.Cancel();
         CancellationToken token = cancellation.Token;
 
-        AssertCancelled(token, () => snapshot.GetDominatorTree(token));
-        AssertCancelled(token, () => snapshot.GetHistogram(token));
-        AssertCancelled(token, () => snapshot.GetExceptions(token));
-        AssertCancelled(token, () => snapshot.DuplicateStrings(cancellationToken: token));
-        AssertCancelled(token, () => snapshot.Finalizers(token));
-        AssertCancelled(token, () => snapshot.EventHandlerLeaks(cancellationToken: token));
+        AssertCancelled(token, () => snapshot.Heap.GetDominatorTree(token));
+        AssertCancelled(token, () => snapshot.Heap.GetHistogram(token));
+        AssertCancelled(token, () => snapshot.Heap.GetExceptions(token));
+        AssertCancelled(token, () => snapshot.Heap.DuplicateStrings(cancellationToken: token));
+        AssertCancelled(token, () => snapshot.Heap.Finalizers(token));
+        AssertCancelled(token, () => snapshot.Heap.EventHandlerLeaks(cancellationToken: token));
         AssertCancelled(token, () => snapshot.Diagnose(token));
     }
 
@@ -47,15 +47,15 @@ public sealed class SnapshotCancellationTests
         cancellation.Cancel();
         CancellationToken token = cancellation.Token;
 
-        AssertCancelled(token, () => snapshot.GetDominatorTree(token));
-        AssertCancelled(token, () => snapshot.GetExceptions(token));
-        AssertCancelled(token, () => snapshot.Finalizers(token));
+        AssertCancelled(token, () => snapshot.Heap.GetDominatorTree(token));
+        AssertCancelled(token, () => snapshot.Heap.GetExceptions(token));
+        AssertCancelled(token, () => snapshot.Heap.Finalizers(token));
         AssertCancelled(token, () => snapshot.Diagnose(token));
-        Assert.Same(dominators, snapshot.GetDominatorTree());
-        Assert.Same(dominators, snapshot.Dominators);
-        Assert.Same(exceptions, snapshot.GetExceptions());
-        Assert.Same(exceptions, snapshot.Exceptions);
-        Assert.Same(finalizers, snapshot.Finalizers());
+        Assert.Same(dominators, snapshot.Heap.GetDominatorTree());
+        Assert.Same(dominators, snapshot.Heap.Dominators);
+        Assert.Same(exceptions, snapshot.Heap.GetExceptions());
+        Assert.Same(exceptions, snapshot.Heap.Exceptions);
+        Assert.Same(finalizers, snapshot.Heap.Finalizers());
         Assert.Same(diagnosis, snapshot.Diagnose());
     }
 

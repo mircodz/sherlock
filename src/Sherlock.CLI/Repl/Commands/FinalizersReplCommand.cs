@@ -23,7 +23,7 @@ public sealed class FinalizersReplCommand : IReplCommand
         int limit = Args.Count(args, 0, DefaultLimit, Usage);
 
         FinalizerReport report = context.Console.Status()
-            .Start("Scanning finalizer queue…", _ => context.Snapshot.Finalizers(context.Cancellation));
+            .Start("Scanning finalizer queue…", _ => context.Snapshot.Heap.Finalizers(context.Cancellation));
 
         if (report.TotalObjects == 0)
         {

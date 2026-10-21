@@ -28,7 +28,7 @@ public sealed class WhoAllocReplCommand : IReplCommand
             return ReplResult.Failure;
         }
 
-        ClrObject obj = context.Snapshot.Runtime.Heap.GetObject(address);
+        ClrObject obj = context.Snapshot.Heap.Runtime.Heap.GetObject(address);
         context.Console.MarkupLine(obj.Type is { } t
             ? Styled.Object(t.Name ?? "<unknown>", address, (long)obj.Size)
             : $"{Styled.Address(address)}  [{Palette.Muted}]<not a live object in this dump>[/]");

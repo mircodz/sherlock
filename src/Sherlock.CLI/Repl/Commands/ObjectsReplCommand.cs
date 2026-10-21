@@ -25,7 +25,7 @@ public sealed class ObjectsReplCommand : IReplCommand
 
         InstanceListing listing = context.Console.Status()
             .Start($"Scanning heap for '{Markup.Escape(filter)}'…", _ =>
-                context.Snapshot.Instances(filter, limit, context.Cancellation));
+                context.Snapshot.Heap.Instances(filter, limit, context.Cancellation));
 
         if (listing.TotalMatched == 0)
         {

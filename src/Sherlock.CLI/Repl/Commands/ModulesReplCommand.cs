@@ -22,7 +22,7 @@ public sealed class ModulesReplCommand : IReplCommand
     {
         string? filter = args.Length > 0 ? args[0] : null;
 
-        IReadOnlyList<ModuleInfo> modules = context.Snapshot.Modules;
+        IReadOnlyList<ModuleInfo> modules = context.Snapshot.Heap.Modules;
         if (filter is not null)
         {
             modules = modules.Where(m => m.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)).ToList();

@@ -26,7 +26,7 @@ public sealed class ThreadsReplCommand : IReplCommand
                 return ReplResult.Failure;
             }
 
-            ThreadInfo? thread = context.Snapshot.Threads.FirstOrDefault(t => t.ManagedThreadId == id);
+            ThreadInfo? thread = context.Snapshot.Heap.Threads.FirstOrDefault(t => t.ManagedThreadId == id);
 
             if (thread is null)
             {
@@ -38,7 +38,7 @@ public sealed class ThreadsReplCommand : IReplCommand
             return ReplResult.Success;
         }
 
-        IReadOnlyList<ThreadInfo> threads = context.Snapshot.Threads;
+        IReadOnlyList<ThreadInfo> threads = context.Snapshot.Heap.Threads;
 
         var table = Theme.Table();
         table.AddColumn(new TableColumn("[bold]Managed[/]").RightAligned());
