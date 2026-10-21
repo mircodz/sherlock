@@ -122,8 +122,15 @@ public sealed class RunCommand : Command<RunCommand.Settings>
             }
         }
         Summarize(console, workspace, session, target);
-        return cancellation.IsCancellationRequested || !capturesSucceeded ? 1 : 0;
+        return ExitCode(cancellation.IsCancellationRequested, target.ExitCode, capturesSucceeded);
     }
+
+    /// <summary>A failing target's exit code comes first, so <c>sl run -- dotnet test</c> fails when the tests do.
+    /// Otherwise 1 when the run was interrupted or a capture failed.</summary>
+    internal static int ExitCode(bool interrupted, int? targetExitCode, bool capturesSucceeded) =>
+        interrupted ? 1 :
+        targetExitCode is { } code and not 0 ? code :
+        capturesSucceeded ? 0 : 1;
 
     private static void Summarize(IAnsiConsole console, Workspace workspace, Session session, RunTarget target)
     {

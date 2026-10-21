@@ -15,7 +15,7 @@ app.Configure(config =>
         .WithExample("collect", "--list")
         .WithExample("collect", "--pid", "1234", "--analyze");
     config.AddCommand<RunCommand>("run")
-        .WithDescription("Run a process to completion, capturing snapshots and exit-time artifacts.")
+        .WithDescription("Run a process to completion, capturing snapshots and exit-time artifacts. Exits with the process's exit code when it fails.")
         .WithExample("run", "--", "./MyApp.dll", "arg1")
         .WithExample("run", "--correlate", "--snapshot-on", "throw:My.App.FatalException", "--", "./MyApp.dll");
     config.AddCommand<TuiCommand>("tui")
