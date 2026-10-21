@@ -6,6 +6,7 @@ using Sherlock.CLI.Rendering;
 using Sherlock.CLI.Repl;
 using Sherlock.CLI.Repl.Commands;
 using Sherlock.Core;
+using Sherlock.Heap;
 using Spectre.Console;
 using Spectre.Console.Cli;
 

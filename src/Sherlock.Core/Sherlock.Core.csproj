@@ -8,8 +8,6 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Diagnostics.NETCore.Client" />
-    <PackageReference Include="Microsoft.Diagnostics.Runtime" />
-    <PackageReference Include="System.IO.Hashing" />
     <!-- The build assets only copy Windows ETW/DIA DLLs; EventPipe parsing is fully managed. -->
     <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" ExcludeAssets="build;buildTransitive" PrivateAssets="build; buildtransitive">
       <IncludeAssets>runtime; compile; native; contentfiles; analyzers</IncludeAssets>
@@ -21,6 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Sherlock.Heap\Sherlock.Heap.csproj" />
     <ProjectReference Include="..\Sherlock.Storage\Sherlock.Storage.csproj" />
   </ItemGroup>
 

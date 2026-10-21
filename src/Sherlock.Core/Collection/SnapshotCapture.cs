@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using Sherlock.Core.Profiling;
+using Sherlock.Heap;
 
 namespace Sherlock.Core.Collection;
 

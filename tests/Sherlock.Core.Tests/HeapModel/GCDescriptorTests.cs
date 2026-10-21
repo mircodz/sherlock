@@ -4,7 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using Microsoft.Diagnostics.Runtime;
-using Sherlock.Core.HeapModel;
+using Sherlock.Heap;
 using Xunit;
 
 namespace Sherlock.Core.Tests.HeapModel;

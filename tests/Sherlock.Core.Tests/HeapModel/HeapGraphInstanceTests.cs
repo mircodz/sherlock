@@ -1,8 +1,8 @@
 using System;
 using System.Linq;
 using System.Threading;
-using Sherlock.Core.HeapModel;
 using Sherlock.Core.Tests.Common;
+using Sherlock.Heap;
 using Xunit;
 
 namespace Sherlock.Core.Tests.HeapModel;

@@ -1,5 +1,6 @@
 using Sherlock.Core;
 using Sherlock.Core.Profiling;
+using Sherlock.Heap;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Rendering;

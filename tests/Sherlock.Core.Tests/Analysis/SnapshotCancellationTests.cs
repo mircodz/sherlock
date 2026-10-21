@@ -3,11 +3,11 @@ using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
-using Sherlock.Core.Analysis;
-using Sherlock.Core.HeapModel;
 using Sherlock.Core.Diagnostics;
-using Xunit;
 using Sherlock.Core.Tests.Common;
+using Sherlock.Heap;
+using Sherlock.Heap.Analysis;
+using Xunit;
 
 namespace Sherlock.Core.Tests.Analysis;
 
@@ -65,14 +65,21 @@ public sealed class SnapshotCancellationTests
         Assert.Equal(token, error.CancellationToken);
     }
 
-    // No runtime resources: cached and pre-cancelled queries must never dereference them.
+    // No runtime resources: cached and pre-cancelled queries must never dereference them. Each cache goes to whichever
+    // of the snapshot and its heap declares it.
     private static Snapshot WithoutRuntime(params (string Field, object Value)[] caches)
     {
+        var heap = (HeapDump)RuntimeHelpers.GetUninitializedObject(typeof(HeapDump));
         var snapshot = (Snapshot)RuntimeHelpers.GetUninitializedObject(typeof(Snapshot));
+        Set(snapshot, $"<{nameof(Snapshot.Heap)}>k__BackingField", heap);
         foreach ((string field, object value) in caches)
         {
-            typeof(Snapshot).GetField(field, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(snapshot, value);
+            object owner = typeof(HeapDump).GetField(field, BindingFlags.Instance | BindingFlags.NonPublic) is null ? snapshot : heap;
+            Set(owner, field, value);
         }
         return snapshot;
     }
+
+    private static void Set(object target, string field, object value) =>
+        target.GetType().GetField(field, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(target, value);
 }

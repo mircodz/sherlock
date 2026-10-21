@@ -3,8 +3,8 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Microsoft.Diagnostics.Runtime;
-using Sherlock.Core.HeapModel;
 using Sherlock.Core.Tests.Common;
+using Sherlock.Heap;
 using Sherlock.Storage;
 using Xunit;
 

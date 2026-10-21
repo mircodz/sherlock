@@ -1,12 +1,13 @@
-using System.Collections.Generic;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Sherlock.CLI.Export;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
-using Sherlock.Core.Analysis;
 using Sherlock.Core.Profiling;
+using Sherlock.Heap;
+using Sherlock.Heap.Analysis;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;

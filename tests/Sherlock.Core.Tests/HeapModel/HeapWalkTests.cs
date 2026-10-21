@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using Microsoft.Diagnostics.Runtime;
-using Sherlock.Core.HeapModel;
+using Sherlock.Heap;
 using Xunit;
 
 namespace Sherlock.Core.Tests.HeapModel;
@@ -25,7 +25,7 @@ public sealed class HeapWalkTests(TargetDump dump)
             }
         }
 
-        IReadOnlyList<HeapTypeStat> actual = HeapWalk.Histogram(snapshot.GetDumpHeap(), CancellationToken.None);
+        IReadOnlyList<HeapTypeStat> actual = HeapWalk.Histogram(snapshot.Heap.GetDumpHeap(), CancellationToken.None);
 
         Assert.True(actual.Sum(row => row.Count) > 10_000, "the dump should hold a real heap");
         Assert.Equal(expected.OrderBy(e => e.Key, StringComparer.Ordinal).Select(e => (e.Key, e.Value.Count, e.Value.Bytes)),
@@ -41,7 +41,7 @@ public sealed class HeapWalkTests(TargetDump dump)
         Func<string, bool> matches = name => exact ? name == filter : name.Contains(filter, StringComparison.OrdinalIgnoreCase);
         ClrObject[] matching = [.. snapshot.Runtime.Heap.EnumerateObjects().Where(o => !o.IsFree && matches(o.Type!.Name ?? "<unknown>"))];
 
-        InstanceListing listing = HeapWalk.Instances(snapshot.GetDumpHeap(), matches, 25, CancellationToken.None);
+        InstanceListing listing = HeapWalk.Instances(snapshot.Heap.GetDumpHeap(), matches, 25, CancellationToken.None);
 
         Assert.True(matching.Length > 25, "the filter should match more objects than the limit");
         Assert.Equal(matching.Length, listing.TotalMatched);
@@ -56,7 +56,7 @@ public sealed class HeapWalkTests(TargetDump dump)
         using Snapshot snapshot = dump.Open();
         ulong[] expected = [.. snapshot.Runtime.Heap.EnumerateObjects().Where(o => o.IsException).Select(o => o.Address).Order()];
 
-        ulong[] found = HeapWalk.Select(snapshot.GetDumpHeap(), type => type.IsException, static (_, _, _) => true, CancellationToken.None);
+        ulong[] found = HeapWalk.Select(snapshot.Heap.GetDumpHeap(), type => type.IsException, static (_, _, _) => true, CancellationToken.None);
 
         Assert.True(expected.Length >= 2, "the target keeps two caught exceptions");
         Assert.Equal(expected, found);
@@ -119,6 +119,6 @@ public sealed class HeapWalkTests(TargetDump dump)
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
 
-        Assert.ThrowsAny<OperationCanceledException>(() => HeapWalk.Histogram(snapshot.GetDumpHeap(), cancelled.Token));
+        Assert.ThrowsAny<OperationCanceledException>(() => HeapWalk.Histogram(snapshot.Heap.GetDumpHeap(), cancelled.Token));
     }
 }

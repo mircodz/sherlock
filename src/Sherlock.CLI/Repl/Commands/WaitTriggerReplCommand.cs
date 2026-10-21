@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
+using Sherlock.Heap;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;

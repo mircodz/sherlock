@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
 using Sherlock.Core.Diagnostics;
+using Sherlock.Heap;
 using Spectre.Console;
 
 namespace Sherlock.CLI.Repl.Commands;

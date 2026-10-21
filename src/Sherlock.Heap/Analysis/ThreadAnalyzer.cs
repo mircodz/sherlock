@@ -1,0 +1,68 @@
+using System;
+using System.Collections.Generic;
+using Microsoft.Diagnostics.Runtime;
+
+namespace Sherlock.Heap.Analysis;
+
+/// <summary>Enumerates managed threads and their call stacks.</summary>
+public sealed class ThreadAnalyzer(HeapDump dump)
+{
+    public IReadOnlyList<ThreadInfo> GetThreads(bool includeStacks = true)
+    {
+        var result = new List<ThreadInfo>();
+
+        foreach (ClrThread thread in dump.Runtime.Threads)
+        {
+            var frames = includeStacks
+                ? ReadStack(thread)
+                : [];
+
+            result.Add(new ThreadInfo(
+                ManagedThreadId: thread.ManagedThreadId,
+                OsThreadId: thread.OSThreadId,
+                IsAlive: thread.IsAlive,
+                IsGcThread: thread.IsGc,
+                IsFinalizer: thread.IsFinalizer,
+                State: FormatState(thread.State),
+                StackTrace: frames));
+        }
+
+        return result;
+    }
+
+    // Show named single-bit flags, falling back to hex for unnamed states.
+    private static string FormatState(ClrThreadState state)
+    {
+        long bits = Convert.ToInt64(state);
+        if (bits == 0)
+        {
+            return "-";
+        }
+
+        var names = new List<string>();
+        foreach (ClrThreadState flag in Enum.GetValues<ClrThreadState>())
+        {
+            long f = Convert.ToInt64(flag);
+            if (f != 0 && (f & (f - 1)) == 0 && (bits & f) == f)
+            {
+                names.Add(flag.ToString().Replace("TS_", ""));
+            }
+        }
+
+        return names.Count == 0 ? $"0x{bits:x}" : string.Join(",", names);
+    }
+
+    private static IReadOnlyList<StackFrameInfo> ReadStack(ClrThread thread)
+    {
+        var frames = new List<StackFrameInfo>();
+        foreach (ClrStackFrame frame in thread.EnumerateStackTrace())
+        {
+            string description = frame.Method?.Signature
+                ?? frame.FrameName
+                ?? "<unknown>";
+            frames.Add(new StackFrameInfo(frame.InstructionPointer, description));
+        }
+
+        return frames;
+    }
+}

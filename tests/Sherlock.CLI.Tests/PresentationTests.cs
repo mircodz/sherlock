@@ -7,6 +7,7 @@ using Sherlock.CLI.Rendering;
 using Sherlock.CLI.Tui;
 using Sherlock.Core;
 using Sherlock.Core.Profiling;
+using Sherlock.Heap;
 using Xunit;
 
 namespace Sherlock.CLI.Tests;

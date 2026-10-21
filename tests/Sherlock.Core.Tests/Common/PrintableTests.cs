@@ -1,3 +1,4 @@
+using Sherlock.Heap;
 using Xunit;
 
 namespace Sherlock.Core.Tests.Common;

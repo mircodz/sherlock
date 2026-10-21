@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using Sherlock.Core.Profiling;
+using Sherlock.Heap;
 
 namespace Sherlock.Core.Store;
 

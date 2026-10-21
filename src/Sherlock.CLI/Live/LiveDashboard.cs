@@ -18,6 +18,7 @@ using Sherlock.CLI.Tui;
 using Sherlock.Core;
 using Sherlock.Core.Collection;
 using Sherlock.Core.Store;
+using Sherlock.Heap;
 using Theme = Cellar.Theming.Theme;
 
 namespace Sherlock.CLI.Live;

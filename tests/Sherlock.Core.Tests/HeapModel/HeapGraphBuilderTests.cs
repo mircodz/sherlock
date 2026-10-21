@@ -3,8 +3,8 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using Microsoft.Diagnostics.Runtime;
-using Sherlock.Core.HeapModel;
 using Sherlock.Core.Tests.Common;
+using Sherlock.Heap;
 using Xunit;
 
 namespace Sherlock.Core.Tests.HeapModel;
@@ -22,7 +22,7 @@ public sealed class HeapGraphBuilderTests(TargetDump dump) : IDisposable
         using Snapshot snapshot = Snapshot.Open(dump.Path, null, _tmp.Path);
         string path = Path.Combine(_tmp.Path, "heapgraph.slab");
         // Small chunks split segments, so the second walk starts mid-segment many times.
-        HeapGraphBuilder.Build(snapshot.GetDumpHeap(), snapshot.DumpPath, path, chunkBytes: 64 << 10, CancellationToken.None);
+        HeapGraphBuilder.Build(snapshot.Heap.GetDumpHeap(), snapshot.DumpPath, path, chunkBytes: 64 << 10, CancellationToken.None);
         using HeapGraph graph = HeapGraphStore.Load(path, snapshot.DumpPath)!;
 
         ClrHeap heap = snapshot.Runtime.Heap;
@@ -53,14 +53,14 @@ public sealed class HeapGraphBuilderTests(TargetDump dump) : IDisposable
     }
 
     [Fact]
-    public void SnapshotBuildsTheGraphOnceAndReopensIt()
+    public void HeapDumpBuildsTheGraphOnceAndReopensIt()
     {
         Guid built;
-        using (Snapshot first = Snapshot.Open(dump.Path, null, _tmp.Path))
+        using (HeapDump first = HeapDump.Open(dump.Path, _tmp.Path))
         {
             built = first.GetHeapGraph().Id;
         }
-        using Snapshot second = Snapshot.Open(dump.Path, null, _tmp.Path);
+        using HeapDump second = HeapDump.Open(dump.Path, _tmp.Path);
 
         Assert.Equal(built, second.GetHeapGraph().Id);
         Assert.Equal(["heapgraph.slab"], Directory.GetFiles(_tmp.Path).Select(Path.GetFileName));
@@ -74,7 +74,7 @@ public sealed class HeapGraphBuilderTests(TargetDump dump) : IDisposable
         cancelled.Cancel();
 
         Assert.ThrowsAny<OperationCanceledException>(() =>
-            HeapGraphBuilder.Build(snapshot.GetDumpHeap(), snapshot.DumpPath, Path.Combine(_tmp.Path, "heapgraph.slab"), cancelled.Token));
+            HeapGraphBuilder.Build(snapshot.Heap.GetDumpHeap(), snapshot.DumpPath, Path.Combine(_tmp.Path, "heapgraph.slab"), cancelled.Token));
         Assert.Empty(Directory.GetFiles(_tmp.Path));
     }
 }

@@ -1,8 +1,8 @@
 using System.IO;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using Sherlock.Core.HeapModel;
 using Sherlock.Core.Tests.Common;
+using Sherlock.Heap;
 using Xunit;
 
 namespace Sherlock.Core.Tests.HeapModel;
@@ -23,7 +23,7 @@ public sealed class HeapGraphProviderTests
         {
             HeapGraphStore.Save(Path.Combine(tmp.Path, "heapgraph.slab"), graph, dump);
         }
-        using var provider = new HeapGraphProvider(SnapshotOf(dump, tmp.Path));
+        using var provider = new HeapGraphProvider(HeapDumpOf(dump, tmp.Path));
 
         HeapGraph?[] graphs = OnceTests.RunTogether(16, () => provider.TryGetCachedOrOnDisk());
 
@@ -32,14 +32,14 @@ public sealed class HeapGraphProviderTests
     }
 
     // Only the dump path and cache folder: loading a saved graph touches nothing else.
-    private static Snapshot SnapshotOf(string dumpPath, string cacheDirectory)
+    private static HeapDump HeapDumpOf(string dumpPath, string cacheDirectory)
     {
-        var snapshot = (Snapshot)RuntimeHelpers.GetUninitializedObject(typeof(Snapshot));
-        Set(snapshot, nameof(Snapshot.DumpPath), dumpPath);
-        Set(snapshot, nameof(Snapshot.CacheDirectory), cacheDirectory);
-        return snapshot;
+        var dump = (HeapDump)RuntimeHelpers.GetUninitializedObject(typeof(HeapDump));
+        Set(dump, nameof(HeapDump.DumpPath), dumpPath);
+        Set(dump, nameof(HeapDump.CacheDirectory), cacheDirectory);
+        return dump;
     }
 
-    private static void Set(Snapshot snapshot, string property, string value) =>
-        typeof(Snapshot).GetField($"<{property}>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(snapshot, value);
+    private static void Set(HeapDump dump, string property, string value) =>
+        typeof(HeapDump).GetField($"<{property}>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(dump, value);
 }

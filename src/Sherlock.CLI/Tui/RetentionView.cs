@@ -8,7 +8,8 @@ using Cellar.Theming;
 using Cellar.Widgets;
 using Cellar.Widgets.Charts.Trees;
 using Sherlock.Core;
-using Sherlock.Core.Analysis;
+using Sherlock.Heap;
+using Sherlock.Heap.Analysis;
 using static Sherlock.CLI.Tui.ViewFormatting;
 
 namespace Sherlock.CLI.Tui;

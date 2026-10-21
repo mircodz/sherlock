@@ -8,6 +8,7 @@ using Sherlock.CLI.Repl.Commands;
 using Sherlock.Core;
 using Sherlock.Core.Collection;
 using Sherlock.Core.Store;
+using Sherlock.Heap;
 using Spectre.Console;
 using Xunit;
 using CommandRepl = Sherlock.CLI.Repl.Repl;

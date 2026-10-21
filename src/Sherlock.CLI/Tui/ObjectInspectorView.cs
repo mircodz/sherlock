@@ -10,7 +10,8 @@ using Cellar.Widgets;
 using Cellar.Widgets.Charts.Trees;
 using Sherlock.CLI.Rendering;
 using Sherlock.Core;
-using Sherlock.Core.Analysis;
+using Sherlock.Heap;
+using Sherlock.Heap.Analysis;
 using Theme = Cellar.Theming.Theme;
 using static System.FormattableString;
 
